@@ -466,11 +466,11 @@ fn list_repositories(db: &Database) -> Result<()> {
     }
 
     for repo in repos {
-        println!("{} - {}", repo.name, repo.clone_url);
+        println!("{}", repo.name);
         let worktrees = db.list_worktrees(&repo.id)?;
-        for (i, wt) in worktrees.iter().enumerate() {
-            let marker = if i == 0 { "●" } else { "○" };
-            println!("  {} {} ({})", marker, wt.branch, wt.path);
+        for wt in &worktrees {
+            let marker = if wt.dirty { "○" } else { "●" };
+            println!("  {} {} (+{},-{})", marker, wt.branch, wt.ahead, wt.behind);
         }
     }
 
