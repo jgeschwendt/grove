@@ -364,6 +364,8 @@ impl ChatApp {
         let parts: Vec<&str> = input.split_whitespace().collect();
         let cmd = parts.first().map(|s| *s).unwrap_or("");
 
+        tui_log(&format!("handle_command: input={:?}, cmd={:?}, parts={:?}", input, cmd, parts));
+
         match cmd {
             "/help" | "/?" => {
                 self.messages.push(Message {
@@ -416,6 +418,7 @@ Navigation:
                 self.command_tx.send(Command::Quit).await?;
             }
             _ => {
+                tui_log(&format!("Unknown command branch hit: cmd={:?}", cmd));
                 self.messages.push(Message {
                     role: Role::System,
                     content: format!("Unknown command: {}. Type /help for commands.", cmd),
