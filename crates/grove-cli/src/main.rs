@@ -268,7 +268,7 @@ async fn run_tui(
                                     } else {
                                         for (i, repo) in repos.iter().enumerate() {
                                             if i > 0 {
-                                                output.push('\n');
+                                                output.push_str("\n\n");
                                             }
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                                             output.push_str(name);
