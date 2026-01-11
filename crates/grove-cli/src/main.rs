@@ -262,16 +262,20 @@ async fn run_tui(
                                     if repos.is_empty() {
                                         output.push_str("No repositories. Use /clone <url> to add one.");
                                     } else {
-                                        for repo in repos {
+                                        for (i, repo) in repos.iter().enumerate() {
+                                            if i > 0 {
+                                                output.push('\n');
+                                            }
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                                             output.push_str(&format!("{}\n", name));
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
                                                 for wt in worktrees {
                                                     let branch = wt.get("branch").and_then(|v| v.as_str()).unwrap_or("");
-                                                    let path = wt.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                                                    let ahead = wt.get("ahead").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                    let behind = wt.get("behind").and_then(|v| v.as_i64()).unwrap_or(0);
                                                     let dirty = wt.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false);
                                                     let marker = if dirty { "○" } else { "●" };
-                                                    output.push_str(&format!("  {} {} ({})\n", marker, branch, path));
+                                                    output.push_str(&format!("  {} {} (+{},-{})\n", marker, branch, ahead, behind));
                                                 }
                                             }
                                         }
