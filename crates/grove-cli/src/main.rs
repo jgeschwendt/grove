@@ -263,10 +263,8 @@ async fn run_tui(
                                     if repos.is_empty() {
                                         output.push_str("No repositories. Use /clone <url> to add one.");
                                     } else {
-                                        for (i, repo) in repos.iter().enumerate() {
-                                            if i > 0 {
-                                                output.push('\n');
-                                            }
+                                        for repo in repos {
+                                            output.push('\n');
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                                             output.push_str(name);
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
@@ -469,10 +467,8 @@ fn list_repositories(db: &Database) -> Result<()> {
         return Ok(());
     }
 
-    for (i, repo) in repos.iter().enumerate() {
-        if i > 0 {
-            println!();
-        }
+    for repo in &repos {
+        println!();
         print!("{}", repo.name);
         let worktrees = db.list_worktrees(&repo.id)?;
         for wt in &worktrees {
@@ -480,6 +476,7 @@ fn list_repositories(db: &Database) -> Result<()> {
             print!("\n    {} {} (+{},-{})", marker, wt.branch, wt.ahead, wt.behind);
         }
     }
+    println!();
     println!();
 
     Ok(())
