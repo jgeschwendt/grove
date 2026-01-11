@@ -262,9 +262,12 @@ async fn run_tui(
                                     if repos.is_empty() {
                                         output.push_str("No repositories. Use /clone <url> to add one.");
                                     } else {
-                                        for repo in repos {
+                                        for (i, repo) in repos.iter().enumerate() {
+                                            if i > 0 {
+                                                output.push('\n');
+                                            }
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                            output.push_str(&format!("{}\n", name));
+                                            output.push_str(name);
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
                                                 for wt in worktrees {
                                                     let branch = wt.get("branch").and_then(|v| v.as_str()).unwrap_or("");
@@ -272,7 +275,7 @@ async fn run_tui(
                                                     let behind = wt.get("behind").and_then(|v| v.as_i64()).unwrap_or(0);
                                                     let dirty = wt.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false);
                                                     let marker = if dirty { "○" } else { "●" };
-                                                    output.push_str(&format!("  {} {} (+{},-{})\n", marker, branch, ahead, behind));
+                                                    output.push_str(&format!("\n    {} {} (+{},-{})", marker, branch, ahead, behind));
                                                 }
                                             }
                                         }
@@ -465,14 +468,18 @@ fn list_repositories(db: &Database) -> Result<()> {
         return Ok(());
     }
 
-    for repo in repos {
-        println!("{}", repo.name);
+    for (i, repo) in repos.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        print!("{}", repo.name);
         let worktrees = db.list_worktrees(&repo.id)?;
         for wt in &worktrees {
             let marker = if wt.dirty { "○" } else { "●" };
-            println!("  {} {} (+{},-{})", marker, wt.branch, wt.ahead, wt.behind);
+            print!("\n    {} {} (+{},-{})", marker, wt.branch, wt.ahead, wt.behind);
         }
     }
+    println!();
 
     Ok(())
 }
