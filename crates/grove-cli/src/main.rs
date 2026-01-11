@@ -50,6 +50,7 @@ enum Commands {
         path: String,
     },
     /// List repositories
+    #[command(alias = "ls")]
     List,
     /// Start server only (no TUI)
     Server,
