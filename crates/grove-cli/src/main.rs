@@ -254,7 +254,7 @@ async fn run_tui(
                     }
                 }
                 Command::List => {
-                    match client.get(format!("{}/api/state", base_url)).send().await {
+                    match client.get(format!("{}/api/state/snapshot", base_url)).send().await {
                         Ok(resp) if resp.status().is_success() => {
                             if let Ok(state) = resp.json::<serde_json::Value>().await {
                                 let mut output = String::new();
@@ -264,13 +264,13 @@ async fn run_tui(
                                     } else {
                                         for repo in repos {
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                            let url = repo.get("clone_url").and_then(|v| v.as_str()).unwrap_or("");
-                                            output.push_str(&format!("{} - {}\n", name, url));
+                                            output.push_str(&format!("{}\n", name));
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
-                                                for (i, wt) in worktrees.iter().enumerate() {
+                                                for wt in worktrees {
                                                     let branch = wt.get("branch").and_then(|v| v.as_str()).unwrap_or("");
                                                     let path = wt.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                                                    let marker = if i == 0 { "●" } else { "○" };
+                                                    let dirty = wt.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                    let marker = if dirty { "○" } else { "●" };
                                                     output.push_str(&format!("  {} {} ({})\n", marker, branch, path));
                                                 }
                                             }
@@ -287,7 +287,7 @@ async fn run_tui(
                 }
                 Command::Harvest(file) => {
                     let _ = system_tx_cmd.send(format!("Exporting to {}...", file)).await;
-                    match client.get(format!("{}/api/state", base_url)).send().await {
+                    match client.get(format!("{}/api/state/snapshot", base_url)).send().await {
                         Ok(resp) if resp.status().is_success() => {
                             if let Ok(state) = resp.json::<serde_json::Value>().await {
                                 let mut lines = Vec::new();
