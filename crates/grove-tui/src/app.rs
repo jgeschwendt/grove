@@ -3,8 +3,21 @@
 use chrono::{DateTime, Local};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use ratatui::prelude::*;
+use std::fs::OpenOptions;
+use std::io::Write;
 use tokio::sync::mpsc;
 use tui_textarea::TextArea;
+
+/// Log to TUI debug file
+fn tui_log(msg: &str) {
+    if let Some(home) = std::env::var("HOME").ok() {
+        let log_path = format!("{}/.grove/data/tui.log", home);
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] {}", timestamp, msg);
+        }
+    }
+}
 
 /// Available slash commands with descriptions
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -140,18 +153,37 @@ impl ChatApp {
         let mut event_stream = crossterm::event::EventStream::new();
         use futures::StreamExt;
 
+        tui_log("Event loop started");
+        let mut loop_count = 0u64;
+
         loop {
+            loop_count += 1;
+            if loop_count % 100 == 0 {
+                tui_log(&format!("Loop iteration {}", loop_count));
+            }
+
             // Draw UI
+            tui_log("Drawing UI...");
             terminal.draw(|frame| crate::ui::render(frame, self))?;
+            tui_log("UI drawn");
 
             // Wait for either terminal event or system message
+            tui_log("Waiting for event...");
             tokio::select! {
                 // Terminal events
                 maybe_event = event_stream.next() => {
+                    tui_log(&format!("Terminal event: {:?}", maybe_event.as_ref().map(|r| r.as_ref().map(|e| match e {
+                        Event::Key(_) => "Key",
+                        Event::Mouse(_) => "Mouse",
+                        Event::Resize(_, _) => "Resize",
+                        _ => "Other",
+                    }))));
                     if let Some(Ok(event)) = maybe_event {
                         match event {
                             Event::Key(key) => {
+                                tui_log(&format!("Key event: {:?}", key.code));
                                 if self.handle_key(key).await? {
+                                    tui_log("Quit signal received");
                                     break;
                                 }
                             }
@@ -160,14 +192,20 @@ impl ChatApp {
                             }
                             _ => {}
                         }
+                    } else if maybe_event.is_none() {
+                        tui_log("Event stream ended!");
                     }
                 }
                 // System messages (from updater, commands, etc.)
                 Some(msg) = system_rx.recv() => {
+                    tui_log(&format!("System message received: {} chars", msg.len()));
                     self.handle_system_message(msg);
+                    tui_log("System message handled");
                 }
             }
+            tui_log("Event processed, continuing loop");
         }
+        tui_log("Event loop exited");
         Ok(())
     }
 
