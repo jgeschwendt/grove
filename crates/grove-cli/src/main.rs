@@ -228,7 +228,10 @@ async fn run_tui(
     // Spawn command handler
     let system_tx_cmd = system_tx.clone();
     let handle = tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         let base_url = format!("http://localhost:{}", port);
 
         while let Some(cmd) = command_rx.recv().await {
@@ -263,8 +266,10 @@ async fn run_tui(
                                     if repos.is_empty() {
                                         output.push_str("No repositories. Use /clone <url> to add one.");
                                     } else {
-                                        for repo in repos {
-                                            output.push('\n');
+                                        for (i, repo) in repos.iter().enumerate() {
+                                            if i > 0 {
+                                                output.push_str("\n\n");
+                                            }
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                                             output.push_str(name);
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
@@ -467,8 +472,11 @@ fn list_repositories(db: &Database) -> Result<()> {
         return Ok(());
     }
 
-    for repo in &repos {
-        println!();
+    println!();
+    for (i, repo) in repos.iter().enumerate() {
+        if i > 0 {
+            println!("\n");
+        }
         print!("{}", repo.name);
         let worktrees = db.list_worktrees(&repo.id)?;
         for wt in &worktrees {
@@ -476,8 +484,7 @@ fn list_repositories(db: &Database) -> Result<()> {
             print!("\n    {} {} (+{},-{})", marker, wt.branch, wt.ahead, wt.behind);
         }
     }
-    println!();
-    println!();
+    println!("\n");
 
     Ok(())
 }
