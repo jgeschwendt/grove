@@ -262,10 +262,7 @@ async fn run_tui(
                                     if repos.is_empty() {
                                         output.push_str("No repositories. Use /clone <url> to add one.");
                                     } else {
-                                        for (i, repo) in repos.iter().enumerate() {
-                                            if i > 0 {
-                                                output.push('\n');
-                                            }
+                                        for repo in repos {
                                             let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                                             output.push_str(&format!("{}\n", name));
                                             if let Some(worktrees) = repo.get("worktrees").and_then(|v| v.as_array()) {
