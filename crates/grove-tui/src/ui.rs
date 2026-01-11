@@ -81,7 +81,7 @@ fn render_messages(frame: &mut Frame, app: &ChatApp, area: Rect) {
         let (prefix, style) = match msg.role {
             Role::User => ("❯ ", Style::new().bold().white()),
             Role::Assistant => ("  ", Style::new().white()),
-            Role::System => ("• ", Style::new().gray().italic()),
+            Role::System => ("  ", Style::new().gray().italic()),
         };
 
         let timestamp = msg.timestamp.format("%H:%M").to_string();
