@@ -165,7 +165,7 @@
           "text": "the slow tier is a NAMING convention enforced by a nextest filter — a test named slow_* is excluded by the default profile and included by ci — so a tier is visible at the call site and needs no registration; #[ignore] is forbidden, since an ignored test runs under neither profile",
           "verified": {
             "digest": "b88dbd8cbce1a83dbf77fa8fa0dfd128c1bcf224135fb13f1800c107672261e6",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -197,7 +197,7 @@
           "text": "files are authoritative — manifest.toml is desired state, git on disk is actual state, and there is no database; every daemon-held status, pool count and log line is a cache",
           "verified": {
             "digest": "2efc5fa864005d61dcf2d9222a5ac86597af3ce41be8f09ed71daf87fb7ba333",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -209,7 +209,7 @@
           "text": "push-based convergence, no timers — an engine picks its next background op on an event, and a failure waits for the next event rather than a retry clock (the sanctioned exception carries its own invariant: crates/grove/cli-health-poll)",
           "verified": {
             "digest": "4bd3cd269614c5f57821636b0e884fdf2e11010a94c6b62a229d44726f9c4453",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -221,7 +221,7 @@
           "text": "one realizer, ever — declaration is universal, but realization belongs to a reachable daemon and to the CLI only when none answers; a daemon that connects but does not answer is still a realizer, so the CLI declares and stops rather than racing it into a dual clone",
           "verified": {
             "digest": "7b39307854f0b3fd5a549ab4398f85c3744895f5a318f6556a4fdc7cd6e19fde",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -233,7 +233,7 @@
           "text": "reactivation is a cold boot — engine status is never persisted and is re-derived from disk, so the daemon may be killed and restarted with only the filesystem intact",
           "verified": {
             "digest": "fbf8ce1366a7a22bf5c8164168f03a5316909c0a69b0e524c1c653e5d44d98dc",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -275,7 +275,7 @@
           "text": "wire-vocab.json is a generated projection of the producing types (grove-ops for the operation vocabularies, grove-api for the HTTP ones), never hand-edited; the snapshot test fails on any drift, forcing a deliberate re-bless (BLESS_WIRE=1) plus a regen on each consuming side",
           "verified": {
             "digest": "66b82f0d7336f6457a42a5c616493c06e2dd924914bfe319828249838db8767f",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -330,7 +330,7 @@
           "text": "`grove apply` is UNGATED, not safe: it is the only realizing command that never probes GET /api/health, so with a daemon up it reconciles every root off any lane while that root's engine may be inside the same call, racing git's locks. The gated path to the same convergence is `grove clone add` / POST /api/roots/reconcile.",
           "verified": {
             "digest": "8af2635d5d289a2cc99fbb22306ed94f7bae9f214d70b027c9df55e89a2d6b63",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -342,7 +342,7 @@
           "text": "a busy daemon REFUSES rather than guessing, at exit 4, wherever there is no declare-only half to fall back on: a remove, since deleting in-process races the realizer and undeclaring alone leaves the bare for adopt to resurrect, and `grove sync`, which is a git write on the root and not a declaration at all",
           "verified": {
             "digest": "b43d174ebda27754dd18d37c8aaa828e0c41de0820ac55da6010e3d3f085c320",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -354,7 +354,7 @@
           "text": "`grove up`/`grove on` poll GET /api/health in a loop until ready — the sanctioned exception to the push-only rule: a one-shot CLI has no channel for the daemon it spawned to push readiness back",
           "verified": {
             "digest": "2141ca7e3f79f128a601adebf8aede2be9c1b3143ef477b33705d76bb906c286",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -366,7 +366,7 @@
           "text": "exit codes 1/3/4/5/6/7 are a published contract, and the grove_ops::Error to CliError map is what makes the offline codes reachable; an error envelope from the server is exit 1 carrying its code, its message AND error.data's detail, since two of the codes say nothing else",
           "verified": {
             "digest": "9aed280569ba42f2ff2073c2abee1bb988806d6feedb6eefdd87911005195f9a",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -378,7 +378,7 @@
           "text": "the pending marker names the version AND the direction, written before `current` moves and cleared when the gate answers — so the next `grove up` can tell an unproven forward flip (undo it) from an interrupted rollback (already on the proven version; re-run its gate)",
           "verified": {
             "digest": "7cd867218a3cb178f0f89b4f7b53082f9e1c744335108ceaed47a76af27c9d97",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -390,7 +390,7 @@
           "text": "only a connection-level failure means `no daemon`; a timeout or any other post-connect error is a daemon that exists and is slow, and must never trigger in-process realization",
           "verified": {
             "digest": "3bbe07977f0370406727592d1d2285000b3a6ba027e75417a9125c46ec7ecd15",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -402,7 +402,7 @@
           "text": "`grove up` flips the `current` symlink BEFORE the health gate — unavoidable, since served mode restarts whatever `current` points at. A crash in between strands `current` on an unproven version; recovery is the pending marker, read by the next `grove up`.",
           "verified": {
             "digest": "2d0abfe794db4b9b11e392a9cbe9f24f252c4b48f830e2951d8c01b66543bb9d",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -414,7 +414,7 @@
           "text": "a daemon whose GET /api/health names a DIFFERENT home than the client was pointed at is not this home's realizer and reads as offline — GROVE_HOME and GROVE_BIND resolve independently, so without the identity on the wire a client scoped to one home delegates a destructive op to whatever answers the default bind and it is executed against the daemon's home",
           "verified": {
             "digest": "5bd997377075ac758e5c7068915a36fa6fd114608aca310d5f841f869e8f0e06",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -454,7 +454,7 @@
           "text": "the envelope is tagged on its `ok` boolean, never on which of data/error is present, and error.data survives the round trip typed — a body that disagrees with its own tag is a decode error",
           "verified": {
             "digest": "a3505b7dd0c8419b3b51934100cb69735ffa3fa23b7083ab8e9b8f318b5f42f8",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -466,7 +466,7 @@
           "text": "the terminal/transient partition over grove_ops::Error is a total match with no catch-all, so a new error category stops the build until it is classified",
           "verified": {
             "digest": "39506fe65e84ab831a62e0e1191b1321ca30b7b611c3d53f86c403e9e54f64ca",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -503,7 +503,7 @@
           "text": "a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or the self-update health gate would accept the bundle that broke it.",
           "verified": {
             "digest": "ef2139e0be9b37ddf02c9443fd4ccdf498eb10168b368d0c44dfac41162c1750",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -515,7 +515,7 @@
           "text": "the graceful drain is BOUNDED — open responses first, then lane work, on one budget under the CLI's stop grace — because an SSE response finishes only when its body is written and one peer that stopped reading would otherwise hold every stop open until SIGTERM",
           "verified": {
             "digest": "ec6308359e0abeb405da6b0f300233cd5c8fc5e8ff4f5216c5249df9088d220c",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -527,7 +527,7 @@
           "text": "the daemon binds only a LITERAL loopback address and refuses a hostname rather than resolving it; there is no override, and the gate runs again at bind so a hand-built Config cannot slip past it",
           "verified": {
             "digest": "8a2d11c743fad6f1aad925953674387b2950cb16240910edeae3f28791ef742e",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -539,7 +539,7 @@
           "text": "the mutation guard allows a state-changing request only with NO Origin (every non-browser client) or an Origin whose host is in a FIXED loopback set — never the request's own Host, which is what makes it a DNS-rebinding defense",
           "verified": {
             "digest": "39a5d5e343f2e2a69809bb83087ba8af4e61fb8594d0dadd484ae7cc6aa48276",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -551,7 +551,7 @@
           "text": "the status transition table is the one place a root's status changes: disk-ready always wins upward, a Derive preserves the driver-owned cloning/degraded transients, and a ReconcileError trusts disk plainly so no stale transient is stranded",
           "verified": {
             "digest": "fbf8ce1366a7a22bf5c8164168f03a5316909c0a69b0e524c1c653e5d44d98dc",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -563,7 +563,7 @@
           "text": "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background and no preemption of an op already running",
           "verified": {
             "digest": "510b1e0f0df004a2fcdb9fa1be86f57dd14104e539f89168ec0fd7101b586abe",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -575,7 +575,7 @@
           "text": "the readiness gate 503s every non-whitelisted /api route while draining or degraded; the whitelist is exactly /api/health and /api/daemon/shutdown, so state stays observable and a stop request stays reachable",
           "verified": {
             "digest": "d5c34db0fa438e03cc1915550de24fb2c1d721e81f54fa40d5c44545c8f93c5f",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -587,7 +587,7 @@
           "text": "a clone permit is TRIED at the head of a root's lane and never waited for there: waiting dispatch-side would hold a permit against roots whose lanes are free, and waiting inside the lane job holds the lane, so a handful of stalled clones would shed every other root's snapshot reads as unavailable while health still says ready. Failing the try, the job returns the lane at once and an off-lane waiter pokes the driver when a permit frees",
           "verified": {
             "digest": "cd54f165da7b1dd82ce923b880f622165d652c4bf96de58c36cb85db6bf13de1",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -599,7 +599,7 @@
           "text": "POST /api/roots/sync is ACCEPT-ONLY and takes no lane of its own: it answers {sync: accepted} once the root's engine has recorded the request, so a burst coalesces through the engine's single background slot, and completion is observed on root_sync_changed / the snapshot's syncing+sync_note rather than returned. Declaredness is read off the manifest first (404), and a declared root no engine is driving is 503 — acknowledging there would be a request nothing recorded and a root_sync_changed no client ever sees",
           "verified": {
             "digest": "458576badf52e81e4ddc0973dacff48cf3eac1510d6f22a3a2727dcdc58dbb13",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -611,7 +611,7 @@
           "text": "the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed cross-origin allowlist are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin",
           "verified": {
             "digest": "5ef29b9294becba41a7b7d6322661d47d8e9bbccb36a60c741fa3c6b4fd52f72",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -649,7 +649,7 @@
           "text": "every wall-clock read goes through the clock seam — Instant::now() appears only in grove_ops::clock, and budgets are absolute Deadlines rather than Durations re-based at each layer",
           "verified": {
             "digest": "8124d2a64bb266f5aa40d99b13feef24e2bb070a56603baee1e856e8c502a494",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -661,7 +661,7 @@
           "text": "the warm pool is claimed by the realizer, not by a caller: worktrees::create and worktrees::reconcile both promote a slot before cold-checking-out, so every path that realizes a declared worktree redeems the pool; and convergence runs both ways, fill adding a slot below target and reclaim giving the highest one back above it",
           "verified": {
             "digest": "770de6e4d090951c5850de971356fc1554073b88fb4854adc878a25b2423a384",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -673,7 +673,7 @@
           "text": "an explicit root removal deletes on disk BEFORE it undeclares — undeclaring first lets the watcher's adopt re-find the still-present bare and resurrect the root; a partial delete propagates before the undeclare, so the slug stays declared and visibly broken",
           "verified": {
             "digest": "761617404e4804c476e44510d536e0f5e7264ec8d84b8bb52c4441e3a1981a83",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -685,7 +685,7 @@
           "text": "this crate holds NO per-root mutex: its flock serializes the manifest, deliberately not git. Per-root git serialization is the caller's to supply, and a concurrent caller that does not supply it loses an invariant this crate was written against.",
           "verified": {
             "digest": "517e64b94d939f3d0c39d05634734617afcee04e29a5b517e77e27cfbf54b547",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -697,7 +697,7 @@
           "text": "a share never destroys a human's or agent's file — only a symlink pointing under .trunk is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
           "verified": {
             "digest": "9533f19d2de3997ef12ecc6c0c7e2cc40b8f54e31c87e4f708ee287d467914c5",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -709,7 +709,7 @@
           "text": "promote attaches the branch IN the slot before the move, so any worktree that ever reaches the user path carries a branch and an interrupted promote is adoptable rather than a stranded detached orphan",
           "verified": {
             "digest": "58efa71d5910fb1676792ff7063df5560b57c74a31607285ec58f6ac12ebf39e",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -721,7 +721,7 @@
           "text": "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone",
           "verified": {
             "digest": "1e8ca80df6af265e0ec6de4ad6e18440074559e84a2947481c3c5f6d25c10795",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -733,7 +733,7 @@
           "text": "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops",
           "verified": {
             "digest": "e38a74d2da2ee87149f5e723f91178ae576b1338a5ba5fec80eeeb560227b407",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -745,7 +745,7 @@
           "text": "a root whose .trunk vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own",
           "verified": {
             "digest": "bf75f2d9e192852672bbf699862cdd328c6c3b332d5511c8bdc764639e996058",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -757,7 +757,7 @@
           "text": "a root removal refuses an UNDECLARED slug before any path reaches remove_dir_all, and refuses a declared one holding uncommitted tracked changes or unpushed commits unless the caller forces — <home>/code/<slug> is a real directory whether or not grove put it there, and the command that deletes N worktrees at once must not protect less than the one that deletes one",
           "verified": {
             "digest": "b929e9fccc225f00d1f2870e34d4bb6063ac3114a97d531e02309c4f7da1f192",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -769,7 +769,7 @@
           "text": "every op failure carries one of seven stable snake_case codes (not_declared | not_ready | invalid_input | conflict | network | git | io); the daemon's engine reads the category to tell a terminal failure from a transient one",
           "verified": {
             "digest": "74f0d74c5c6033865a48416aac6dac78179fe16a8935d73ff6181bf8a5f93d92",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -781,7 +781,7 @@
           "text": "worktree depth is load-bearing: every worktree is a direct sibling of .trunk and shares materialize only at that depth, so pool.fill adds a slot one level deeper and materializes nothing",
           "verified": {
             "digest": "c98d743b753b116dfd0e5494ef5ad7373d0088d099a8af0e223e02c4a7796dcd",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -813,7 +813,7 @@
           "text": "these docs describe the system that exists — no migration copy, no `previously`, no decision narrative — and a change that invalidates a claim fixes the doc in the same commit; the stele gate catches a lost anchor and lock drift outright, and leashes a doc claim by churn, so re-reading is owed on a schedule rather than left to notice",
           "verified": {
             "digest": null,
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -843,7 +843,7 @@
           "text": "install.sh is a thin bootstrap — platform detect, resolve the release, stage the bundle and its sha256 sidecar into a directory — and then hands off to `grove up`, which owns every mutation of the versioned-dir layout",
           "verified": {
             "digest": null,
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
@@ -875,7 +875,7 @@
           "text": "every test file in this tree is reachable from `mise run test`, and CI runs exactly that gate — a test parked where no gate runs it fails the meta-check with instructions rather than rotting unnoticed",
           "verified": {
             "digest": "7f130c79d599d27bae54264dc4464c1931b16c50c5a18c4dacfd2d0d6fffc998",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         },
         {
@@ -887,7 +887,7 @@
           "text": "the install smoke links only inside its own GROVE_HOME, so a run can never plant a symlink in the operator's real PATH directories",
           "verified": {
             "digest": "c000003ee99d905ebb40e3d335325ef5a3197393a7fcffb4b56756706ac6f46c",
-            "sha": "60b5638c015963701d0334a2c9d6f17cc82aa804"
+            "sha": "e93bd1459d5a182c7ddbe8c4f44ec27993f7a45c"
           }
         }
       ],
