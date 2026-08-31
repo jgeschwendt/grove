@@ -1,0 +1,29 @@
+# nextest profiles — the slow tier grove v1 specified and never built.
+#
+# Rust has no test tags, and `#[ignore]` is the wrong lever (it hides a test from
+# `cargo test` entirely and reads as "broken", not "expensive"). The mechanism here
+# is a NAMING convention enforced by a nextest filter expression: a test whose name
+# begins with `slow_` — in any module, any binary, e.g.
+# `git::tests::slow_clone_of_a_real_remote` — is the slow tier.
+#
+#   default  local + pre-commit: everything except `slow_*`. Seconds, not minutes.
+#   ci       everything, with slow-test reporting so "the unit tier runs in seconds"
+#            is measured rather than asserted. Selected with NEXTEST_PROFILE=ci.
+#
+# The tier is therefore visible in the test's own name at the call site, and adding
+# one needs no registration anywhere.
+
+[profile.default]
+default-filter = 'not test(/(^|::)slow_/)'
+# A test that outruns this is either slow (rename it `slow_*`) or wedged.
+slow-timeout = { period = "20s", terminate-after = 3 }
+failure-output = "immediate-final"
+fail-fast = false
+
+[profile.ci]
+default-filter = 'all()'
+# Surface every slow test in the run summary — the timing instrumentation v1 lacked.
+final-status-level = "slow"
+slow-timeout = { period = "30s", terminate-after = 8 }
+failure-output = "immediate-final"
+fail-fast = false

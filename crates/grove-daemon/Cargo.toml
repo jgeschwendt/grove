@@ -1,0 +1,51 @@
+[package]
+name = "grove-daemon"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# axum 0.8 over hyper 1: the whole HTTP surface is seven routes and two guards, so
+# the router, the two `from_fn` middlewares and `axum::serve`'s graceful shutdown are
+# the entire framework budget — no tower-http, no extractors beyond `Json`/`State`,
+# and no direct `tower` (axum's own `from_fn`/`Router::layer` name every bound they
+# need; a direct dependency here would be inert).
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+grove-api = { path = "../grove-api" }
+grove-ops = { path = "../grove-ops" }
+# The manifest fs-watch, and nothing else: default features drop the crossbeam
+# channel backend we do not use (events go straight into a tokio channel from
+# notify's own thread) and the `macos_fsevent` default stays, which is the backend
+# that reports a temp+rename publish as a change to the renamed-to path.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `rt-multi-thread` is the runtime `grove serve` builds; `sync` carries the shutdown
+# watch, the reconcile mailbox, the lanes and the event bus; `time` the shutdown
+# grace and the clock-seam waits.
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# `ReceiverStream` (the SSE body's producer half) and `StreamExt::next`. Default
+# features carry a `time` module we do not use, hence off.
+tokio-stream = { version = "0.1", default-features = false }
+tracing = "0.1"
+# The `Layer` trait the log ring implements, and nothing else: the daemon installs no
+# subscriber (a library must not claim the process's one) — `grove serve` composes
+# this layer beside its own writer.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+
+[dev-dependencies]
+# `test-util` unlocks grove-ops' `testfix` homes (a cloned root + a worktree) and
+# `TestClock`; a dev-dependency only, so neither can link into the shipped binary.
+grove-ops = { path = "../grove-ops", features = ["test-util"] }
+# Loopback HTTP only — no TLS backend, which is also why `default-features = false`.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tempfile = "3"
+# `test-util` is what unlocks `start_paused`: a paused clock auto-advances only
+# while the runtime is idle, which is how the watcher's busy-wait is asserted as a
+# property rather than counted in iterations. Dev-only, so the shipped binary never
+# links a pausable clock.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }

@@ -1,0 +1,17 @@
+[package]
+name = "grove-api"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# grove-ops supplies the payload types the routes carry (`ShareOutcome`,
+# `PoolStatus`, the wire enums) and the error taxonomy the engine policy classifies.
+# The dependency points this way and never back: grove-ops knows nothing of HTTP.
+[dependencies]
+grove-ops = { path = "../grove-ops" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

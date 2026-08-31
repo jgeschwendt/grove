@@ -1,0 +1,17 @@
+# Rust (Cargo.lock is committed — the workspace ships a binary)
+/target/
+
+# Release bundles assembled locally
+/dist/
+
+# Claude Code session-local worktrees (must stay ignored across the tree)
+.claude/worktrees/
+
+# Secrets / local env
+.env
+
+# OS / IDE / misc
+.DS_Store
+*.log
+.idea/
+.vscode/

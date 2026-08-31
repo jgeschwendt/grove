@@ -1,0 +1,127 @@
+name: Release
+
+# On a `v*` tag: open a DRAFT release on THIS repo, build the single-binary bundle
+# for each supported platform and upload it there, and publish the release only once
+# every platform has landed. A bare semver (v0.1.0) then publishes as the latest
+# stable release; a suffixed tag (v0.1.0-canary.1) publishes as a prerelease, which
+# is what the channel resolution in scripts/install.sh and
+# crates/grove/src/update/source.rs walks.
+#
+# v1 published to a separate downloads satellite through a GitHub App token; v2
+# publishes to its own Releases, so the built-in GITHUB_TOKEN suffices and there is no
+# cross-repo app to keep alive.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build — must already exist; it is what gets checked out, stamped and uploaded"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Create the release first so the bundle matrix has something to upload to — as a
+  # DRAFT, which is the whole point of the split. A published bare-semver tag becomes
+  # `latest` the instant it exists, and the bundles are still compiling under
+  # `lto = true` / `codegen-units = 1` for many minutes after: for that whole window
+  # both stable resolvers (update::source::resolve_stable_version and install.sh)
+  # land on the new tag and then 404 on its assets. `fail-fast: false` would make
+  # that permanent rather than transient for any platform whose job failed. A draft
+  # is invisible to `releases/latest` and to the asset listing, uploads to it work
+  # normally, and only the promote job below — which needs the whole matrix — makes
+  # it real. A partial matrix simply never promotes.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # A prerelease suffix (v0.1.0-canary.1) publishes as a prerelease; a bare
+          # semver (v0.1.0) publishes as the latest stable release.
+          PRERELEASE=$([[ "$TAG" == *-* ]] && echo --prerelease || echo "")
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --draft $PRERELEASE --notes "grove $TAG"
+
+  bundle:
+    needs: [create-release]
+    # Fail fast instead of GitHub's 24h max: a runner the org can't provide (e.g.
+    # the retired macos-13 Intel line) should error in minutes, not hang a day.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest # Apple Silicon
+            platform: aarch64-darwin
+          # x86_64-darwin (Intel mac) dropped — no macos-13 runners available.
+          # install.sh refuses that platform up front rather than 404ing on a tag.
+          - os: ubuntu-latest
+            platform: x86_64-linux
+          - os: ubuntu-24.04-arm
+            platform: aarch64-linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # The TAG is what gets stamped, built and uploaded, so it must also be what is
+      # checked out. `github.ref` on a `workflow_dispatch` is the BRANCH the dispatch
+      # fired from, so re-running or backfilling a tag would otherwise compile branch
+      # HEAD, stamp it with the tag's version and publish it as that tag's asset —
+      # which release.sh's stamp guard cannot catch, since the binary does report the
+      # version it was told to stamp.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-tags: true
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag IS the version. Stamp [workspace.package] — the single source every
+      # crate reads and the value CARGO_PKG_VERSION bakes into the binary — so the
+      # daemon reports exactly the version the self-update health gate flipped to.
+      # scripts/release.sh re-reads it off the built binary and fails if it didn't
+      # propagate.
+      - name: Stamp version from tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VSN="${TAG#v}"
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${VSN}\"/" Cargo.toml && rm -f Cargo.toml.bak
+          grep -m1 '^version = ' Cargo.toml
+
+      - name: Assemble bundle
+        run: sh scripts/release.sh
+
+      - name: Upload bundle to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VSN="${TAG#v}"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/${VSN}/${{ matrix.platform }}.tar.gz" \
+            "dist/${VSN}/${{ matrix.platform }}.tar.gz.sha256" \
+            "dist/${VSN}/grove-${{ matrix.platform }}" \
+            "dist/${VSN}/grove-${{ matrix.platform }}.sha256"
+
+  # The release becomes visible only once EVERY platform's bundle is on it. Until
+  # this runs, `releases/latest` does not know the tag exists, so no `grove up` and
+  # no `install.sh` can resolve a version whose assets it cannot then fetch.
+  publish-release:
+    needs: [bundle]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Undraft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

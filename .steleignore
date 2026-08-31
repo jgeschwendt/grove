@@ -1,0 +1,4 @@
+# Planning docs and harness config — not architecture nodes.
+plans/
+.github/
+.claude/

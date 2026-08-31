@@ -1,0 +1,50 @@
+[package]
+name = "grove-ops"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Hand-driven test doubles for OTHER crates' tests: `clock::TestClock` and the
+# `testfix` git/home fixtures. Off by default so neither can link into the shipped
+# `grove` binary; a dependent enables it under `[dev-dependencies]` only. `testfix`
+# builds its templates in a `TempDir`, so the feature carries tempfile with it.
+[features]
+test-util = ["dep:tempfile"]
+
+[dependencies]
+anyhow = "1"
+gix = { version = "0.84", default-features = false, features = [
+  "blocking-network-client",
+  "blocking-http-transport-reqwest-rust-tls",
+  # gix 0.84 split hash backends behind features; with default-features off we
+  # must opt into SHA-1 (git's object hash) explicitly or gix-hash won't build.
+  "sha1",
+] }
+opentelemetry = "0.32"
+# TLS for the OTLP exporter's reqwest client: otlp 0.32 stopped re-exporting a
+# reqwest-rustls* feature, so we enable it on opentelemetry-http directly.
+# `reqwest-rustls` = reqwest/default-tls = rustls + rustls-platform-verifier (OS
+# trust store). reqwest 0.13 dropped the old `webpki-roots` (bundled-CA) feature,
+# so root trust now comes from the host CA store (present in the deploy image).
+opentelemetry-http = { version = "0.32", default-features = false, features = ["reqwest-rustls"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+  "trace",
+  "http-proto",
+  "reqwest-blocking-client",
+] }
+opentelemetry_sdk = "0.32"
+rustix = { version = "1", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Listed here only so `test-util` can turn it on; grove-ops' own tests take it from
+# [dev-dependencies] below, where it is unconditional.
+tempfile = { version = "3", optional = true }
+thiserror = "2"
+toml_edit = "0.25"
+
+[dev-dependencies]
+tempfile = "3"

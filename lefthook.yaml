@@ -1,0 +1,74 @@
+# Fast local pre-commit guard. The authoritative gate is `mise run check` + CI;
+# these run a quick subset on staged files only (globbed so a docs-only commit
+# skips the toolchain).
+#
+# Every command opens by unsetting git's local-repo environment
+# (`git rev-parse --local-env-vars` — GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, …).
+# git exports those into every hook child, and they OVERRIDE a `-C <dir>` argument,
+# so a suite run from here would point its fixture spawns — and the meta-checks'
+# `git ls-files` — at THIS repo instead of the temp one they built. It has already
+# committed fixture droppings onto a main branch once.
+#
+# Every toolchain command goes through `mise exec --` so the hook uses the SAME
+# pinned versions as `mise run check` and CI. Bare `cargo` here resolves to
+# whatever is first on the hook's PATH (`~/.cargo/bin`), which drifts ahead of
+# mise.toml's pin — and a newer clippy carries lints the pinned one doesn't, so
+# the two gates disagree: `mise run check` passes while the commit hook rejects
+# untouched code. Pinning both to mise makes that class of failure impossible.
+pre-commit:
+  parallel: true
+  commands:
+    # `--check`, not the mutating form: lefthook does not re-stage what a command
+    # rewrites, so a bare `cargo fmt` reformats the tree AFTER the index was read —
+    # the unformatted blob lands in history, the worktree is left dirty, and CI's
+    # `cargo fmt --all -- --check` fails on the pushed commit. A gate that agrees
+    # with `mise run check` is the whole point of this file.
+    cargo-fmt:
+      glob: "*.rs"
+      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo fmt --all -- --check
+    cargo-lint:
+      glob: "*.rs"
+      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo clippy --workspace -- -D warnings
+    # Lib-fast tier: the default nextest profile (no `slow_*`), unit tests only.
+    # Integration targets and doctests are the full `mise run test`/CI gate's job.
+    cargo-test:
+      glob: "*.rs"
+      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo nextest run --workspace --lib
+
+# The push gate. Unglobbed and unconditional: `check` runs the whole workspace and the
+# stele lock is staled by an edit anywhere inside an anchored claim's region, so there
+# is no file pattern that safely predicts "this push cannot break it".
+#
+# The same `unset $(git rev-parse --local-env-vars)` discipline as above, for the same
+# reason — the suite spawns git against temp fixtures, and an inherited GIT_DIR points
+# those spawns at THIS repo.
+#
+# `stele build` is deliberately absent here, exactly as it is absent from CI: build
+# re-stamps a claim's `verified` mark, so running it in a gate would launder staleness
+# instead of reporting it. When `check` reports a stale claim, re-read the anchored code,
+# satisfy yourself the claim still holds, then `stele build` by hand and commit the lock.
+#
+# This hook does not enforce the doc-truth claim `docs/doc-gate` names it in `enforced_by`
+# for — nothing here reads a doc — which is why that claim names no enforcer and runs on
+# the churn leash in `.stele/config.toml` instead.
+pre-push:
+  parallel: true
+  commands:
+    # The lock is a committed artifact: `check` proves it still describes the code, and
+    # `emit --check` proves the AGENTS.md projections still match the lock.
+    stele:
+      run: |
+        unset $(git rev-parse --local-env-vars)
+        command -v stele >/dev/null 2>&1 || {
+          echo "stele is not on PATH — install it (pinned, as CI does):" >&2
+          echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0" >&2
+          exit 1
+        }
+        stele check && stele emit --check
+    # The fast tier: the default nextest profile (no `slow_*`) across every target, plus
+    # format and lint. The `slow_*` tier and the install smoke stay CI's, so a push costs
+    # seconds rather than the clone-driven minutes the full gate spends.
+    check-and-fast-tests:
+      run: |
+        unset $(git rev-parse --local-env-vars)
+        mise run check && mise exec -- cargo nextest run --workspace

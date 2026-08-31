@@ -1,0 +1,46 @@
+[workspace]
+# A virtual manifest has no root package to infer the resolver from, so Cargo
+# defaults it to "1" (with a warning) no matter what edition the members are on.
+# Edition 2024's resolver is 3; it has to be said out loud here.
+resolver = "3"
+members = [
+  "crates/grove",
+  "crates/grove-api",
+  "crates/grove-daemon",
+  "crates/grove-ops",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# PolyForm Noncommercial 1.0.0 has no SPDX identifier cargo's `license` accepts,
+# so the text itself is the declaration.
+license-file = "LICENSE.md"
+repository = "https://github.com/jgeschwendt/grove"
+
+# Maximalist opt-out (mirrors the JS eslint config): turn on the whole strict,
+# *stable* set (clippy::pedantic — the analog of js/all + unicorn/all), then opt
+# out the few we disagree with, each with a reason. `cargo clippy -- -D warnings`
+# (mise check + the pre-commit hook) promotes all of this to errors.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Inline `#[allow]`s must carry a reason — our `noInlineConfig` discipline.
+allow_attributes_without_reason = "warn"
+# --- opt-outs (with rationale) ---
+# `grove::grove_home`, `roots::roots`… repeating the module name reads fine here.
+module_name_repetitions = "allow"
+# ≈ eslint `max-lines-per-function: off`.
+too_many_lines = "allow"
+# We don't yet document every `Result`'s Err variant in prose.
+missing_errors_doc = "allow"
+# CLI dispatch handlers keep a uniform `Result` signature even when infallible.
+unnecessary_wraps = "allow"
+
+# The install bundle ships one binary; size and startup are worth the link time.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

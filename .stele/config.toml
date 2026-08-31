@@ -1,0 +1,20 @@
+# stele configuration.
+#
+# [freshness] is the leash for claims stele cannot digest. A claim anchored in a
+# parsed language stales when its enclosing AST region changes — position-independent,
+# and the whole reason `stele check` catches a semantic edit that moved no line. A
+# claim anchored in markdown or shell has no parser, so the lock stamps no digest and
+# there is nothing to compare; without a threshold here that class is enforced by
+# NOTHING, and `docs/doc-gate` and `scripts/install-hands-off-to-grove-up` — the two
+# such claims in this graph — would pass `check` while contradicted by the very files
+# they are anchored in.
+#
+# The fallback counts commits touching the anchored file since the claim's `verified`
+# sha and fails past the threshold. It is a re-read schedule, not a correctness proof:
+# the fix is to re-read the anchored file, satisfy yourself the claim still holds, and
+# `stele build` to re-stamp. Both numbers are deliberately small — a doc claim that
+# survives three commits to its own file without a human re-reading it is exactly the
+# rot the gate exists to prevent.
+[freshness]
+churn_threshold = 3   # claims proving themselves (no enforced_by)
+enforced_leash = 10   # claims a separate test target also guards

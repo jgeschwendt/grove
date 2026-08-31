@@ -1,0 +1,120 @@
+name: CI
+
+# Grove CI on the pinned toolchain (mise.toml): format + lint + the whole test
+# suite, exactly as `mise run check` / `mise run test` run them locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    # Fail fast instead of GitHub's 24h max: a job that hasn't finished in 30
+    # minutes is wedged, not slow. 30 rather than 15 because the FIRST run on a
+    # cold cache compiles the whole dep tree (~300 packages: gix, rustls, reqwest,
+    # opentelemetry-otlp) before any cache exists — and `Swatinem/rust-cache`
+    # writes nothing on a failed job, so a first run that trips the wall would
+    # repeat the same cold build forever.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      # mise installs rust without the rustfmt/clippy components; `check` needs both.
+      # The same task `mise run setup` depends on, so a fresh machine and CI install
+      # one list — and running it as a task puts it on the PINNED toolchain, since
+      # mise's rust backend works by exporting RUSTUP_TOOLCHAIN.
+      - run: mise run components
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check
+      # The `ci` nextest profile runs the `slow_*` tier the default profile skips,
+      # and reports slow tests in the summary.
+      - run: mise run test
+        env:
+          NEXTEST_PROFILE: ci
+
+  # The same gate on Apple Silicon. A second JOB rather than a `runs-on` matrix on
+  # check-and-test: a matrix renames that job to `check-and-test (ubuntu-latest)`, and a
+  # renamed check is a branch-protection rule that silently stops being required.
+  #
+  # macOS is not redundant coverage here. Grove is a filesystem and process daemon, and
+  # every seam where the two platforms differ is one this repo actually leans on: git
+  # canonicalizing worktree paths through `/private/var`, the case-insensitive default
+  # filesystem, `flock` semantics on the manifest and update locks, and the SIGTERM →
+  # SIGKILL path `grove off` walks. `macos-latest` rather than a pinned `macos-14` on
+  # purpose — it is the runner `.github/workflows/release.yml` builds the
+  # aarch64-darwin bundle on, so CI proves the toolchain that ships.
+  check-and-test-macos:
+    runs-on: macos-latest
+    # Same 30 as the ubuntu job, for the same reason: the first run compiles the whole
+    # dep tree before `Swatinem/rust-cache` has anything to restore.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: mise run components
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check
+      - run: mise run test
+        env:
+          NEXTEST_PROFILE: ci
+
+  # The install path is a shell script driving the real binary, so no cargo target
+  # can reach it — it gets a job of its own rather than the "test exists, no gate
+  # runs it" fate v1's release smoke met. Hermetic: a fixture release in a temp dir,
+  # no network, its own GROVE_HOME and GROVE_BIND.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run smoke
+
+  # The architecture graph: `check` proves the committed lock still describes the code
+  # (anchors resolve, declared dependencies match extracted ones, every directory is
+  # routed, freshness holds, documented commands still resolve), and `emit --check`
+  # proves the committed AGENTS.md projections still match the lock.
+  #
+  # Freshness is two mechanisms, not one, and neither is a proof that a claim is TRUE.
+  # A claim in a parsed language stales when the AST region enclosing its anchor
+  # changes — position-independent, so an edit that moves no line still fails here.
+  # A claim naming an `enforced_by:` target is EXEMPT from that, which is why this
+  # repo names one only where a separate test target actually guards the claim; a
+  # claim proved by the inline `mod tests` beside its anchor names nothing, so the
+  # digest gate stays armed on it. Markdown and shell have no parser and get no
+  # digest at all: those claims run on the churn leash in `.stele/config.toml`, which
+  # is a re-read schedule rather than a guard.
+  #
+  # CI NEVER runs `stele build`. Build re-stamps each claim's `verified` mark, so
+  # running it here would launder staleness into a green tick — the whole point of the
+  # freshness signal is that a human re-reads the anchored code and re-stamps by hand.
+  # A stale lock therefore fails here, and the fix is a local `stele build` committed
+  # alongside the change that staled it. The lefthook pre-push hook runs the same two
+  # commands, so this is the backstop rather than the first sighting.
+  stele:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the freshness fallback for parser-less languages counts
+          # commits touching an anchored region since the claim's verified SHA, which a
+          # shallow clone cannot answer.
+          fetch-depth: 0
+      # mise must be on PATH: stele's liveness assertions resolve each node's
+      # `mise run ...` / `mise exec ...` commands and fail the check when the
+      # runner they name is absent (v1 carried the same step for the same reason).
+      - uses: jdx/mise-action@v2
+      # Pinned, not `latest`: the lock format and the assertion suite are versioned, so
+      # an unpinned installer would let a stele release fail this repo's CI without a
+      # commit here. Installs one static binary to ~/.local/bin, which is not on the
+      # runner's PATH by default — hence the absolute path below.
+      - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+      - run: ~/.local/bin/stele check
+      - run: ~/.local/bin/stele emit --check

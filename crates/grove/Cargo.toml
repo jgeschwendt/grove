@@ -1,0 +1,52 @@
+[package]
+name = "grove"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+# Lib + bin: src/lib.rs is the testable core, src/main.rs is the thin `grove`
+# binary installed on PATH. `grove serve` runs the daemon in-process — one binary.
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+# The update bundle is a `.tar.gz`; `Layout::install_bundle` extracts it and
+# `source::verify_sha256` checks the sidecar digest before anything is flipped.
+flate2 = "1"
+grove-api = { path = "../grove-api" }
+grove-daemon = { path = "../grove-daemon" }
+grove-ops = { path = "../grove-ops" }
+# Signals + `waitpid` for the drain ladder, which needs to distinguish "exited" from
+# "still alive" without racing a reaped child.
+nix = { version = "0.31", features = ["process", "signal"] }
+# Loopback HTTP only: the readiness, identity and drain probes. Blocking because the
+# CLI is one-shot — `grove serve` builds the only runtime in this binary, and none of
+# these probes run inside it.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json"] }
+rustix = { version = "1", features = ["fs"] }
+# The request bodies the client posts are grove-api types; `Serialize` is needed only
+# as a bound on the shared POST helper.
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+# The daemon's own runtime, built by `grove serve` and nothing else.
+tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+# Repeated from [dependencies]: an integration target under `tests/` links the `grove`
+# lib, not the lib's dependency graph, so the update round-trip test cannot name these
+# unless they are dev-deps too. Same versions, so the build graph is unchanged.
+flate2 = "1"
+# `test-util` unlocks `clock::TestClock`, so a 30-second ready timeout is testable
+# in microseconds. A dev-dependency only: a never-advancing clock reachable from the
+# shipped binary is a drain ladder that never times out.
+grove-ops = { path = "../grove-ops", features = ["test-util"] }
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"

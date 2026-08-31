@@ -1,0 +1,69 @@
+[tools]
+# The PREBUILT nextest, not `cargo:cargo-nextest` — that backend is `cargo install`,
+# which compiles the runner from source on every cache miss, minutes CI spends
+# before it has run a single test of ours. nextest tags releases `cargo-nextest-<v>`
+# rather than `v<v>`, so the full tag is the version string here; `exe` names the
+# binary inside the tarball (the repo is `nextest`, the executable `cargo-nextest`).
+"github:nextest-rs/nextest" = { version = "cargo-nextest-0.9.143", exe = "cargo-nextest" }
+lefthook = "1.13.6"
+rust = "1.94.0"
+
+# mise's rust backend is a rustup pass-through — it exports `RUSTUP_TOOLCHAIN` and
+# leaves the components to whatever profile the host's rustup installed. On a
+# `minimal`-profile machine `cargo fmt`/`cargo clippy` simply do not exist, so this
+# is a prerequisite of `check`, not a convenience. One task so the bootstrap and CI
+# install the same list; CI calls it directly rather than paying for setup's warm build.
+[tasks.components]
+description = "Install the rustup components `check` needs (rustfmt, clippy)"
+run = "rustup component add rustfmt clippy"
+
+# First-run bootstrap. `lefthook install` is the load-bearing line: lefthook is pinned
+# above and configured in lefthook.yaml, but a fresh clone or a new worktree has NO
+# hook until something writes `.git/hooks/pre-commit` — the gate protects nobody by
+# default. It must be fatal: a bootstrap that "succeeds" without the hook — or without
+# the components `check` shells out to — is the failure this exists to prevent.
+[tasks.setup]
+depends = ["components"]
+description = "First-time bootstrap: toolchain components + git hooks + a warm build"
+run = """
+lefthook install || exit 1
+cargo build --workspace --all-targets
+"""
+
+[tasks.check]
+description = "Pre-PR gate: format + lint (parallel)"
+run = """
+fail=0
+cargo fmt --all -- --check &                             p_fmt=$!
+cargo clippy --workspace --all-targets -- -D warnings &  p_clippy=$!
+for pid in $p_fmt $p_clippy; do wait "$pid" || fail=1; done
+exit $fail
+"""
+
+# The one test in this tree that is not a cargo target: it drives `scripts/install.sh`
+# and `scripts/uninstall.sh` as an operator would, against a local fixture release. It
+# gets its own task (and its own CI job) precisely because v1's release smoke was
+# reachable from no gate and rotted — `harness_meta` pins both ends of that wiring.
+[tasks.smoke]
+description = "Hermetic install → update → rollback → uninstall against a fixture release"
+run = "sh test/install_smoke.sh"
+
+[tasks.fmt]
+description = "Auto-format Rust"
+run = "cargo fmt --all"
+
+# Serial, not the parallel fan-out `check` uses: both halves are cargo and would
+# block on the same target-dir package lock anyway. The accumulator still runs
+# both so one failure doesn't hide the other's result.
+#
+# nextest is the unit/integration runner (per-test process isolation, and the
+# `slow` tiering in .config/nextest.toml); it does not run doctests at all, so
+# `cargo test --doc` is the second half rather than an extra.
+[tasks.test]
+description = "Run the workspace test suite (nextest) + doctests"
+run = """
+fail=0
+cargo nextest run --workspace || fail=1
+cargo test --doc --workspace || fail=1
+exit $fail
+"""
