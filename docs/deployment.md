@@ -48,8 +48,9 @@ precondition: a daemon killed mid-clone converges on the next boot.
 |---|---|
 | a Unix host — Linux or macOS | `grove-ops` uses `openat`/`renameat`/`symlinkat` through `rustix`; there is no Windows path |
 | `git` on `PATH` | worktree, status, prune, fetch and remote reads shell out to git (`grove_ops::git::git_command`, which pins `LC_ALL=C` and scrubs git's local-repo environment). The bare *clone* itself goes through `gix` in-process |
-| a writable `$GROVE_HOME` | default `~/.grove`; holds the manifest, `code/`, the install layout, `grove.lock`, `grove.pid`, `grove.log`, and two advisory lock files grove creates as it works — `manifest.toml.lock` (manifest read-modify-write) and `update.lock` (concurrent `grove up`) |
-| a filesystem with symlinks | shares, and the whole `current`/`previous` install layout |
+| a writable `$GROVE_HOME` — the workspace | default `~/.grove`; holds `manifest.toml` and its advisory `manifest.toml.lock` (manifest read-modify-write), every checkout under `code/`, and the daemon's `grove.lock`, `grove.pid` and `grove.log`. The valuable half: nothing here is regenerable from a release |
+| a writable `$GROVE_INSTALL` — the install | default `~/.local/share/grove`; holds `versions/`, the `current` and `previous` symlinks, `channel`, `pending`, and the advisory `update.lock` (concurrent `grove up`). Disposable: delete it and re-install, and no repo notices |
+| a filesystem with symlinks | shares in the workspace, and the whole `current`/`previous` install layout |
 | outbound HTTPS/SSH to the git remotes | clone and fetch |
 | loopback networking | the API |
 
@@ -63,7 +64,8 @@ up front with that reason rather than 404ing on an asset URL that was never publ
 
 | variable | default | effect |
 |---|---|---|
-| `GROVE_HOME` | `~/.grove` | the home grove realizes — resolved once, in `grove_ops::home`, for the CLI, the launcher and the daemon alike |
+| `GROVE_HOME` | `~/.grove` | the workspace grove realizes — `manifest.toml`, `code/`, `grove.{lock,pid,log}` — resolved once, in `grove_ops::home`, for the CLI, the launcher and the daemon alike |
+| `GROVE_INSTALL` | `$XDG_DATA_HOME/grove` when that is set, else `~/.local/share/grove` | the install root `grove up` flips and the launcher runs out of — `versions/`, `current`, `previous`, `channel`, `pending`, `update.lock` — resolved once, in `grove_ops::install_home` |
 | `GROVE_BIND` | `127.0.0.1:7777` | where the daemon listens (daemon: literal loopback only) |
 | `GROVE_LOG` | `info` | `EnvFilter` directive for what the process writes to stderr (ANSI colour only when stderr is a terminal, so `grove.log` stays greppable) |
 | `GROVE_LOG_RING` | `info` | the level at which lines enter the ring `GET /api/events` streams |
@@ -103,8 +105,10 @@ grove ok       # is it healthy?
 
 `grove serve` is the published launcher string: `grove on` spawns `<binary> serve`, and any
 supervisor unit should spell it the same way (`serve_is_the_launcher_subcommand` pins it).
-For an installed release the launcher is `current/bin/grove`; with nothing installed it is
-the running executable itself.
+For an installed release the launcher is `$GROVE_INSTALL/current/bin/grove`; with nothing
+installed it is the running executable itself. The spawned child is handed both roots —
+`GROVE_HOME` so it realizes the manifest the operator is looking at, `GROVE_INSTALL` so its
+own `grove up` flips the tree it was launched out of.
 
 Under a supervisor, run `grove serve` in the foreground and let the supervisor own restarts:
 the process ends by returning from `serve`, never by calling `exit`.

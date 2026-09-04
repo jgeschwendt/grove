@@ -7,9 +7,9 @@
 //!   the declared `[env]._` shares and read pool levels beside them. It **writes**
 //!   unless `dry_run`, and `--fix` is what turns a would-clobber into a backup.
 //! - [`checks`] — the git-plumbing half, new in v2. Read-only, always: does the
-//!   manifest parse and validate, is each root's bare and `.trunk` there, is each
-//!   declared worktree present and on the branch it declares, and what is on disk
-//!   that nothing declares.
+//!   manifest parse and validate, is the install tree out from under the workspace,
+//!   is each root's bare and `.trunk` there, is each declared worktree present and on
+//!   the branch it declares, and what is on disk that nothing declares.
 //!
 //! The second half answers what no other read can: a root whose bare survived but
 //! whose `.trunk` was deleted, or a worktree quietly sitting on the wrong branch, is
@@ -117,6 +117,9 @@ impl Check {
 pub enum CheckKind {
     /// `manifest.toml` parses, and every declaration in it passes the validators.
     Manifest,
+    /// The install tree — `versions/`, `current` and their siblings — is not sitting
+    /// under the workspace root, where it used to live before the two were split.
+    InstallUnderHome,
     /// The root's pass as a whole. Only ever a finding: a root whose lane would not
     /// answer inside doctor's per-root budget contributes one of these instead of the
     /// rows below, so a wedged root is named rather than silently absent from a
@@ -134,8 +137,9 @@ pub enum CheckKind {
 
 impl CheckKind {
     /// Every kind, in declaration order — what `contracts/wire-vocab.json` pins.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Manifest,
+        Self::InstallUnderHome,
         Self::Root,
         Self::Bare,
         Self::Trunk,
@@ -182,7 +186,8 @@ impl CheckStatus {
     ];
 }
 
-/// The whole-home plumbing pass: the manifest check plus every declared root's.
+/// The whole-home plumbing pass: the manifest and layout checks plus every declared
+/// root's.
 ///
 /// The daemon does **not** call this — it fans the per-root half out on each root's
 /// own lane, under a budget (carried law 6: every per-root git reader is serialized
@@ -191,6 +196,10 @@ impl CheckStatus {
 #[must_use]
 pub fn checks(home: &Path, slug: Option<&str>) -> Vec<Check> {
     let mut out = manifest_checks(home);
+    // Scoping doctor to one slug narrows the *roots* it walks; the layout is one fact
+    // about the home, so it answers on every invocation or an operator could scope
+    // their way past the one finding that explains a lost checkout.
+    out.extend(install_checks(home));
     let slugs = match slug {
         Some(slug) => vec![slug.to_owned()],
         None => roots::list(home)
@@ -201,6 +210,47 @@ pub fn checks(home: &Path, slug: Option<&str>) -> Vec<Check> {
         out.extend(root_checks(home, &slug));
     }
     out
+}
+
+/// The stage-5 migration from `docs/plans/install-home.md`, verbatim.
+///
+/// Doctor is report-only, so this string *is* the fix: an operator reads it and runs
+/// it. `grove doctor` closes that block and is deliberately absent here — it is the
+/// verification, and it is what printed this line.
+const INSTALL_MIGRATION: &str = "mkdir -p ~/.local/share/grove; \
+     mv ~/.grove/{versions,current,previous,channel,update.lock} ~/.local/share/grove/; \
+     ln -sf ~/.local/share/grove/current/bin/grove ~/.local/bin/grove; \
+     grove off && grove on";
+
+/// Is the install still living under the workspace root?
+///
+/// `versions/` and `current` belong to `$GROVE_INSTALL`; a home that still carries
+/// them is the pre-split layout, and the cost is concrete — `uninstall.sh` removes the
+/// install root, and under the old layout that took every checkout with the binary.
+/// One row either way, like the manifest check: an operator needs to know the layout
+/// was *looked at*.
+///
+/// `symlink_metadata` rather than `exists`, because a `current` left dangling by a
+/// half-finished move is precisely the state worth naming — `exists` follows the link
+/// and reports the home clean.
+///
+/// `mismatch` and not `undeclared`: the home is present and is not the shape the
+/// layout declares. `undeclared` promises the reader that "additive reconcile adopts
+/// these", which reconcile will never do for an install tree.
+#[must_use]
+pub fn install_checks(home: &Path) -> Vec<Check> {
+    let stale: Vec<&str> = ["current", "versions"]
+        .into_iter()
+        .filter(|entry| home.join(entry).symlink_metadata().is_ok())
+        .collect();
+    if stale.is_empty() {
+        return vec![Check::new(CheckKind::InstallUnderHome, CheckStatus::Ok)];
+    }
+    vec![
+        Check::new(CheckKind::InstallUnderHome, CheckStatus::Mismatch)
+            .named(stale.join(", "))
+            .detailed(INSTALL_MIGRATION),
+    ]
 }
 
 /// Does `manifest.toml` parse, and does every declaration in it validate?
@@ -310,7 +360,7 @@ fn worktree_check(slug: &str, wt: &worktrees::WorktreeStatus) -> Check {
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckKind, CheckStatus, checks, manifest_checks, root_checks};
+    use super::{CheckKind, CheckStatus, checks, install_checks, manifest_checks, root_checks};
     use crate::{manifest, roots, testfix};
     use tempfile::TempDir;
 
@@ -327,7 +377,7 @@ mod tests {
             s(&|| serde_json::to_value(CheckStatus::Undeclared).unwrap()),
             "undeclared"
         );
-        assert_eq!(CheckKind::ALL.len(), 6);
+        assert_eq!(CheckKind::ALL.len(), 7);
         assert_eq!(CheckStatus::ALL.len(), 6);
     }
 
@@ -403,6 +453,61 @@ symlink = ["../../etc/passwd"]
         assert_eq!(out[0].check, CheckKind::Manifest);
         assert_eq!(out[0].status, CheckStatus::Invalid);
         assert!(out[0].detail.as_ref().unwrap().contains("does not parse"));
+    }
+
+    /// A half-finished move leaves `current` pointing at nothing, and that is the
+    /// worst moment to be told the home is fine: `exists` follows the link and reports
+    /// clean, so the check reads the link itself.
+    #[test]
+    fn a_dangling_current_symlink_is_still_an_install_under_the_home() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root(&tmp);
+        std::os::unix::fs::symlink(home.join("versions/0.0.0"), home.join("current")).unwrap();
+        assert!(!home.join("current").exists(), "the link dangles");
+
+        let out = checks(&home, None);
+        let found: Vec<&super::Check> = out
+            .iter()
+            .filter(|c| c.check == CheckKind::InstallUnderHome)
+            .collect();
+        assert_eq!(found.len(), 1, "one row about the home, not one per root");
+        assert_eq!(found[0].status, CheckStatus::Mismatch);
+        assert_eq!(found[0].name.as_deref(), Some("current"));
+        let detail = found[0].detail.as_ref().unwrap();
+        for line in [
+            "mkdir -p ~/.local/share/grove",
+            "mv ~/.grove/{versions,current,previous,channel,update.lock} \
+             ~/.local/share/grove/",
+            "ln -sf ~/.local/share/grove/current/bin/grove ~/.local/bin/grove",
+            "grove off && grove on",
+        ] {
+            assert!(detail.contains(line), "{line} missing from {detail}");
+        }
+
+        assert_eq!(
+            checks(&home, Some(testfix::SLUG))
+                .iter()
+                .filter(|c| c.check == CheckKind::InstallUnderHome)
+                .count(),
+            1,
+            "the layout is one fact about the home — scoping to a root cannot hide it"
+        );
+    }
+
+    /// The passing side, and the reason it is a row rather than a silence: a home with
+    /// only its manifest carries no install, and an operator reading the report needs
+    /// to see the layout was looked at.
+    #[test]
+    fn a_workspace_only_home_passes_the_install_check() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(roots::manifest_path(tmp.path()), "").unwrap();
+
+        let out = install_checks(tmp.path());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].check, CheckKind::InstallUnderHome);
+        assert_eq!(out[0].status, CheckStatus::Ok);
+        assert!(!out[0].is_finding());
+        assert!(out[0].detail.is_none(), "a pass carries no migration");
     }
 
     /// The v1 gap, closed: a root whose bare survived but whose `.trunk` was deleted

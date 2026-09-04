@@ -192,6 +192,7 @@ pub fn checks(rows: &[Check]) {
 const fn label(kind: CheckKind) -> &'static str {
     match kind {
         CheckKind::Manifest => "manifest",
+        CheckKind::InstallUnderHome => "install-under-home",
         CheckKind::Root => "root",
         CheckKind::Bare => "bare",
         CheckKind::Trunk => "trunk",

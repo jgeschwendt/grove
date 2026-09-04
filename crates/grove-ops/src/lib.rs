@@ -25,6 +25,7 @@ pub mod worktrees;
 
 pub use error::{Error, Result};
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The data dir every grove process reads and writes: `GROVE_HOME`, else
@@ -45,6 +46,121 @@ pub fn home() -> PathBuf {
         },
         PathBuf::from,
     )
+}
+
+/// The install root every grove process launches from and `grove up` flips:
+/// `GROVE_INSTALL`, else `$XDG_DATA_HOME/grove`, else `$HOME/.local/share/grove`,
+/// else `./.grove-install`.
+///
+/// Holds `versions/`, `current`, `previous`, `channel`, `pending` and
+/// `update.lock` — disposable, regenerable, owned by the updater, and knowing
+/// nothing about repos. That is the opposite lifecycle from the workspace [`home`]
+/// names, which is why these are two roots under two knobs rather than one root
+/// that `uninstall.sh` cannot safely delete.
+///
+/// **One resolution, called by all three entry points** — for the same reason
+/// [`home`] is one: a second spelling is a split brain between what `grove up`
+/// flips, what the launcher execs, and what the installer symlinks, and nothing
+/// would fail while the copies agreed.
+///
+/// A var set to the empty string counts as *set*, mirroring [`home`]'s reading of
+/// `GROVE_HOME`: both take the presence of the name, not the shape of its value,
+/// as the operator having spoken.
+#[must_use]
+pub fn install_home() -> PathBuf {
+    install_home_from(std::env::var_os)
+}
+
+/// [`install_home`]'s rungs over an injected lookup, so each rung is testable
+/// without touching the process environment — this workspace forbids `unsafe` and
+/// edition 2024's `std::env::set_var` is an `unsafe fn`, so no test here can set a
+/// var, serialized behind a mutex or not.
+// Keys are literals at every call site, so `&'static str` is the honest bound —
+// and the one `std::env::var_os` can satisfy: as a generic fn item it implements
+// `Fn` at one instantiated lifetime, never for all of them.
+fn install_home_from(var: impl Fn(&'static str) -> Option<OsString>) -> PathBuf {
+    if let Some(install) = var("GROVE_INSTALL") {
+        return PathBuf::from(install);
+    }
+    if let Some(xdg) = var("XDG_DATA_HOME") {
+        return PathBuf::from(xdg).join("grove");
+    }
+    if let Some(home) = var("HOME") {
+        return PathBuf::from(home).join(".local/share/grove");
+    }
+    PathBuf::from("./.grove-install")
+}
+
+/// Each rung of [`install_home`], and the precedence between them.
+///
+/// Separate from the ops-scenario module below because it needs none of its git
+/// fixtures: the resolution is pure, and its only dependency — the environment —
+/// arrives as an argument.
+#[cfg(test)]
+mod install_home_tests {
+    use super::install_home_from;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    /// A lookup over a fixed table — what `std::env::var_os` would answer, with no
+    /// process-global state for a parallel test to race.
+    fn env(
+        pairs: &'static [(&'static str, &'static str)],
+    ) -> impl Fn(&'static str) -> Option<OsString> {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(*value))
+        }
+    }
+
+    /// Rung 1 wins outright: an operator naming the install root is not second-
+    /// guessed by an XDG or HOME that also happens to be set.
+    #[test]
+    fn install_home_prefers_grove_install() {
+        let resolved = install_home_from(env(&[
+            ("GROVE_INSTALL", "/opt/grove"),
+            ("XDG_DATA_HOME", "/xdg"),
+            ("HOME", "/home/u"),
+        ]));
+        assert_eq!(resolved, PathBuf::from("/opt/grove"));
+    }
+
+    /// Rung 2: XDG owns the dir, grove owns a named subdir of it — never the dir
+    /// itself, which belongs to every other XDG-respecting tool on the box.
+    #[test]
+    fn install_home_falls_back_to_xdg_data_home() {
+        let resolved = install_home_from(env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/u")]));
+        assert_eq!(resolved, PathBuf::from("/xdg/grove"));
+    }
+
+    /// Rung 3 spells out the XDG default rather than deriving it, so a box with no
+    /// `XDG_DATA_HOME` still lands where an XDG-respecting one does.
+    #[test]
+    fn install_home_falls_back_to_home() {
+        let resolved = install_home_from(env(&[("HOME", "/home/u")]));
+        assert_eq!(resolved, PathBuf::from("/home/u/.local/share/grove"));
+    }
+
+    /// Rung 4: with no environment at all the root is cwd-relative, so a test or a
+    /// sandbox gets a scratch install instead of a path rooted at `/`.
+    #[test]
+    fn install_home_falls_back_to_cwd() {
+        assert_eq!(
+            install_home_from(env(&[])),
+            PathBuf::from("./.grove-install")
+        );
+    }
+
+    /// The empty string is *set*, matching `home`'s reading of `GROVE_HOME`. Locked
+    /// down because the friendlier reading — empty means unset — would silently
+    /// route an operator's typo to a different root than the one they exported.
+    #[test]
+    fn install_home_treats_an_empty_var_as_set() {
+        let resolved = install_home_from(env(&[("GROVE_INSTALL", ""), ("HOME", "/home/u")]));
+        assert_eq!(resolved, PathBuf::new());
+    }
 }
 
 /// Realize the whole manifest offline: adopt undeclared on-disk bares (global

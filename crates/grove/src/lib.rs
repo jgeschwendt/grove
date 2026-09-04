@@ -217,6 +217,23 @@ fn grove_home() -> std::path::PathBuf {
     grove_ops::home()
 }
 
+/// The install root every command launches from and `grove up` flips:
+/// `GROVE_INSTALL` → `~/.local/share/grove`.
+///
+/// Resolved by [`grove_ops::install_home`] — the one implementation of that rule,
+/// shared with the launcher and the updater, because the install and the workspace
+/// have opposite lifecycles and only one of the two may ever be thrown away.
+// `allow`, not `expect`: stage 2 wires the launcher and the updater to this, and
+// an unfulfilled expectation would then fail the same `-D warnings` gate. Drop the
+// attribute with the first caller.
+#[allow(
+    dead_code,
+    reason = "the callers land in a later stage of the install/workspace split"
+)]
+fn grove_install_home() -> std::path::PathBuf {
+    grove_ops::install_home()
+}
+
 /// How long the process waits, after the daemon's own bounded drain, for blocking
 /// work to leave the runtime.
 ///

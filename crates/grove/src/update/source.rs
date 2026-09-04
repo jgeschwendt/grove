@@ -310,11 +310,11 @@ pub(super) fn hex(bytes: &[u8]) -> String {
         })
 }
 
-/// The persisted channel a box is pinned to (`$GROVE_HOME/channel`), if any.
+/// The persisted channel a box is pinned to (`$GROVE_INSTALL/channel`), if any.
 /// Written by `install.sh` so a canary box keeps pulling canaries without
 /// re-specifying `--channel`.
-pub(super) fn read_persisted_channel(home: &Path) -> Option<String> {
-    let c = fs::read_to_string(home.join("channel")).ok()?;
+pub(super) fn read_persisted_channel(install: &Path) -> Option<String> {
+    let c = fs::read_to_string(install.join("channel")).ok()?;
     let c = c.trim();
     (!c.is_empty()).then(|| c.to_string())
 }

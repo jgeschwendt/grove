@@ -53,7 +53,7 @@ pub struct Pending {
     pub kind: Flip,
 }
 
-/// The on-disk version layout rooted at `GROVE_HOME`. Every mutation is an
+/// The on-disk version layout rooted at `GROVE_INSTALL`. Every mutation is an
 /// atomic symlink rename; version directories are immutable once written.
 pub struct Layout {
     home: PathBuf,
@@ -272,7 +272,7 @@ impl Layout {
     }
 
     /// Exclusive advisory lock serializing `grove up`/`--rollback` on this
-    /// `GROVE_HOME` — install→flip is otherwise racy between two updaters. Held
+    /// `GROVE_INSTALL` — install→flip is otherwise racy between two updaters. Held
     /// for the lifetime of the returned handle (released on drop). `O_NOFOLLOW`
     /// refuses a symlinked lock path.
     ///
@@ -297,7 +297,7 @@ impl Layout {
     }
 
     /// Atomically (re)point a symlink at `versions/<v>` using a relative target,
-    /// so the layout survives a moved `GROVE_HOME`: write a temp link in the same
+    /// so the layout survives a moved `GROVE_INSTALL`: write a temp link in the same
     /// dir, then `rename(2)` it over the destination.
     fn point(&self, link: &Path, v: &str) -> Result<(), CliError> {
         let target: PathBuf = ["versions", v].iter().collect();
@@ -307,7 +307,7 @@ impl Layout {
             .map_err(|e| CliError::Update(format!("symlink {}: {e}", tmp.display())))?;
         fs::rename(&tmp, link)
             .map_err(|e| CliError::Update(format!("flip {}: {e}", link.display())))?;
-        // Persist the rename: fsync the link's parent (GROVE_HOME) so the flipped
+        // Persist the rename: fsync the link's parent (GROVE_INSTALL) so the flipped
         // `current`/`previous` symlink survives a crash right after the rename.
         fsync_dir(&self.home);
         Ok(())

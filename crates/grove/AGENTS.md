@@ -37,10 +37,10 @@ edges:
 
 - lm:apply-is-ungated → src/commands.rs:329
 - lm:busy-refuses-destructive → src/commands.rs:69
-- lm:cli-health-poll → src/server.rs:473
+- lm:cli-health-poll → src/server.rs:489
 - lm:pending-marker → src/update/layout.rs:178
 - lm:reachability-tri-state → src/api.rs:129
-- lm:self-update-flip → src/update/mod.rs:235
+- lm:self-update-flip → src/update/mod.rs:245
 - lm:single-realizer → src/commands.rs:35
 
 <!-- stele:end -->

@@ -4,8 +4,14 @@
 //! under `GROVE_HOME`, and stops it gracefully (drain over the API, then signal).
 //! The CLI is not itself a daemon — this type *controls* one. Since v2 ships a
 //! single executable, the thing it launches is the grove binary itself: the launcher
-//! contract is `current/bin/grove serve` for an installed release, and this very
-//! binary (`current_exe`) when nothing is installed yet.
+//! contract is `$GROVE_INSTALL/current/bin/grove serve` for an installed release, and
+//! this very binary (`current_exe`) when nothing is installed yet.
+//!
+//! Both roots are held, because they are different things: `GROVE_HOME` is the
+//! workspace the daemon realizes (pid file, lock, log, manifest, `code/`), and
+//! `GROVE_INSTALL` is the release tree the launcher runs out of. The child is handed
+//! both, so a daemon that runs its own `grove up` flips the install this CLI
+//! resolved rather than one it re-derives.
 //!
 //! Every external dependency is held as data (paths, bind, timeouts, the [`Clock`],
 //! the server [`Interface`]), so tests construct the struct with fakes — no env
@@ -78,6 +84,7 @@ type PidProbe = fn(Pid) -> PidState;
 /// Controls the local grove daemon: start, stop, restart.
 pub struct ServerControl {
     home: PathBuf,
+    install: PathBuf,
     bind: SocketAddr,
     server_program: PathBuf,
     server_args: Vec<String>,
@@ -90,17 +97,23 @@ pub struct ServerControl {
 }
 
 impl ServerControl {
-    /// Resolve from the environment: `GROVE_HOME` (→ `~/.grove`), `GROVE_BIND`
-    /// (→ `127.0.0.1:7777`), and the launcher. An unparseable `GROVE_BIND` is a loud
-    /// error, never a silent default — otherwise `on`/`off` would target one address
-    /// while the API client talks to another.
+    /// Resolve from the environment: `GROVE_HOME` (→ `~/.grove`), `GROVE_INSTALL`
+    /// (→ `~/.local/share/grove`), `GROVE_BIND` (→ `127.0.0.1:7777`), and the
+    /// launcher. An unparseable `GROVE_BIND` is a loud error, never a silent default
+    /// — otherwise `on`/`off` would target one address while the API client talks to
+    /// another.
+    ///
+    /// The launcher hangs off the *install* root, not the workspace: what to run is
+    /// release state, and the two roots are resolved once each in `grove-ops`.
     pub fn from_env() -> Result<Self, CliError> {
         let home = grove_ops::home();
+        let install = grove_ops::install_home();
         let bind = resolve_bind(std::env::var("GROVE_BIND").ok())?;
-        let server_program = launcher(&home);
+        let server_program = launcher(&install);
 
         Ok(Self {
             home,
+            install,
             bind,
             server_program,
             server_args: vec!["serve".to_string()],
@@ -454,13 +467,16 @@ impl ServerControl {
         }
         let mut cmd = Command::new(&self.server_program);
         cmd.args(&self.server_args);
-        // Hand the child the RESOLVED bind and the home this CLI decided on. The
+        // Hand the child the RESOLVED bind and both roots this CLI decided on. The
         // CLI accepts a hostname (`localhost:7777`, resolved above) but the daemon
         // binds only literal IPs, and a child that inherited a *different*
         // `GROVE_HOME` would realize a different manifest than the one the operator
-        // is looking at.
+        // is looking at. `GROVE_INSTALL` travels for the mirror-image reason: a
+        // served daemon runs its own `grove up`, and one that re-derived the install
+        // root would flip a different tree than the one it was launched out of.
         cmd.env("GROVE_BIND", self.bind.to_string());
         cmd.env("GROVE_HOME", &self.home);
+        cmd.env("GROVE_INSTALL", &self.install);
         Ok(cmd)
     }
 
@@ -547,13 +563,17 @@ impl ServerControl {
 /// The launcher: the installed release's binary when one is laid down, else this
 /// very executable.
 ///
+/// It reads the *install* root, not the workspace, because `current` is the symlink
+/// `grove up` flips and every version behind it is disposable release state — the
+/// one thing the workspace must never hold.
+///
 /// v1 launched a *separate* Mix release (`current/bin/grove_server start`) and had
 /// nothing to fall back on, so `grove on` before an install was an error. v2 ships
 /// one binary, so a dev or freshly-built grove can start its own daemon; `current`
 /// still wins when present, because that is the path `grove up` flips and the
 /// version the health gate expects to see answer.
-fn launcher(home: &Path) -> PathBuf {
-    let installed = home.join("current/bin/grove");
+fn launcher(install: &Path) -> PathBuf {
+    let installed = install.join("current/bin/grove");
     if installed.exists() {
         return installed;
     }
@@ -680,12 +700,18 @@ mod tests {
     /// timeouts. `/bin/sleep` is the fake server (POSIX; unix-only target). The
     /// `Tcp` interface probes the port directly — no HTTP server to stand up.
     ///
+    /// The fake install root is a `install/` subdirectory of the same `TempDir`: these
+    /// ladders never launch the installed binary (`server_program` is the fake), so
+    /// the only thing the root has to be is *distinct from the home* — which is the
+    /// property [`the_child_command_carries_the_resolved_bind_and_both_roots`] reads.
+    ///
     /// The clock is the real one: these ladders poll a *live* process, so a frozen
     /// clock would spin forever rather than fail fast. The seam is exercised on its
     /// own in `a_ready_deadline_expires_on_the_injected_clock`.
     fn control(home: &TempDir, bind: SocketAddr) -> ServerControl {
         ServerControl {
             home: home.path().to_path_buf(),
+            install: home.path().join("install"),
             bind,
             server_program: PathBuf::from("/bin/sleep"),
             server_args: vec!["600".to_string()],
@@ -1224,29 +1250,30 @@ mod tests {
     /// when one is laid down and at this very binary when none is.
     #[test]
     fn the_launcher_prefers_an_installed_release_then_falls_back_to_this_binary() {
-        let home = TempDir::new().unwrap();
-        let fallback = launcher(home.path());
+        let install = TempDir::new().unwrap();
+        let fallback = launcher(install.path());
         assert_eq!(
             fallback,
             std::env::current_exe().unwrap(),
             "no install → run our own binary"
         );
 
-        let installed = home.path().join("current/bin");
+        let installed = install.path().join("current/bin");
         fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join("grove"), "#!/bin/sh\n").unwrap();
         assert_eq!(
-            launcher(home.path()),
+            launcher(install.path()),
             installed.join("grove"),
             "an installed release wins — it is what `grove up` flips"
         );
     }
 
-    /// The child inherits the resolved bind and the home the CLI decided on: a
-    /// hostname the daemon would refuse never reaches it, and the child realizes
-    /// the same manifest the operator is looking at.
+    /// The child inherits the resolved bind and *both* roots the CLI decided on: a
+    /// hostname the daemon would refuse never reaches it, the child realizes the same
+    /// manifest the operator is looking at, and its own `grove up` flips the same
+    /// install this CLI resolved rather than one it re-derives from its environment.
     #[test]
-    fn the_child_command_carries_the_resolved_bind_and_home() {
+    fn the_child_command_carries_the_resolved_bind_and_both_roots() {
         use std::ffi::OsStr;
         let home = TempDir::new().unwrap();
         let sc = control(&home, SocketAddr::from(([127, 0, 0, 1], 7777)));
@@ -1260,6 +1287,11 @@ mod tests {
         };
         assert_eq!(value("GROVE_BIND"), Some(OsStr::new("127.0.0.1:7777")));
         assert_eq!(value("GROVE_HOME"), Some(home.path().as_os_str()));
+        assert_eq!(
+            value("GROVE_INSTALL"),
+            Some(home.path().join("install").as_os_str()),
+            "the install root travels too, and is not the home"
+        );
         assert_eq!(
             cmd.get_args().collect::<Vec<_>>(),
             vec![OsStr::new("600")],

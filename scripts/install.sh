@@ -15,7 +15,11 @@
 #
 # Environment:
 #   channel                 release channel: stable (default), canary, …
-#   GROVE_HOME              data dir (default: ~/.grove)
+#   GROVE_INSTALL           install root — versions/, current, channel (default:
+#                           $XDG_DATA_HOME/grove, i.e. ~/.local/share/grove).
+#                           Disposable: another `grove up` regenerates all of it.
+#   GROVE_HOME              workspace dir — manifest.toml, code/ (default: ~/.grove).
+#                           Holds the checkouts, so nothing here is regenerable.
 #   GROVE_LINK_DIR          where to put the `grove` PATH symlink. Unset, the script
 #                           searches /usr/local/bin then ~/.local/bin — a search that
 #                           can leave a redirected HOME, so set this whenever the run
@@ -42,6 +46,7 @@ set -euo pipefail
 
 repo="jgeschwendt/grove"
 grove_home="${GROVE_HOME:-$HOME/.grove}"
+grove_install="${GROVE_INSTALL:-${XDG_DATA_HOME:-$HOME/.local/share}/grove}"
 channel="${channel:-stable}"
 version="${1:-}"
 base="${GROVE_INSTALL_BASE_URL:-}"
@@ -263,7 +268,8 @@ chmod +x "$tmp/grove"
 # Hand off: the bootstrap CLI does the versioned-dir install, the checksum
 # verification and the atomic flip. On a clean machine nothing is running, so this
 # only lays versions/<vsn> and moves `current`.
-GROVE_HOME="$grove_home" GROVE_INSTALL_BASE_URL="$base" "$tmp/grove" up --version "$vsn"
+GROVE_HOME="$grove_home" GROVE_INSTALL="$grove_install" GROVE_INSTALL_BASE_URL="$base" \
+  "$tmp/grove" up --version "$vsn"
 
 # Persist the channel this box follows so a later `grove up` (no --channel /
 # GROVE_CHANNEL) keeps pulling from it. Derived from the *resolved version*, not
@@ -277,19 +283,20 @@ case "$vsn" in
   ;;
 *) resolved_channel="stable" ;;
 esac
-printf '%s\n' "$resolved_channel" >"$grove_home/channel"
+mkdir -p "$grove_install"
+printf '%s\n' "$resolved_channel" >"$grove_install/channel"
 
 # Put `grove` on PATH via a stable symlink → current/bin/grove. A running process
 # keeps its mapped binary, so future flips never disturb it.
 #
 # GROVE_LINK_DIR pins the destination and skips the search below. The search is the
-# one step of this script that is NOT contained by $HOME/$GROVE_HOME: its first
-# candidate is /usr/local/bin, whose writability is a property of the host rather
+# one step of this script that is NOT contained by $HOME or either grove root: its
+# first candidate is /usr/local/bin, whose writability is a property of the host rather
 # than of the redirected home, so on a box where the invoking user can write it a
 # hermetic-looking run (the smoke test, a sandbox, a container) reaches out and
 # clobbers the operator's real `grove` link with `ln -sf`. Anything that redirects
 # HOME must pin this too.
-grove_bin="$grove_home/current/bin/grove"
+grove_bin="$grove_install/current/bin/grove"
 link_dir="${GROVE_LINK_DIR:-}"
 linked=""
 if [ -n "$link_dir" ]; then

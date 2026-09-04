@@ -1,6 +1,7 @@
 #!/bin/sh
-# Hermetic smoke for the real installer: a clean HOME + GROVE_HOME, a local fixture
-# "release" (no network), and scripts/install.sh itself — not a parallel copy of it,
+# Hermetic smoke for the real installer: a clean HOME, a clean pair of roots
+# (GROVE_INSTALL + GROVE_HOME), a local fixture "release" (no network), and
+# scripts/install.sh itself — not a parallel copy of it,
 # which is how v1 ended up shipping an installer no test ever ran.
 #
 # The whole install lifecycle, in order: clean install → swap up to a second
@@ -40,11 +41,15 @@ trap 'rm -rf "$WORK"' EXIT
 FIX="$WORK/release"
 HOME_DIR="$WORK/home"
 GH="$WORK/grovehome"
+# The two roots the operator now has: the install (versions, current, channel —
+# disposable) and the workspace (manifest, code/ — not). The smoke keeps them apart
+# precisely because uninstall treats them differently.
+INSTALL="$WORK/install"
 mkdir -p "$FIX" "$HOME_DIR"
 
-# The one step of install.sh that is not contained by HOME/GROVE_HOME: its PATH-link
-# search takes the first WRITABLE candidate, and the first candidate is a system-wide
-# directory whose writability is a property of the host rather than of the redirected
+# The one step of install.sh that is not contained by HOME or either grove root: its
+# PATH-link search takes the first WRITABLE candidate, and the first candidate is a
+# system-wide directory whose writability is a property of the host rather than of the redirected
 # home. On any box where the invoking user can write it (a Homebrew prefix, most
 # single-user Linux boxes, root in a container) this smoke would `ln -sf` over the
 # operator's real `grove` link and then have uninstall.sh delete it. Pinned, not
@@ -83,9 +88,16 @@ fail() {
 
 assert_current() {
   want="$1"
-  got=$(readlink "$GH/current")
+  got=$(readlink "$INSTALL/current")
   [ "$got" = "versions/$want" ] || fail "current → $got, want versions/$want"
 }
+
+# A workspace with a checkout-shaped file in it. `grove up` never creates $GH — the
+# workspace is the manifest's, not the installer's — so "uninstall keeps the
+# workspace" has to be asserted on content that predates the install, which is also
+# the honest shape of the footgun: an operator uninstalling over real checkouts.
+mkdir -p "$GH/code"
+printf 'keep me\n' >"$GH/code/sentinel"
 
 V1="0.1.0-smoke"
 V2="0.2.0-smoke"
@@ -94,39 +106,59 @@ stage_version "$V1"
 printf '%s' "$V1" >"$FIX/latest"
 
 echo "smoke: install.sh (clean machine, local release base)"
-HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_BIND="$BIND" GROVE_INSTALL_BASE_URL="$FIX" \
-  GROVE_LINK_DIR="$LINK_DIR" bash "$ROOT/scripts/install.sh"
+HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
+  GROVE_INSTALL_BASE_URL="$FIX" GROVE_LINK_DIR="$LINK_DIR" bash "$ROOT/scripts/install.sh"
 
 echo "smoke: asserting clean install"
-[ -L "$GH/current" ] || fail "$GH/current is not a symlink"
+[ -L "$INSTALL/current" ] || fail "$INSTALL/current is not a symlink"
 assert_current "$V1"
-[ -x "$GH/current/bin/grove" ] || fail "current/bin/grove missing"
+[ -x "$INSTALL/current/bin/grove" ] || fail "current/bin/grove missing"
 [ -L "$LINK_DIR/grove" ] || fail "grove not linked into $LINK_DIR"
-"$GH/current/bin/grove" version >/dev/null || fail "installed grove does not run"
+# The link must point into the INSTALL root, not the workspace: uninstall unlinks on
+# exactly that test, and a link into $GH would survive an uninstall as a dangler.
+case "$(readlink "$LINK_DIR/grove")" in
+"$INSTALL"/*) ;;
+*) fail "grove link → $(readlink "$LINK_DIR/grove"), want a path under $INSTALL" ;;
+esac
+"$INSTALL/current/bin/grove" version >/dev/null || fail "installed grove does not run"
 # A -smoke suffix is not a channel (no trailing .N), so the box follows stable.
-[ "$(cat "$GH/channel")" = "stable" ] || fail "channel → $(cat "$GH/channel"), want stable"
+[ "$(cat "$INSTALL/channel")" = "stable" ] || fail "channel → $(cat "$INSTALL/channel"), want stable"
 # The gate answered on the way in, so nothing may be left owed on disk.
-[ ! -e "$GH/pending" ] || fail "a settled install left a pending marker"
+[ ! -e "$INSTALL/pending" ] || fail "a settled install left a pending marker"
+# Nothing of the install may have landed in the workspace — that blend is what this
+# split exists to end.
+[ ! -e "$GH/versions" ] || fail "install laid versions/ under the workspace $GH"
+[ ! -e "$GH/current" ] || fail "install laid a current symlink under the workspace $GH"
 
-GROVE="$GH/current/bin/grove"
+GROVE="$INSTALL/current/bin/grove"
 run_grove() {
-  HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_BIND="$BIND" GROVE_INSTALL_BASE_URL="$FIX" "$GROVE" "$@"
+  HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
+    GROVE_INSTALL_BASE_URL="$FIX" "$GROVE" "$@"
 }
 
 echo "smoke: grove up --version $V2 (swap)"
 stage_version "$V2"
 run_grove up --version "$V2"
 assert_current "$V2"
-[ "$(readlink "$GH/previous")" = "versions/$V1" ] || fail "previous → $(readlink "$GH/previous"), want versions/$V1"
-[ ! -e "$GH/pending" ] || fail "a settled update left a pending marker"
+[ "$(readlink "$INSTALL/previous")" = "versions/$V1" ] || fail "previous → $(readlink "$INSTALL/previous"), want versions/$V1"
+[ ! -e "$INSTALL/pending" ] || fail "a settled update left a pending marker"
 
 echo "smoke: grove up --rollback"
 run_grove up --rollback
 assert_current "$V1"
 
-echo "smoke: uninstall.sh"
-HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_BIND="$BIND" GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh"
-[ ! -e "$GH" ] || fail "uninstall left $GH behind"
+# The default uninstall is the one that used to take every checkout with the binary:
+# it must remove the install root and leave the workspace standing.
+echo "smoke: uninstall.sh (default — keeps the workspace)"
+HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
+  GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh"
+[ ! -e "$INSTALL" ] || fail "uninstall left $INSTALL behind"
+[ -f "$GH/code/sentinel" ] || fail "uninstall took the workspace $GH without --purge"
 [ ! -L "$LINK_DIR/grove" ] || fail "uninstall left the PATH symlink behind"
 
-echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall"
+echo "smoke: uninstall.sh --purge (takes the workspace too)"
+HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
+  GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" --purge
+[ ! -e "$GH" ] || fail "--purge left the workspace $GH behind"
+
+echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall, purge"

@@ -11,21 +11,32 @@ There is no update timer. `grove up` is the whole story; grove polls nothing.
 ## The layout
 
 ```
-$GROVE_HOME/
+$GROVE_INSTALL/                  # default ~/.local/share/grove
 ├── versions/0.3.1/bin/grove     # immutable after write — one binary per release
 ├── versions/0.4.0/bin/grove
 ├── current  → versions/0.4.0    # the only mutation point
 ├── previous → versions/0.3.1    # the rollback target
 ├── channel                      # the release channel this box follows
-└── pending                      # a flip whose health gate has not answered
+├── pending                      # a flip whose health gate has not answered
+└── update.lock                  # serializes concurrent `grove up`
 ```
 
-`grove` on PATH is a symlink to `current/bin/grove`, so the flip retargets the whole
-install at once. A running process keeps its mapped binary, so a flip never disturbs the
-daemon that is up — the new version takes effect at the bounce.
+**The install is not the workspace.** Everything above is release state: disposable,
+regenerable, owned by `grove up`, and knowing nothing about repos. `$GROVE_HOME`
+(default `~/.grove`) is the other root and holds the opposite — `manifest.toml` and its
+lock, `grove.lock`, `grove.pid`, `grove.log`, and every checkout under `code/`. Two
+lifecycles, two knobs: the install can be deleted and re-installed at will, the
+workspace is the most valuable tree on the box. Both are resolved once, in `grove-ops`
+(`install_home` and `home`), and the CLI, the launcher and the daemon all read those
+resolutions rather than re-deriving either.
+
+`grove` on PATH is a symlink to `$GROVE_INSTALL/current/bin/grove`, so the flip retargets
+the whole install at once. A running process keeps its mapped binary, so a flip never
+disturbs the daemon that is up — the new version takes effect at the bounce.
 
 The bundle is one file in a `bin/` directory. `grove serve` *is* the daemon, so there is no
-second artifact and no embedded runtime; the launcher contract is `current/bin/grove serve`.
+second artifact and no embedded runtime; the launcher contract is
+`$GROVE_INSTALL/current/bin/grove serve`.
 
 `crates/grove/src/update/layout.rs` is the pure on-disk mechanism — no network, fully unit
 tested. `mod.rs` orchestrates a run, with both side effects injected as seams (where
@@ -131,7 +142,7 @@ as "the new version failed to start".
 ## Channels and sources
 
 The channel a `grove up` follows resolves as `--channel` → `GROVE_CHANNEL` →
-`$GROVE_HOME/channel` → `stable`. Only `install.sh` writes that file, and it derives the
+`$GROVE_INSTALL/channel` → `stable`. Only `install.sh` writes that file, and it derives the
 value from the *resolved version's* prerelease suffix rather than from its own `channel`
 input: a pinned `install.sh v0.1.1-canary.2` runs with `channel=stable` but is really a
 canary box, and keying off the input would strand it on stable. `grove up --channel` is
@@ -192,8 +203,10 @@ another route.
 
 `GROVE_LINK_DIR` names where the PATH symlink goes; unset, the script searches
 `/usr/local/bin` then `~/.local/bin`. `scripts/uninstall.sh` stops the server first —
-through the installed binary, since the directory about to be deleted holds the pid file
-and the lock — then removes the symlink and the data directory.
+through the installed binary, since the roots about to be deleted hold that binary and,
+in the workspace, the pid file and the lock the daemon runs under — then removes the
+symlink and the install root. `$GROVE_HOME` survives unless `--purge` asks for it: the
+install is regenerable by one `grove up`, the checkouts under `$GROVE_HOME` are not.
 
 ## Publishing
 
@@ -250,7 +263,8 @@ real daemon: `slow_the_update_round_trip_gates_and_rolls_back_against_a_real_dae
 
 `mise run smoke` (`test/install_smoke.sh`) drives `scripts/install.sh` and
 `scripts/uninstall.sh` as an operator would, hermetically, against a fixture release in a
-temp directory — its own `GROVE_HOME`, its own `GROVE_BIND`, no network. It gets its own
-mise task and its own CI job because no cargo target can reach a shell script, and
-`harness_meta` pins both ends of that wiring: `the_install_smoke_is_reachable_from_a_gate`
-and `the_install_smoke_links_only_inside_its_own_home`.
+temp directory — its own `GROVE_HOME` and `GROVE_INSTALL`, its own `GROVE_BIND`, no
+network. It gets its own mise task and its own CI job because no cargo target can reach a
+shell script, and `harness_meta` pins both ends of that wiring:
+`the_install_smoke_is_reachable_from_a_gate` and
+`the_install_smoke_links_only_inside_its_own_home`.

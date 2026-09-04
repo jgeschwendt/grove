@@ -5,13 +5,18 @@
 //! `current` untouched, so a broken release can never take a server down.
 //!
 //! ```text
-//! $GROVE_HOME/
+//! $GROVE_INSTALL/                       # ~/.local/share/grove — the install root
 //! ├── versions/0.3.1/bin/grove          # immutable after write
 //! ├── versions/0.4.0/bin/grove
 //! ├── current  → versions/0.4.0         # the only mutation point (rename(2))
 //! ├── previous → versions/0.3.1         # rollback target
 //! └── pending                           # a flip whose health gate has not answered
 //! ```
+//!
+//! That root is the *install*, not the workspace: it holds only what a release
+//! lays down, so it is disposable and regenerable, while `$GROVE_HOME` holds the
+//! manifest and every checkout under `code/` and is not. Both are resolved once,
+//! in `grove-ops` — see [`grove_ops::install_home`] and [`grove_ops::home`].
 //!
 //! [`Layout`] is the pure on-disk mechanism (no network, fully unit-tested).
 //! [`Updater`] orchestrates a `grove up`: fetch → verify → install → flip → bounce →
@@ -179,10 +184,15 @@ impl Updater {
     /// `GROVE_INSTALL_BASE_URL`), and a bounce that restarts the server — standalone
     /// reboots it in place, served hands off to the supervisor — then polls
     /// `/api/health` for **ready at the expected version**. The channel follows
-    /// `GROVE_CHANNEL` → the persisted `$GROVE_HOME/channel` → `stable`.
+    /// `GROVE_CHANNEL` → the persisted `$GROVE_INSTALL/channel` → `stable`.
+    ///
+    /// Everything this reads and writes hangs off the *install* root, never the
+    /// workspace `$GROVE_HOME`: the layout, the channel file and the `update.lock`
+    /// are all release state, and pointing them at the workspace is what made
+    /// `uninstall.sh` unable to delete one without the other.
     ///
     /// What restarts is the v2 launcher contract: `ServerControl` runs
-    /// `$GROVE_HOME/current/bin/grove serve` whenever an installed release is laid
+    /// `$GROVE_INSTALL/current/bin/grove serve` whenever an installed release is laid
     /// down — the very path the flip above just moved — and falls back to the running
     /// executable only when nothing is installed.
     pub fn from_env() -> Result<Self, CliError> {
@@ -193,10 +203,10 @@ impl Updater {
         let target = supported_host_target()?;
         let source = install_source(std::env::var("GROVE_INSTALL_BASE_URL").ok())?;
 
-        let home = crate::grove_home();
+        let install = crate::grove_install_home();
         let channel = std::env::var("GROVE_CHANNEL")
             .ok()
-            .or_else(|| read_persisted_channel(&home))
+            .or_else(|| read_persisted_channel(&install))
             .unwrap_or_else(|| DEFAULT_CHANNEL.to_string());
 
         let supervised = matches!(std::env::var("GROVE_MODE").as_deref(), Ok("served"));
@@ -224,7 +234,7 @@ impl Updater {
             )
         };
 
-        let mut updater = Self::new(Layout::new(home), target, source, bounce);
+        let mut updater = Self::new(Layout::new(install), target, source, bounce);
         updater.channel = channel;
         Ok(updater)
     }
