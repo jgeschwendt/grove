@@ -105,7 +105,7 @@ pub async fn reconcile(State(state): State<AppState>) -> Reply<ReconcileData> {
 }
 
 /// `POST /api/roots/sync {slug}` — fetch this root's default branch and fast-forward
-/// its `.trunk`.
+/// its trunk.
 ///
 /// **Accept-only**, exactly as [`Engine::sync`] is: the handler returns as soon as the
 /// root's engine has recorded the request, never when the fetch lands. That is not a

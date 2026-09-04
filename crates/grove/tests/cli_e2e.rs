@@ -229,6 +229,16 @@ fn root_dir(home: &Path) -> PathBuf {
     home.join("code").join(SLUG)
 }
 
+/// The bare and the trunk checkout through the layout helpers rather than by hand —
+/// an e2e test that spelled either would pin the layout twice.
+fn bare_dir(home: &Path) -> PathBuf {
+    grove_ops::roots::bare_dir(home, SLUG)
+}
+
+fn trunk_dir(home: &Path) -> PathBuf {
+    grove_ops::roots::trunk_dir(home, SLUG)
+}
+
 fn manifest(home: &Path) -> String {
     std::fs::read_to_string(home.join("manifest.toml")).unwrap_or_default()
 }
@@ -253,9 +263,7 @@ fn slow_the_served_flow_drives_a_real_daemon() {
         .ok()
         .says("grove server is realizing it");
     assert!(manifest(&home).contains(r#"[roots."o/r"]"#), "declared");
-    until("cloned the root", || {
-        root_dir(&home).join(".trunk").is_dir()
-    });
+    until("cloned the root", || trunk_dir(&home).is_dir());
 
     // tree add — same shape, one level down. The name is the branch with `/` folded.
     grove(
@@ -287,7 +295,7 @@ fn slow_the_served_flow_drives_a_real_daemon() {
         .ok()
         .says("sync accepted for o/r");
     until("fast-forwarded the trunk", || {
-        root_dir(&home).join(".trunk/AHEAD.md").is_file()
+        trunk_dir(&home).join("AHEAD.md").is_file()
     });
 
     // The destructive pair, both synchronous through the daemon: by the time the
@@ -330,8 +338,8 @@ fn slow_the_offline_flow_realizes_in_process() {
     grove(&home, bind, &["clone", "add", &src])
         .ok()
         .says("cloned  o/r");
-    assert!(root_dir(&home).join(".git").is_dir(), "the bare is here");
-    assert!(root_dir(&home).join(".trunk").is_dir(), "and the trunk");
+    assert!(bare_dir(&home).is_dir(), "the bare is here");
+    assert!(trunk_dir(&home).is_dir(), "and the trunk");
 
     grove(
         &home,
@@ -361,7 +369,7 @@ fn slow_the_offline_flow_realizes_in_process() {
         .ok()
         .says("synced o/r: fetched, trunk updated")
         .says("  tip ");
-    assert!(root_dir(&home).join(".trunk/AHEAD.md").is_file());
+    assert!(trunk_dir(&home).join("AHEAD.md").is_file());
 
     // `apply` never delegates, so it is the same command in both worlds — here it is
     // a no-op over an already-realized home, which must still be exit 0.

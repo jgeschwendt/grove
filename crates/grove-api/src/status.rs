@@ -23,7 +23,7 @@ wire_enum! {
     /// also the `ALL` list `contracts/wire-vocab.json` pins as `root_status` and the
     /// `as_str` match — see [`crate::vocab`].
     pub enum RootStatus {
-        /// Bare and `.trunk` on disk, no failure recorded.
+        /// Bare and trunk checkout on disk, no failure recorded.
         Ready => "ready",
         /// A clone is in flight.
         Cloning => "cloning",

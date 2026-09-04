@@ -6,8 +6,8 @@
 //!
 //! - [`fill`] adds **one** detached slot at the default-branch tip — and *nothing
 //!   else*. No share materialization: a slot at `.pool/slot-N` is one level deeper
-//!   than a canonical worktree, so `env::materialize`'s sibling-of-`.trunk` depth
-//!   invariant doesn't hold there (links would dangle at `.pool/.trunk/…`), and the
+//!   than a canonical worktree, so `env::materialize`'s sibling-of-the-trunk depth
+//!   invariant doesn't hold there (links would dangle at `.pool/<trunk>/…`), and the
 //!   promote move would invalidate them regardless. Slots stay out of the declared
 //!   set via the path-based reserved exclusion in `worktrees::actual`.
 //! - [`promote`] attaches the branch IN the slot (DWIM, like `worktree_add`), then
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::roots::{bare_dir, manifest_path, root_dir};
+use crate::roots::{self, bare_dir, manifest_path, root_dir};
 use crate::{Error, git, manifest, worktrees};
 
 /// The outcome of a [`promote`]. `Cold` is **not** an error — the caller (the
@@ -71,7 +71,11 @@ pub fn fill(home: &Path, slug: &str) -> Result<usize, Error> {
     // forever. Pruning drops the stale registration so the slot re-realizes cleanly
     // (and keeps `pool_count` honest). Best-effort — a prune hiccup shouldn't block.
     let _ = git::worktree_prune(&bare);
-    let tip = git::default_branch(&bare).map_err(Error::git)?;
+    // Seed at the *trunk* branch, resolved through `roots::trunk` — the manifest's
+    // declaration when there is one, the bare's HEAD otherwise. A slot exists to be
+    // promoted off, so it has to sit where a cold checkout would start; reading HEAD
+    // directly would seed a root that has just declared a new trunk onto the old one.
+    let tip = roots::trunk(home, slug).map_err(Error::git)?.branch;
     let slot = free_slot(home, slug).map_err(Error::io)?;
     if let Some(parent) = slot.parent() {
         std::fs::create_dir_all(parent)
@@ -181,10 +185,18 @@ pub fn promote(
     // recreatable and would wedge the name. Attaching first guarantees any tree that
     // reaches the user path carries a branch (⇒ adoptable); a failed attach leaves the
     // slot cleanly detached and reusable, and the caller cold-falls-back.
-    git::attach_branch(&slot, branch, base).map_err(Error::git)?;
+    //
+    // The start point for a *new* branch is the trunk, named explicitly rather than
+    // left to git's `HEAD` fallback: the slot is detached, so that fallback is the
+    // commit `fill` happened to seed it at, which a trunk change since then leaves
+    // stale. `base` — the caller's own start point — still wins, and the manifest
+    // still records exactly what the caller declared, so a warm promote and a cold
+    // `worktrees::create` leave identical desired state.
+    let trunk = roots::trunk(home, slug).map_err(Error::git)?;
+    git::attach_branch(&slot, branch, Some(base.unwrap_or(&trunk.branch))).map_err(Error::git)?;
     git::worktree_move(&bare_dir(home, slug), &slot, &dest).map_err(Error::git)?;
     manifest::add_worktree(&manifest_path(home), slug, name, branch, base).map_err(Error::io)?;
-    // The worktree now sits at canonical sibling-of-`.trunk` depth, so share targets
+    // The worktree now sits at canonical sibling-of-the-trunk depth, so share targets
     // resolve correctly. Best-effort, like the cold path — a share hiccup must not
     // fail an otherwise-complete promote; reconcile/doctor retries it.
     let _ = crate::env::materialize(home, Some(slug), crate::env::Fix::Safe);
@@ -231,7 +243,7 @@ mod tests {
     use crate::testfix::git;
     use tempfile::TempDir;
 
-    /// A home with one cloned root `o/r` (bare + `.trunk` on `main`).
+    /// A home with one cloned root `o/r` (bare + a `main` trunk checkout).
     fn home_with_root(tmp: &TempDir) -> PathBuf {
         crate::testfix::home_with_root(tmp)
     }
@@ -255,7 +267,7 @@ mod tests {
         // Slots exist, are checked out at the tip, and are DETACHED (no branch).
         assert!(root(&home).join(".pool/slot-0/README.md").exists());
         assert!(root(&home).join(".pool/slot-1/README.md").exists());
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         let detached = crate::git::worktree_list(&bare)
             .unwrap()
             .into_iter()
@@ -355,7 +367,7 @@ mod tests {
         );
 
         // The branch is attached and the share is materialized at correct depth.
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         let on = crate::git::worktree_list(&bare)
             .unwrap()
             .into_iter()
@@ -367,9 +379,9 @@ mod tests {
         let link = root(&home).join("feat/.env");
         assert_eq!(
             std::fs::read_link(&link).unwrap(),
-            Path::new("../.trunk/.env")
+            Path::new("../main/.env")
         );
-        std::fs::write(root(&home).join(".trunk/.env"), "SECRET").unwrap();
+        std::fs::write(crate::roots::trunk_dir(&home, "o/r").join(".env"), "SECRET").unwrap();
         assert_eq!(
             std::fs::read_to_string(&link).unwrap(),
             "SECRET",
@@ -455,7 +467,7 @@ mod tests {
         let home = home_with_root(&tmp);
         // A branch that lives only on the remote — the cold path DWIMs it into a
         // tracking branch; promote must do the same (no bare `-b`).
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         git(
             &bare,
             &["update-ref", "refs/remotes/origin/remote-only", "HEAD"],
@@ -503,7 +515,7 @@ mod tests {
         // No orphan at the user path, and the warm slot survives intact + detached.
         assert!(!root(&home).join("feat").exists(), "no stranded worktree");
         assert_eq!(pool_count_(&home), 1, "slot not consumed on attach failure");
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         assert!(
             crate::git::worktree_list(&bare)
                 .unwrap()
@@ -556,5 +568,82 @@ mod tests {
             "work"
         );
         assert_eq!(pool_count_(&home), 1, "slot not consumed on conflict");
+    }
+
+    /// Declare `trunk = <branch>` on the fixture root, in place — the manifest is the
+    /// only way to say which branch a root integrates on, and there is no writer for
+    /// the key (a root declares it by hand, as an operator would).
+    fn declare_trunk(home: &Path, branch: &str) {
+        let path = manifest_path(home);
+        let toml = std::fs::read_to_string(&path).unwrap();
+        let mut out = String::new();
+        for line in toml.lines() {
+            out.push_str(line);
+            out.push('\n');
+            if line.starts_with("url = ") {
+                out.push_str("trunk = \"");
+                out.push_str(branch);
+                out.push_str("\"\n");
+            }
+        }
+        std::fs::write(&path, out).unwrap();
+        assert_eq!(
+            crate::roots::trunk(home, "o/r").unwrap().branch,
+            branch,
+            "the declaration is the resolved trunk"
+        );
+    }
+
+    /// A second branch one commit ahead of `main`, made in the trunk checkout and left
+    /// unchecked-out — a tip that is distinguishable from the fixture's `main` tip.
+    fn branch_ahead(home: &Path, branch: &str) {
+        let trunk = crate::roots::trunk_dir(home, "o/r");
+        let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
+        git(&trunk, &["switch", "-q", "-c", branch]);
+        std::fs::write(trunk.join("AHEAD"), "ahead").unwrap();
+        git(&trunk, &[&id[..], &["add", "."]].concat());
+        git(
+            &trunk,
+            &[&id[..], &["commit", "-q", "-m", "ahead"]].concat(),
+        );
+        git(&trunk, &["switch", "-q", "main"]);
+    }
+
+    /// A slot is seeded at the branch the root *integrates on*, not at whatever the
+    /// bare's HEAD still says: a root that has declared a new trunk but not yet
+    /// converged would otherwise warm every slot onto the branch it is leaving.
+    #[test]
+    fn fill_seeds_a_slot_at_the_declared_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        branch_ahead(&home, "canary");
+        declare_trunk(&home, "canary");
+
+        assert_eq!(fill(&home, "o/r").unwrap(), 1);
+        assert!(
+            root(&home).join(".pool/slot-0/AHEAD").exists(),
+            "slot seeded at the declared trunk's tip, not the bare's HEAD"
+        );
+    }
+
+    /// A slot filled before a trunk change sits at the old tip. Promote must still
+    /// branch from the trunk — git's `HEAD` fallback would branch from the stale
+    /// commit the slot happens to carry.
+    #[test]
+    fn promote_branches_from_the_trunk_not_a_stale_slot() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        fill(&home, "o/r").unwrap(); // seeded at `main`
+        branch_ahead(&home, "canary");
+        declare_trunk(&home, "canary");
+
+        assert_eq!(
+            promote(&home, "o/r", "feat", "feature/x", None).unwrap(),
+            Promotion::Promoted
+        );
+        assert!(
+            root(&home).join("feat/AHEAD").exists(),
+            "new branch started at the trunk, not at the slot's stale tip"
+        );
     }
 }

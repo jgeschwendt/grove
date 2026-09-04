@@ -254,7 +254,7 @@ fn check_status(out: &std::process::Output, what: &str) -> Result<()> {
 
 /// Fetch `branch` from `remote` into `bare`, updating only the remote-tracking ref
 /// (`refs/remotes/<remote>/<branch>`). Single-branch refspec — bounded work; nothing
-/// downstream reads other refs (`.trunk` ffs from the tracking ref, pool slots detach
+/// downstream reads other refs (the trunk ffs from the tracking ref, pool slots detach
 /// at the local branch tip). Wall time capped by [`fetch_timeout`] via a child kill.
 pub fn fetch(bare: &Path, remote: &str, branch: &str) -> Result<()> {
     let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
@@ -289,10 +289,10 @@ pub enum FastForward {
 /// [`FastForward`]. `Err` is reserved for real faults (a broken repo, git missing).
 pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
     // A *tracked*-file modification is reported dirty before any merge attempt: git
-    // would happily ff over non-conflicting local edits, but a grove-managed `.trunk`
+    // would happily ff over non-conflicting local edits, but a grove-managed trunk
     // with hand-made changes is a state the operator should resolve, not race.
     // `--untracked-files=no` is load-bearing: grove itself materializes share sources
-    // as untracked files at `.trunk/<p>` (see `env::source_outcome`), so counting
+    // as untracked files in the trunk (see `env::source_outcome`), so counting
     // untracked files as dirty would wedge every future ff on a repo that doesn't
     // gitignore that path. An untracked file the incoming commits *would* overwrite
     // is instead caught at the merge step below (git refuses → Dirty).
@@ -379,7 +379,7 @@ pub fn unpushed_count(repo: &Path) -> Result<u32> {
 ///
 /// `untracked` is reported but deliberately **not** part of the dirty signal a
 /// trunk renders: grove materializes declared shares as untracked files inside
-/// `.trunk`, so a healthy trunk carries a permanent nonzero untracked count. Same
+/// the trunk, so a healthy trunk carries a permanent nonzero untracked count. Same
 /// reasoning as [`fast_forward`]'s gate, which counts only *tracked* modifications.
 // `Clone`/`Deserialize` for the read surface the daemon publishes: a status is
 // folded into `GET /api/roots`' per-worktree view and decoded back by its tests.
@@ -411,7 +411,7 @@ pub struct Status {
 ///
 /// `--no-optional-locks` is what keeps this a *read*. Plain `git status` may take
 /// the index lock and write back a refreshed stat cache — observed rewriting
-/// `.git/worktrees/<name>/index` once this ran per worktree, which broke
+/// the bare's `worktrees/<name>/index` once this ran per worktree, which broke
 /// `env::diagnose`'s must-not-mutate guarantee. That test
 /// (`env::tests::diagnose_mutates_nothing`) is the pin: it fails without this flag.
 /// Whether the rewrite happens depends on the checkout's stat state, so the flag is
@@ -588,6 +588,20 @@ fn is_unknown_revision(stderr: &str) -> bool {
         || s.contains("did not match any file")
 }
 
+/// Does `branch` already exist in `bare` — as a local head, or as the
+/// `origin/<branch>` tracking ref a checkout DWIMs onto?
+///
+/// The gate in front of a [`worktree_add`] whose branch the caller must not invent:
+/// that call's `-b` fallback mints a missing branch off `HEAD`, which is right for
+/// `tree add` (a new branch is the point) and wrong for a trunk the operator named —
+/// a typo would otherwise become a real branch and grove would integrate on it.
+#[must_use]
+pub fn branch_exists(bare: &Path, branch: &str) -> bool {
+    ["refs/heads/", "refs/remotes/origin/"]
+        .iter()
+        .any(|prefix| rev_parse(bare, &format!("{prefix}{branch}")).is_ok())
+}
+
 /// The bare's default branch — its `HEAD` symbolic-ref shortened (`refs/heads/main`
 /// → `main`). The warm-pool checkout target: a detached slot sits at this branch's
 /// tip. Falls back to `main` when `HEAD` is detached/unreadable (a fresh bare clone
@@ -602,6 +616,24 @@ pub fn default_branch(bare: &Path) -> Result<String> {
         return Ok("main".to_string());
     }
     Ok(stdout_trimmed(&out))
+}
+
+/// Point the bare's `HEAD` at `refs/heads/<branch>` — [`default_branch`]'s write-side
+/// twin, and the whole of "actual state" for which branch a root integrates on.
+///
+/// `symbolic-ref` rather than `switch`/`checkout`: a bare repo has no working tree to
+/// move, and the ref need not resolve yet — a root declaring a trunk the remote has
+/// not published still records the intent, and the checkout that follows is what
+/// fails loudly if the branch really is not there.
+pub fn set_head(bare: &Path, branch: &str) -> Result<()> {
+    let mut cmd = git_command();
+    cmd.arg("-C")
+        .arg(bare)
+        .args(["symbolic-ref", "HEAD"])
+        .arg(format!("refs/heads/{branch}"));
+    let out = run_git(cmd, None, "git symbolic-ref HEAD")?;
+    check_status(&out, "git symbolic-ref HEAD")?;
+    Ok(())
 }
 
 /// Add a **detached** worktree at `path`, checked out at `commitish` (no branch).
@@ -656,6 +688,34 @@ pub fn worktree_move(bare: &Path, from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Re-derive git's worktree pointers after a directory was moved by `rename(2)`
+/// rather than by [`worktree_move`]: the gitlink each linked worktree holds at its
+/// own `.git`, and — for each path in `moved` — the admin `gitdir` that points back
+/// at it. Both are absolute paths git recorded, so a rename of the bare or of a
+/// checkout leaves them dangling until this runs.
+///
+/// Git's own repair rather than a hand-written rewrite of those files: it owns their
+/// format, it is idempotent (a pointer already correct is left alone, so a migration
+/// that crashed halfway resumes), and it is the documented answer to exactly this
+/// move. A pointer it cannot repair is reported on stderr and is **not** an error —
+/// the caller's own verification of the resulting checkout is what decides whether
+/// the tree came out sound.
+pub fn worktree_repair(bare: &Path, moved: &[&Path]) -> Result<()> {
+    debug_assert!(
+        bare.is_absolute(),
+        "bare must be absolute; got {}",
+        bare.display()
+    );
+    let mut cmd = git_command();
+    cmd.arg("-C")
+        .arg(bare)
+        .args(["worktree", "repair", "--"])
+        .args(moved);
+    let out = run_git(cmd, None, "git worktree repair")?;
+    check_status(&out, "git worktree repair")?;
+    Ok(())
+}
+
 /// Attach `branch` into the **already-checked-out** worktree at `wt` (a detached
 /// slot just moved into place), mirroring [`worktree_add`]'s DWIM semantics so a
 /// warm promote of an existing branch behaves identically to a cold checkout:
@@ -700,7 +760,7 @@ pub fn attach_branch(wt: &Path, branch: &str, start: Option<&str>) -> Result<()>
 }
 
 /// The linked worktrees of `bare`, parsed from `git worktree list --porcelain`.
-/// The bare entry itself is omitted; callers filter `.trunk`/`.pool` by path.
+/// The bare entry itself is omitted; callers filter grove's own dirs by path.
 pub fn worktree_list(bare: &Path) -> Result<Vec<GitWorktree>> {
     let mut cmd = git_command();
     cmd.arg("-C")
@@ -788,7 +848,7 @@ pub fn remote_url(bare: &Path, remote: &str) -> Result<String> {
     Ok(stdout_trimmed(&out))
 }
 
-/// Prune stale worktree administrative entries under `.git/worktrees/` whose working
+/// Prune stale worktree administrative entries under the bare's `worktrees/` whose working
 /// tree is gone (`git worktree prune`). Clears the registration git keeps after a
 /// worktree directory is removed out-of-band (a stray `rm -rf`): without it, that
 /// registration survives so a re-`add` at the path is refused *and* reconcile would
@@ -1464,7 +1524,7 @@ mod tests {
     }
 
     /// An untracked file in the trunk must NOT gate an ff. grove materializes share
-    /// sources as untracked files at `.trunk/<p>`; counting them dirty would wedge
+    /// sources as untracked files in the trunk; counting them dirty would wedge
     /// every future sync on a repo that doesn't gitignore that path.
     #[test]
     fn fast_forward_ignores_an_untracked_file() {
@@ -1548,7 +1608,7 @@ mod tests {
     fn parse_worktree_list_skips_a_non_utf8_path() {
         let mut bytes = Vec::new();
         // The bare entry (excluded), a valid worktree, and a non-UTF-8-path one.
-        bytes.extend_from_slice(b"worktree /home/u/code/o/r/.git\nbare\n\n");
+        bytes.extend_from_slice(b"worktree /home/u/code/o/r/.bare\nbare\n\n");
         bytes.extend_from_slice(b"worktree /home/u/code/o/r/feat\nbranch refs/heads/feature/x\n\n");
         bytes.extend_from_slice(b"worktree /home/u/code/o/r/bad\xff\nbranch refs/heads/bad\n\n");
 

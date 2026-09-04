@@ -16,15 +16,27 @@ host must provide).
 ```sh
 grove clone add <url>          # declare a repo, and clone it
 grove clone remove <slug> [--force]   # delete it from disk, then undeclare it
-grove tree add <slug> <branch> [--base <ref>]   # a worktree, named branch-with-/-as-
+grove tree add <slug> <branch> [--base <ref>]   # a checkout, named branch-with-/-as-
 grove tree list <slug>         # declared ⋈ actual worktrees
 grove tree remove <slug> <name>
-grove sync <slug>              # fetch, and fast-forward .trunk — never forced
+grove sync <slug>              # fetch the trunk branch, fast-forward its checkout — never forced
 grove apply                    # realize the whole manifest, locally
 grove doctor [slug] [--dry-run] [--fix]   # converge shares; report conflicts + plumbing
 grove ok                       # is the server healthy?
 grove up [--version <v>] [--channel <c>] [--rollback]   # self-update; see below
 grove version                  # what this binary is
+```
+
+Every checkout under a root is a directory named by its branch, `/` folded to `-`; grove's
+own entries beside them are the dotted ones. One of those checkouts is the **trunk** — the
+branch the root integrates on, what `tree add` forks from and `sync` fast-forwards, and the
+source every share links through. A root names it in the manifest, and defaults to the
+remote's `HEAD` when it does not:
+
+```toml
+[roots."o/r"]
+url   = "git@github.com:o/r.git"
+trunk = "canary"     # absent → whatever the remote's HEAD points at
 ```
 
 **One realizer, ever.** Declaring is universal — the manifest is written by whoever
@@ -49,7 +61,7 @@ declare-only analogue, so it refuses outright rather than guessing — and neith
 `sync` delegates without waiting: the server's sync is accept-only, so the command prints
 that the request was accepted and `grove tree list <slug>` is where the outcome shows up.
 Offline there is no realizer to wait on, so the fetch happens here and the report prints.
-Either way a `.trunk` carrying local commits or dirty tracked files is *reported*, never
+Either way a trunk carrying local commits or dirty tracked files is *reported*, never
 forced.
 
 "A server answers" means *this home's* server. `GROVE_HOME` and `GROVE_BIND` are

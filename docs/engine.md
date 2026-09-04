@@ -15,7 +15,7 @@ flight or a failure just recorded, and only the process driving the root has the
 
 | status | means |
 |---|---|
-| `ready` | the bare clone **and** `.trunk` are both on disk, no failure recorded |
+| `ready` | the bare clone **and** the trunk checkout are both on disk, no failure recorded |
 | `cloning` | a reconcile has been dispatched for a root not yet on disk |
 | `degraded` | a terminal failure stopped the engine; it waits for an operator or a change |
 | `missing` | declared, nothing on disk yet |
@@ -48,10 +48,10 @@ driver owns, or trust disk?* Getting it wrong in either direction is a real defe
 disk too eagerly and a root mid-clone reads `missing`, so the next event dispatches a
 second clone; preserve too eagerly and a finished clone stays `cloning` forever.
 
-`disk_status(home, slug)` is the engine's one filesystem read: `Ready` when
-`<root>/.git` **and** `<root>/.trunk` are both directories, else `Missing`. Both, not
-either — a bare with no `.trunk` is exactly the half-realized state reconcile exists to
-finish.
+`disk_status(home, slug)` is the engine's one filesystem read: `Ready` when `<root>/.bare`
+**and** the trunk checkout (`roots::trunk_dir`, so whichever directory this root's trunk
+branch names) are both directories, else `Missing`. Both, not either — a bare with no trunk
+checkout is exactly the half-realized state reconcile exists to finish.
 
 | current ↓ / transition → | `ReconcileDispatched` | `Derive(Ready)` | `Derive(Missing)` | `ReconcileError(Ready)` | `ReconcileError(Missing)` |
 |---|---|---|---|---|---|
@@ -225,8 +225,8 @@ coalesces into one fetch through the background slot rather than queueing a lane
 and it answers 503 `unavailable` for a declared root no engine is driving, because nothing
 would record the request. See `docs/api.md` § Sync for the full contract.
 
-`roots::sync` fetches the default branch (bounded, single-refspec), fast-forwards `.trunk`
-onto the tracking ref, and prunes any warm-pool slot stranded at a pre-sync tip. It never
+`roots::sync` fetches the trunk branch (bounded, single-refspec), fast-forwards the trunk
+checkout onto the tracking ref, and prunes any warm-pool slot stranded at a pre-sync tip. It never
 forces. A trunk carrying local commits or dirty tracked files is *reported*:
 `SyncNote::of` maps `git::FastForward` to the note the snapshot publishes beside `syncing`
 — `diverged`, `dirty`, or nothing for `updated`/`already_current`. `SyncNote::Failed` is

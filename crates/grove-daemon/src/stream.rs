@@ -38,6 +38,7 @@
 //! state event is level-triggered.
 
 use std::convert::Infallible;
+use std::path::Path;
 use std::time::Duration;
 
 use axum::extract::State;
@@ -307,7 +308,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
     };
 
     let root_dir = grove_ops::roots::root_dir(&state.config.home, &slug);
-    let trunk = grove_ops::roots::trunk_dir(&state.config.home, &slug);
+    let (trunk, trunk_branch) = trunk_view(&state.config.home, &slug);
     match reads {
         Some(Ok(reads)) => RootView {
             slug,
@@ -316,7 +317,8 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
             pool: reads.pool,
             syncing,
             sync_note,
-            trunk: trunk.display().to_string(),
+            trunk,
+            trunk_branch,
             trunk_status: reads.trunk_status,
             worktrees: reads
                 .worktrees
@@ -341,12 +343,42 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
                 pool: PoolView::default(),
                 syncing,
                 sync_note,
-                trunk: trunk.display().to_string(),
+                trunk,
+                trunk_branch,
                 trunk_status: None,
                 worktrees: Vec::new(),
             }
         }
     }
+}
+
+/// The trunk a row draws: its absolute path and the branch it checks out, resolved
+/// together so the two halves cannot disagree.
+///
+/// Off the lane, like the [`grove_ops::roots::root_dir`] join beside it: the manifest
+/// read is the same one `roots::list` already did to produce this row, and the bare's
+/// `HEAD` is a ref file rather than a working tree the engine could be mid-clone in.
+///
+/// A root whose bare has no answer yet — declared and unrealized, or mid-clone — still
+/// has to draw a row. It falls back to [`grove_ops::roots::trunk_dir`]'s own guess and
+/// names the branch after the directory that guess picked, so the path and the branch
+/// stay one story instead of pairing a guessed path with a blank branch. That name is
+/// the folded one, so a slash-bearing trunk reads back here as `feature-x` rather than
+/// `feature/x` — a placeholder for a root that has no branch to report yet, not a ref
+/// anything may resolve. It is replaced by the real branch the moment the bare answers.
+fn trunk_view(home: &Path, slug: &str) -> (String, String) {
+    grove_ops::roots::trunk(home, slug).map_or_else(
+        |_| {
+            let dir = grove_ops::roots::trunk_dir(home, slug);
+            let branch = dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            (dir.display().to_string(), branch)
+        },
+        |trunk| (trunk.dir.display().to_string(), trunk.branch),
+    )
 }
 
 /// The two in-memory engine reads. A root with no engine — the daemon is running

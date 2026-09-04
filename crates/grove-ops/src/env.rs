@@ -1,9 +1,9 @@
 //! Worktree environment: materialize a root's declared static shares
 //! (`[roots."<slug>".env]._.symlink` / `._.copy`) into every worktree — a `symlink`
-//! as a relative link to the canonical `.trunk` source (live, shared), a `copy` as
-//! an independent real file seeded once from that source. The sole owner of share
-//! filesystem mutation — nothing else in the codebase materializes a share. See
-//! `docs/worktrees.md`.
+//! as a relative link to the canonical source in the trunk checkout (named by its
+//! branch; live, shared), a `copy` as an independent real file seeded once from that
+//! source. The sole owner of share filesystem mutation — nothing else in the codebase
+//! materializes a share. See `docs/worktrees.md`.
 //!
 //! **Copy is seed-once.** A `_.copy` share is written into a worktree only when its
 //! slot is empty (or holds a stale *grove-owned* symlink, migrated from a prior
@@ -17,17 +17,19 @@
 //! every component of a share path *within* the worktree is opened with
 //! `openat(NOFOLLOW)` from a pinned dirfd, so a symlinked parent (`config → /etc`)
 //! trips `ELOOP` and can never redirect a write outside the worktree. (The base
-//! worktree/`.trunk` dirs themselves sit under the grove-controlled `GROVE_HOME`
+//! worktree/trunk dirs themselves sit under the grove-controlled `GROVE_HOME`
 //! and are opened with `NOFOLLOW` on their final component — their ancestors are
 //! grove's own, not attacker-influenced.) classify→act share one pinned dirfd,
 //! closing the lstat→create TOCTOU. The leaf write is the `update.rs::point` idiom
 //! (relative target, same-dir `rename(2)`) on the pinned fd. No `unsafe`, no `libc`.
 //!
 //! **Never clobber.** Only a symlink that is grove's *own* is ever touched: an
-//! exact match (`../…/.trunk/<p>`) is left alone, a *grove-shaped* link (points
-//! under `.trunk`) at the wrong path is repointed (self-heal). A real file/dir, or
-//! a **foreign** symlink (a user's, pointing outside `.trunk`), is reported as a
-//! `conflict` and never touched — unless `Fix::Force` backs it up first
+//! exact match (`../…/<trunk>/<p>`) is left alone, a *grove-shaped* link (points
+//! under the trunk — under its branch-derived name, or under the fixed name a
+//! not-yet-migrated root still carries) at the wrong path is repointed (self-heal),
+//! and an undeclared one is GC'd on the same test. A real file/dir, or a **foreign**
+//! symlink (a user's, pointing outside the trunk), is reported as a `conflict` and
+//! never touched — unless `Fix::Force` backs it up first
 //! (`renameat` to `<leaf>.grove-bak[-N]`, then link). The `Fix::Force` backup runs
 //! unlocked, so two concurrent realizers could race the backup name; in practice
 //! mutations for a given root are serialized on that root's lane (distinct roots run
@@ -52,7 +54,7 @@ use rustix::io::Errno;
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::{self, Share, ShareMode};
-use crate::roots::{list as list_roots, manifest_path, root_dir, trunk_dir};
+use crate::roots::{self, list as list_roots, manifest_path, root_dir};
 use crate::{Error, worktrees};
 
 /// How aggressively `materialize` resolves a real-file conflict at a share
@@ -65,7 +67,7 @@ pub enum Fix {
 }
 
 /// One row of a doctor report: the outcome of converging a single share at a single
-/// location. `worktree` is `None` for a source-level row (`.trunk/<p>`).
+/// location. `worktree` is `None` for a source-level row (the trunk's own copy).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareOutcome {
     pub slug: String,
@@ -114,7 +116,7 @@ pub fn diagnose(home: &Path, slug: Option<&str>) -> Result<Vec<ShareOutcome>, Er
 }
 
 /// Converge every declared share for `slug` (or all roots when `None`): create the
-/// `.trunk` source if missing, link/repoint it into every present worktree, GC
+/// trunk source if missing, link/repoint it into every present worktree, GC
 /// orphaned grove links. Best-effort — one bad share/worktree pushes an `Error`
 /// row and never aborts the batch.
 // stele:landmark lane-is-callers
@@ -146,6 +148,15 @@ fn run(home: &Path, slug: Option<&str>, action: Action) -> Result<Vec<ShareOutco
     Ok(out)
 }
 
+/// The two per-root constants every row of a pass carries: the slug it reports
+/// under, and the name of the trunk directory its links point through. Bundled
+/// rather than threaded as a pair so the row helpers keep a readable arity.
+#[derive(Clone, Copy)]
+struct Pass<'a> {
+    slug: &'a str,
+    trunk_name: &'a str,
+}
+
 fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>) {
     // Defense in depth — `doctor <slug>` takes user input; a bad slug never builds a path.
     if manifest::validate_slug(slug).is_err() {
@@ -153,7 +164,13 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
         return;
     }
     let root = root_dir(home, slug);
-    if !trunk_dir(home, slug).exists() {
+    // Which directory is the trunk is a manifest question, so it is asked once per
+    // root and carried through every row below — never re-derived per share.
+    let trunk = match roots::trunk(home, slug) {
+        Ok(trunk) => trunk,
+        Err(e) => return out.push(err(slug, None, "", &format!("resolve trunk: {e:#}"))),
+    };
+    if !trunk.dir.exists() {
         out.push(err(
             slug,
             None,
@@ -162,26 +179,32 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
         ));
         return;
     }
+    let pass = Pass {
+        slug,
+        trunk_name: &trunk.name,
+    };
 
     let root_fd = match open_dir(&root) {
         Ok(fd) => fd,
         Err(e) => return out.push(err(slug, None, "", &format!("open root: {e:#}"))),
     };
-    let trunk_fd = match open_dir_nofollow(&root_fd, OsStr::new(".trunk")) {
+    let trunk_fd = match open_dir_nofollow(&root_fd, OsStr::new(&trunk.name)) {
         Ok(fd) => fd,
-        Err(e) => return out.push(err(slug, None, "", &format!("open .trunk: {e:#}"))),
+        Err(e) => {
+            return out.push(err(slug, None, "", &format!("open {}: {e:#}", trunk.name)));
+        }
     };
     let declared = match manifest::list_shares(&manifest_path(home), slug) {
         Ok(d) => d,
         Err(e) => return out.push(err(slug, None, "", &format!("read shares: {e:#}"))),
     };
 
-    // 1. Source pass — ensure each `.trunk/<p>` exists.
+    // 1. Source pass — ensure each `<trunk>/<p>` exists.
     for share in &declared {
-        out.push(source_outcome(slug, action, &trunk_fd, share));
+        out.push(source_outcome(pass, action, &trunk_fd, share));
     }
 
-    // 2/3. Link + GC pass, per present worktree (never `.trunk`/reserved dirs).
+    // 2/3. Link + GC pass, per present worktree (never the trunk/reserved dirs).
     for wt in present_worktrees(home, slug) {
         let wt_fd = match open_dir_nofollow(&root_fd, OsStr::new(&wt)) {
             Ok(fd) => fd,
@@ -192,17 +215,17 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
         };
         for share in &declared {
             out.push(match share.mode {
-                ShareMode::Symlink => link_outcome(slug, &wt, action, &wt_fd, &share.path),
-                ShareMode::Copy => copy_outcome(slug, &wt, action, &trunk_fd, &wt_fd, &share.path),
+                ShareMode::Symlink => link_outcome(pass, &wt, action, &wt_fd, &share.path),
+                ShareMode::Copy => copy_outcome(pass, &wt, action, &trunk_fd, &wt_fd, &share.path),
             });
         }
-        gc_worktree(slug, &wt, &root.join(&wt), &wt_fd, &declared, action, out);
+        gc_worktree(pass, &wt, &root.join(&wt), &wt_fd, &declared, action, out);
     }
 }
 
-/// Source row: classify `.trunk/<p>`, create it empty when missing (materialize).
+/// Source row: classify `<trunk>/<p>`, create it empty when missing (materialize).
 fn source_outcome<Fd: AsFd>(
-    slug: &str,
+    pass: Pass,
     action: Action,
     trunk_fd: Fd,
     share: &Share,
@@ -221,7 +244,7 @@ fn source_outcome<Fd: AsFd>(
                 // A real file or pre-made dir IS the source; leave it. And D5: a
                 // *symlink* where the source belongs is the user's own choice of
                 // source — respected too, never unlinked/replaced. A `_.symlink` share
-                // reads *through* it (worktree → `.trunk/<p>` → the user's target); a
+                // reads *through* it (worktree → `<trunk>/<p>` → the user's target); a
                 // `_.copy` share's `NOFOLLOW` source open refuses it downstream (a copy
                 // from a link is reported per-worktree, not silently followed).
                 LeafState::RealFile | LeafState::Dir | LeafState::Symlink { .. } => {
@@ -241,22 +264,22 @@ fn source_outcome<Fd: AsFd>(
         }
     })();
     match result {
-        Ok(status) => ok(slug, None, &share.path, status),
-        Err(e) => err(slug, None, &share.path, &format!("{e:#}")),
+        Ok(status) => ok(pass.slug, None, &share.path, status),
+        Err(e) => err(pass.slug, None, &share.path, &format!("{e:#}")),
     }
 }
 
-/// Link row: classify `<wt>/<p>`, link/repoint to `../…/.trunk/<p>`, never clobber.
+/// Link row: classify `<wt>/<p>`, link/repoint to `../…/<trunk>/<p>`, never clobber.
 // stele:landmark never-clobber
 fn link_outcome<Fd: AsFd>(
-    slug: &str,
+    pass: Pass,
     wt: &str,
     action: Action,
     wt_fd: Fd,
     path: &str,
 ) -> ShareOutcome {
     let rel = Path::new(path);
-    let target = trunk_relative_target(rel);
+    let target = trunk_relative_target(pass.trunk_name, rel);
     let result = (|| -> Result<ShareStatus> {
         let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, action.mutates())? else {
             return Ok(ShareStatus::Linked); // parent missing, diagnose → would-link
@@ -269,9 +292,9 @@ fn link_outcome<Fd: AsFd>(
                 Ok(ShareStatus::Linked)
             }
             LeafState::Symlink { target: cur } if cur == target => Ok(ShareStatus::Ok),
-            // A *grove-shaped* link (points under `.trunk`) but at the wrong path is a
-            // stale grove link — self-heal by repointing.
-            LeafState::Symlink { target: cur } if is_under_trunk(&cur) => {
+            // A *grove-shaped* link (points under the trunk) but at the wrong path is
+            // a stale grove link — self-heal by repointing.
+            LeafState::Symlink { target: cur } if is_under_trunk(pass.trunk_name, &cur) => {
                 if action.mutates() {
                     repoint_leaf(&parent_fd, &leaf, &target)?;
                 }
@@ -292,7 +315,7 @@ fn link_outcome<Fd: AsFd>(
     })();
     match result {
         Ok(ShareStatus::Conflict) => ShareOutcome {
-            slug: slug.into(),
+            slug: pass.slug.into(),
             worktree: Some(wt.into()),
             path: path.into(),
             status: ShareStatus::Conflict,
@@ -300,19 +323,19 @@ fn link_outcome<Fd: AsFd>(
                 "a real file/dir/foreign symlink exists here; not clobbered (use --fix)".into(),
             ),
         },
-        Ok(status) => ok(slug, Some(wt), path, status),
-        Err(e) => err(slug, Some(wt), path, &format!("{e:#}")),
+        Ok(status) => ok(pass.slug, Some(wt), path, status),
+        Err(e) => err(pass.slug, Some(wt), path, &format!("{e:#}")),
     }
 }
 
-/// Copy row: seed `<wt>/<p>` as an independent real file from `.trunk/<p>`, once.
+/// Copy row: seed `<wt>/<p>` as an independent real file from `<trunk>/<p>`, once.
 /// Written only into an empty slot (or over a stale *grove-owned* symlink — the
 /// mode migration from a prior `_.symlink` declaration; data-free, safe to replace).
 /// A real file, a foreign symlink, or a dir already there is the worktree's own:
 /// seed-once **never clobbers**, and `--fix` has no bearing (a copy has no "wrong
 /// state" to heal — it is fire-and-forget).
 fn copy_outcome<Tf: AsFd, Wf: AsFd>(
-    slug: &str,
+    pass: Pass,
     wt: &str,
     action: Action,
     trunk_fd: Tf,
@@ -328,7 +351,7 @@ fn copy_outcome<Tf: AsFd, Wf: AsFd>(
             LeafState::Absent => true,
             // A grove-owned symlink (prior `_.symlink` for this path) is data-free —
             // replace it with the seeded copy (symlink→copy migration).
-            LeafState::Symlink { target } if is_under_trunk(&target) => true,
+            LeafState::Symlink { target } if is_under_trunk(pass.trunk_name, &target) => true,
             // Foreign symlink / real file / dir: the worktree owns it. Leave it.
             LeafState::Symlink { .. } | LeafState::RealFile | LeafState::Dir | LeafState::Other => {
                 false
@@ -344,18 +367,18 @@ fn copy_outcome<Tf: AsFd, Wf: AsFd>(
         Ok(ShareStatus::Copied)
     })();
     match result {
-        Ok(status) => ok(slug, Some(wt), path, status),
-        Err(e) => err(slug, Some(wt), path, &format!("{e:#}")),
+        Ok(status) => ok(pass.slug, Some(wt), path, status),
+        Err(e) => err(pass.slug, Some(wt), path, &format!("{e:#}")),
     }
 }
 
-/// GC pass: a worktree top-level symlink whose target is grove's own
-/// (`../.trunk/<name>`) for a `<name>` no longer declared is an orphan — remove it
+/// GC pass: a worktree top-level symlink pointing through the trunk
+/// (`(../)* <trunk>/…`) for a `<name>` no longer declared is an orphan — remove it
 /// (data-free). A real file (incl. a `_.copy`'s seeded file — indistinguishable from
 /// a user's, and owned by the worktree), or a symlink pointing elsewhere, is left
 /// alone. Top-level only in slice 1 (nested-share GC is a later refinement).
 fn gc_worktree<Fd: AsFd>(
-    slug: &str,
+    pass: Pass,
     wt: &str,
     wt_path: &Path,
     wt_fd: Fd,
@@ -376,14 +399,16 @@ fn gc_worktree<Fd: AsFd>(
         if declared_paths.contains(name_str) {
             continue; // still declared — leave it
         }
-        let expected = trunk_relative_target(Path::new(name_str)); // ../.trunk/<name>
+        // Grove-shaped is the one ownership test in this module: the same predicate
+        // that lets a stale link be repointed lets an undeclared one be collected, so
+        // a link laid through the legacy trunk name is GC'd rather than stranded.
         let gc = if action.mutates() {
-            gc_leaf(&wt_fd, &name, &expected)
+            gc_leaf(&wt_fd, &name, pass.trunk_name)
         } else {
-            is_grove_link(&wt_fd, &name, &expected)
+            is_grove_link(&wt_fd, &name, pass.trunk_name)
         };
         if let Ok(true) = gc {
-            out.push(ok(slug, Some(wt), name_str, ShareStatus::Gc));
+            out.push(ok(pass.slug, Some(wt), name_str, ShareStatus::Gc));
         }
     }
 }
@@ -509,18 +534,18 @@ fn create_empty<Fd: AsFd>(dirfd: Fd, leaf: &OsStr) -> Result<()> {
     Ok(())
 }
 
-/// Read a `_.copy` source (`.trunk/<rel>`) → `(bytes, perm-bits)`. Descends the
+/// Read a `_.copy` source (`<trunk>/<rel>`) → `(bytes, perm-bits)`. Descends the
 /// trunk with the same `NOFOLLOW` discipline; the leaf is opened `RDONLY|NOFOLLOW`,
 /// so a source that is (or became) a symlink/dir is refused rather than followed.
 /// The source pass guarantees a regular-file source exists before any worktree copy.
 fn read_source<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<(Vec<u8>, Mode)> {
     let Some((parent_fd, leaf)) = descend_parent(&trunk_fd, rel, false)? else {
-        bail!("copy source missing under .trunk");
+        bail!("copy source missing under the trunk");
     };
     match classify_leaf(&parent_fd, &leaf)? {
         LeafState::RealFile => {}
         LeafState::Dir => bail!("copy source is a directory; only files are supported"),
-        LeafState::Absent => bail!("copy source missing under .trunk"),
+        LeafState::Absent => bail!("copy source missing under the trunk"),
         LeafState::Symlink { .. } | LeafState::Other => bail!("copy source is not a regular file"),
     }
     let stat = statat(&parent_fd, &leaf, AtFlags::SYMLINK_NOFOLLOW)
@@ -560,11 +585,11 @@ fn write_file<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, bytes: &[u8], mode: Mode) -> Re
         .with_context(|| format!("rename {} -> {}", tmp.display(), leaf.display()))
 }
 
-/// GC a leaf IFF it is a symlink whose target is grove's own (`expected`). A real
+/// GC a leaf IFF it is a symlink grove's own — one pointing through `trunk`. A real
 /// file or foreign-target symlink is left untouched. `unlinkat` removes the LINK,
 /// never its target.
-fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, expected: &Path) -> Result<bool> {
-    if is_grove_link(&dirfd, leaf, expected)? {
+fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, trunk: &str) -> Result<bool> {
+    if is_grove_link(&dirfd, leaf, trunk)? {
         unlinkat(&dirfd, leaf, AtFlags::empty())
             .with_context(|| format!("gc {}", leaf.display()))?;
         Ok(true)
@@ -573,8 +598,11 @@ fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, expected: &Path) -> Result<bool> {
     }
 }
 
-fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, expected: &Path) -> Result<bool> {
-    Ok(matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target } if target == expected))
+fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, trunk: &str) -> Result<bool> {
+    Ok(
+        matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target }
+            if is_under_trunk(trunk, &target)),
+    )
 }
 
 /// Back up a real-file conflict (`Fix::Force`): rename the real file to a
@@ -606,34 +634,45 @@ fn free_backup_name<Fd: AsFd>(dirfd: Fd, leaf: &OsStr) -> Result<OsString> {
 }
 
 /// Grove-controlled relative symlink target from a worktree-rooted share path: one
-/// `..` per directory level above the leaf, then `.trunk/<p>`. Both `<wt>` and
-/// `.trunk` are siblings under the root, so the answer is purely a function of
-/// `<p>`'s depth. e.g. `.env` → `../.trunk/.env`; `config/db.toml` →
-/// `../../.trunk/config/db.toml`. Pure — no I/O.
+/// `..` per directory level above the leaf, then `<trunk>/<p>`. Both `<wt>` and the
+/// trunk are siblings under the root, so the answer is purely a function of
+/// `<p>`'s depth. e.g. `.env` → `../main/.env`; `config/db.toml` →
+/// `../../main/config/db.toml`. Pure — no I/O.
 ///
 /// CONSTRAINT: the sibling assumption is load-bearing. A worktree at any other
 /// depth (e.g. a `.pool/<slot>` nursery slot, one level deeper) gets targets that
 /// resolve one level off and dangle — materialize into such a tree only after it
 /// moves to canonical sibling depth, or teach this function a worktree-depth axis
 /// first. See `docs/worktrees.md` (On-disk layout).
-fn trunk_relative_target(p: &Path) -> PathBuf {
+fn trunk_relative_target(trunk: &str, p: &Path) -> PathBuf {
     let mut target = PathBuf::new();
     for _ in 0..p.components().count() {
         target.push("..");
     }
-    target.push(".trunk");
+    target.push(trunk);
     target.push(p);
     target
 }
 
-/// Is a symlink target grove's own — i.e. `(../)* .trunk/…`? Such a link is a
-/// (possibly stale) grove link we may repoint; anything else is a user's foreign
+/// The directory a root's trunk sits in on a layout that predates naming it by its
+/// branch — the one legacy name this module knows, and the only reason the string
+/// appears here at all. It is grove's own directory, so a link through it is grove's
+/// own link: recognizing it below is the whole of the share migration, since the next
+/// materialize then repoints every such link onto the branch-named trunk.
+const LEGACY_TRUNK: &str = ".trunk";
+
+/// Is a symlink target grove's own — i.e. `(../)* <trunk>/…`, with the trunk spelled
+/// either by its branch-derived name or as [`LEGACY_TRUNK`]? Such a link is a
+/// (possibly stale) grove link we may repoint or GC; anything else is a user's foreign
 /// symlink we must never clobber. Purely lexical (no I/O, no canonicalization).
-fn is_under_trunk(target: &Path) -> bool {
+fn is_under_trunk(trunk: &str, target: &Path) -> bool {
     let mut after_parents = target
         .components()
         .skip_while(|c| matches!(c, Component::ParentDir));
-    matches!(after_parents.next(), Some(Component::Normal(s)) if s == OsStr::new(".trunk"))
+    matches!(
+        after_parents.next(),
+        Some(Component::Normal(s)) if s == OsStr::new(trunk) || s == OsStr::new(LEGACY_TRUNK)
+    )
 }
 
 fn tmp_sibling(leaf: &OsStr) -> OsString {
@@ -674,7 +713,9 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// A home with one cloned root `o/r` (bare + `.trunk` on `main`) and a worktree.
+    /// A home with one cloned root `o/r` (bare + a `main` trunk checkout) and a
+    /// worktree. `main` is the trunk directory throughout: it is what `name_for` of
+    /// the fixture source's default branch comes to.
     fn home_with_root(tmp: &TempDir) -> PathBuf {
         crate::testfix::home_with_root_and_worktree(tmp)
     }
@@ -748,12 +789,88 @@ mod tests {
     #[test]
     fn trunk_relative_target_is_pure() {
         assert_eq!(
-            trunk_relative_target(Path::new(".env")),
-            Path::new("../.trunk/.env")
+            trunk_relative_target("main", Path::new(".env")),
+            Path::new("../main/.env")
         );
         assert_eq!(
-            trunk_relative_target(Path::new("config/db.toml")),
-            Path::new("../../.trunk/config/db.toml")
+            trunk_relative_target("canary", Path::new("config/db.toml")),
+            Path::new("../../canary/config/db.toml")
+        );
+    }
+
+    /// The grove-shaped test is against *this root's* trunk name, so a link through
+    /// some other root's trunk name is a user's foreign symlink here — never repointed.
+    #[test]
+    fn a_grove_shaped_link_is_one_through_this_trunk() {
+        assert!(is_under_trunk("main", Path::new("../main/.env")));
+        assert!(is_under_trunk(
+            "canary",
+            Path::new("../../canary/config/db.toml")
+        ));
+        assert!(!is_under_trunk("main", Path::new("../canary/.env")));
+        assert!(!is_under_trunk("main", Path::new("/etc/passwd")));
+        // The legacy trunk directory is grove's whatever the trunk is named today.
+        assert!(is_under_trunk("canary", Path::new("../.trunk/.env")));
+        assert!(!is_under_trunk("main", Path::new("../.trunk-backup/.env")));
+    }
+
+    /// A link laid before the trunk was named by its branch points through the legacy
+    /// directory. It is grove's own, so materialize repoints it onto the branch-named
+    /// trunk — the migration needs no separate walk, only a share pass.
+    #[test]
+    fn materialize_repoints_a_legacy_trunk_link() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        std::os::unix::fs::symlink("../.trunk/.env", wt(&home, "feat").join(".env")).unwrap();
+        declare(&home, &[".env"]);
+
+        let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
+        assert_eq!(
+            find(&out, Some("feat"), ".env").status,
+            ShareStatus::Repointed
+        );
+        assert_eq!(
+            std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
+            Path::new("../main/.env")
+        );
+    }
+
+    /// The exact current target is already right: repointing it would churn the link
+    /// (and the report) on every pass, so it is left byte-identical.
+    #[test]
+    fn materialize_leaves_an_exact_trunk_link_alone() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        std::os::unix::fs::symlink("../main/.env", wt(&home, "feat").join(".env")).unwrap();
+        declare(&home, &[".env"]);
+
+        let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
+        assert_eq!(find(&out, Some("feat"), ".env").status, ShareStatus::Ok);
+        assert_eq!(
+            std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
+            Path::new("../main/.env")
+        );
+    }
+
+    /// Accepting the legacy name widens what counts as grove's own by exactly one
+    /// directory: a link through anything else — here a sibling worktree — is still
+    /// the user's, and still a conflict.
+    #[test]
+    fn a_link_through_a_sibling_worktree_is_still_a_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        std::os::unix::fs::symlink("../other/.env", wt(&home, "feat").join(".env")).unwrap();
+        declare(&home, &[".env"]);
+
+        let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
+        assert_eq!(
+            find(&out, Some("feat"), ".env").status,
+            ShareStatus::Conflict
+        );
+        assert_eq!(
+            std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
+            Path::new("../other/.env"),
+            "the user's symlink target is preserved"
         );
     }
 
@@ -772,10 +889,10 @@ mod tests {
             LeafState::RealFile
         ));
 
-        std::os::unix::fs::symlink("../.trunk/.env", tmp.path().join("link")).unwrap();
+        std::os::unix::fs::symlink("../main/.env", tmp.path().join("link")).unwrap();
         assert!(matches!(
             classify_leaf(&dir, OsStr::new("link")).unwrap(),
-            LeafState::Symlink { target } if target == Path::new("../.trunk/.env")
+            LeafState::Symlink { target } if target == Path::new("../main/.env")
         ));
 
         // A dangling link classifies as Symlink (target never followed/canonicalized).
@@ -801,12 +918,12 @@ mod tests {
         assert_eq!(find(&out, Some("feat"), ".env").status, ShareStatus::Linked);
 
         assert!(
-            wt(&home, ".trunk").join(".env").is_file(),
+            wt(&home, "main").join(".env").is_file(),
             "empty source file in trunk"
         );
         assert_eq!(
             std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
-            Path::new("../.trunk/.env")
+            Path::new("../main/.env")
         );
     }
 
@@ -818,7 +935,7 @@ mod tests {
         materialize(&home, Some("o/r"), Fix::Safe).unwrap();
 
         // Write the source; the worktree symlink resolves to it (live, not a copy).
-        std::fs::write(wt(&home, ".trunk").join(".env"), "SECRET").unwrap();
+        std::fs::write(wt(&home, "main").join(".env"), "SECRET").unwrap();
         assert_eq!(
             std::fs::read_to_string(wt(&home, "feat").join(".env")).unwrap(),
             "SECRET"
@@ -829,7 +946,7 @@ mod tests {
     fn materialize_leaves_an_existing_source_untouched_and_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join(".env"), "PRESET").unwrap();
+        std::fs::write(wt(&home, "main").join(".env"), "PRESET").unwrap();
         declare(&home, &[".env"]);
 
         let first = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -839,7 +956,7 @@ mod tests {
             "existing source left alone"
         );
         assert_eq!(
-            std::fs::read_to_string(wt(&home, ".trunk").join(".env")).unwrap(),
+            std::fs::read_to_string(wt(&home, "main").join(".env")).unwrap(),
             "PRESET"
         );
 
@@ -854,9 +971,9 @@ mod tests {
     fn materialize_repoints_a_stale_grove_link() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        // A *grove-shaped* link (points under .trunk) at the wrong path — a stale
+        // A *grove-shaped* link (points under the trunk) at the wrong path — a stale
         // grove link from a prior name. Self-heal by repointing.
-        std::os::unix::fs::symlink("../.trunk/old-name", wt(&home, "feat").join(".env")).unwrap();
+        std::os::unix::fs::symlink("../main/old-name", wt(&home, "feat").join(".env")).unwrap();
         declare(&home, &[".env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -866,11 +983,11 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
-            Path::new("../.trunk/.env")
+            Path::new("../main/.env")
         );
     }
 
-    /// D5: a symlink placed at the `.trunk/<p>` *source* is the user's own choice of
+    /// D5: a symlink placed at the `<trunk>/<p>` *source* is the user's own choice of
     /// source — respected, never unlinked/replaced. A `_.symlink` share reads through
     /// it to the user's file.
     #[test]
@@ -880,7 +997,7 @@ mod tests {
         let real = tmp.path().join("real-secret");
         std::fs::write(&real, "USER SECRET").unwrap();
         // The user points the trunk source at their own file, via a symlink.
-        std::os::unix::fs::symlink(&real, wt(&home, ".trunk").join(".env")).unwrap();
+        std::os::unix::fs::symlink(&real, wt(&home, "main").join(".env")).unwrap();
         declare(&home, &[".env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -890,7 +1007,7 @@ mod tests {
             "source symlink respected, not replaced"
         );
         assert!(
-            wt(&home, ".trunk").join(".env").is_symlink(),
+            wt(&home, "main").join(".env").is_symlink(),
             "user symlink preserved in the trunk"
         );
         // The worktree link reads THROUGH the trunk symlink to the user's file.
@@ -977,10 +1094,10 @@ mod tests {
             find(&out, Some("feat"), "config/app.env").status,
             ShareStatus::Linked
         );
-        assert!(wt(&home, ".trunk").join("config/app.env").is_file());
+        assert!(wt(&home, "main").join("config/app.env").is_file());
         assert_eq!(
             std::fs::read_link(wt(&home, "feat").join("config/app.env")).unwrap(),
-            Path::new("../../.trunk/config/app.env")
+            Path::new("../../main/config/app.env")
         );
     }
 
@@ -1013,7 +1130,7 @@ mod tests {
         let outside = tmp.path().join("evil");
         std::fs::write(&outside, "DO NOT TOUCH").unwrap();
         // A symlinked parent inside the trunk pointing at an outside file.
-        std::os::unix::fs::symlink(&outside, wt(&home, ".trunk").join("config")).unwrap();
+        std::os::unix::fs::symlink(&outside, wt(&home, "main").join("config")).unwrap();
         declare(&home, &["config/x"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -1029,7 +1146,7 @@ mod tests {
     fn materialize_noop_when_trunk_missing_entirely() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::remove_dir_all(wt(&home, ".trunk")).unwrap();
+        std::fs::remove_dir_all(wt(&home, "main")).unwrap();
         declare(&home, &[".env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -1060,7 +1177,7 @@ mod tests {
             "orphan link removed"
         );
         assert!(
-            wt(&home, ".trunk").join(".secret").is_file(),
+            wt(&home, "main").join(".secret").is_file(),
             "source data preserved"
         );
         assert!(
@@ -1157,7 +1274,7 @@ mod tests {
     fn copy_seeds_an_independent_real_file_from_the_source() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED=1").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED=1").unwrap();
         declare_copy(&home, &["seed.env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -1182,12 +1299,12 @@ mod tests {
     fn copy_is_independent_of_the_source_after_seeding() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "ORIGINAL").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "ORIGINAL").unwrap();
         declare_copy(&home, &["seed.env"]);
         materialize(&home, Some("o/r"), Fix::Safe).unwrap();
 
         // Mutating the source does NOT flow into the copy (the symlink contrast).
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "CHANGED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "CHANGED").unwrap();
         assert_eq!(
             std::fs::read_to_string(wt(&home, "feat").join("seed.env")).unwrap(),
             "ORIGINAL",
@@ -1199,7 +1316,7 @@ mod tests {
     fn copy_is_seed_once_and_never_overwrites_a_worktree_edit() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
         declare_copy(&home, &["seed.env"]);
         materialize(&home, Some("o/r"), Fix::Safe).unwrap();
 
@@ -1220,7 +1337,7 @@ mod tests {
     fn copy_persists_on_undeclare_not_gc() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
         declare_copy(&home, &["seed.env"]);
         materialize(&home, Some("o/r"), Fix::Safe).unwrap();
 
@@ -1243,10 +1360,9 @@ mod tests {
     fn copy_migrates_a_prior_grove_symlink() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
         // A grove-owned symlink from a prior `_.symlink` declaration of this path.
-        std::os::unix::fs::symlink("../.trunk/seed.env", wt(&home, "feat").join("seed.env"))
-            .unwrap();
+        std::os::unix::fs::symlink("../main/seed.env", wt(&home, "feat").join("seed.env")).unwrap();
         declare_copy(&home, &["seed.env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -1266,8 +1382,8 @@ mod tests {
     fn copy_never_clobbers_a_user_file_or_foreign_symlink() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
-        std::fs::write(wt(&home, "feat").join("seed.env"), "USER OWNED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "feat").join("seed.env"), "user owned").unwrap();
         declare_copy(&home, &["seed.env"]);
 
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
@@ -1278,7 +1394,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(wt(&home, "feat").join("seed.env")).unwrap(),
-            "USER OWNED"
+            "user owned"
         );
     }
 
@@ -1288,8 +1404,8 @@ mod tests {
         let home = home_with_root(&tmp);
         let outside = tmp.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        std::fs::create_dir_all(wt(&home, ".trunk").join("sub")).unwrap();
-        std::fs::write(wt(&home, ".trunk").join("sub/x"), "SEED").unwrap();
+        std::fs::create_dir_all(wt(&home, "main").join("sub")).unwrap();
+        std::fs::write(wt(&home, "main").join("sub/x"), "SEED").unwrap();
         // A symlinked parent in the worktree that would redirect the write outside.
         std::os::unix::fs::symlink(&outside, wt(&home, "feat").join("sub")).unwrap();
         declare_copy(&home, &["sub/x"]);
@@ -1306,7 +1422,7 @@ mod tests {
     fn copy_diagnose_mutates_nothing() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
         declare_copy(&home, &["seed.env"]);
 
         let root = home.join("code/o/r");
@@ -1324,7 +1440,7 @@ mod tests {
     fn copy_wires_into_create() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, ".trunk").join("seed.env"), "SEED").unwrap();
+        std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
         declare_copy(&home, &["seed.env"]);
         materialize(&home, Some("o/r"), Fix::Safe).unwrap();
 

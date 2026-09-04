@@ -709,7 +709,7 @@ async fn a_restarted_engine_re_derives_its_status_from_disk() {
     let restarted = room.start(SLUG);
     settles_on(&restarted, RootStatus::Ready).await;
 
-    // And the other direction: a root whose `.trunk` vanished out of band is
+    // And the other direction: a root whose trunk checkout vanished out of band is
     // rediscovered as missing, not remembered as ready.
     restarted.stop();
     std::fs::remove_dir_all(grove_ops::roots::trunk_dir(&home, SLUG)).unwrap();

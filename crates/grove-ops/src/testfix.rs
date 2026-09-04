@@ -44,7 +44,9 @@ pub const SLUG: &str = "o/r";
 /// for the per-test `git init` + `add` + `commit` helpers.
 pub fn fixture_repo(dir: &Path) {
     // Idempotent, so a caller that shares one `src` across fixtures builds it once.
-    if dir.join(".git").exists() {
+    // The committed file is the marker: it exists only after the commit below lands,
+    // so a half-built repo is rebuilt rather than handed back.
+    if dir.join("README.md").exists() {
         return;
     }
     std::fs::create_dir_all(dir).unwrap();
@@ -55,7 +57,7 @@ pub fn fixture_repo(dir: &Path) {
     git(dir, &[&id[..], &["commit", "-q", "-m", "init"]].concat());
 }
 
-/// A home under `tmp` with one cloned root `o/r` (bare + `.trunk` on `main`).
+/// A home under `tmp` with one cloned root `o/r` (bare + a `main` trunk checkout).
 ///
 /// The source repo lands at `<tmp>/src` and the home at `<tmp>/home`; the manifest
 /// records the former by absolute path, which is why both must share the caller's
@@ -88,6 +90,16 @@ pub fn home_with_root_and_worktree(tmp: &TempDir) -> PathBuf {
 #[must_use]
 pub fn root_dir(home: &Path, slug: &str) -> PathBuf {
     crate::roots::root_dir(home, slug)
+}
+
+/// The on-disk trunk checkout for `slug` under `home` — `<root>/main` for every
+/// fixture, whose source repo is on `main`. Re-exported beside [`root_dir`] for the
+/// same reason: a consumer's test that spelled the trunk directory by hand would be a
+/// second copy of the layout rule, and would go stale the moment a root declares a
+/// different trunk.
+#[must_use]
+pub fn trunk_dir(home: &Path, slug: &str) -> PathBuf {
+    crate::roots::trunk_dir(home, slug)
 }
 
 pub fn git(cwd: &Path, args: &[&str]) {
@@ -153,8 +165,8 @@ mod tests {
     fn one_scratch_builds_its_source_once() {
         let tmp = TempDir::new().unwrap();
         let first = super::home_with_root(&tmp);
-        let head = crate::roots::trunk_dir(&first, super::SLUG).join(".git");
-        assert!(head.exists());
+        let trunk = super::trunk_dir(&first, super::SLUG);
+        assert!(trunk.join("README.md").exists());
         assert_eq!(super::home_with_root_and_worktree(&tmp), first);
         assert!(
             crate::roots::root_dir(&first, super::SLUG)

@@ -142,8 +142,9 @@ looking at the same thing.
     "pool": {"observed": 1, "target": 2},
     "syncing": true,
     "sync_note": "diverged",                 // omitted when there is none
-    "trunk": "/home/code/o/r/.trunk",        // absolute path — what a UI opens
-    "trunk_status": {...},                   // .trunk's own git drift; omitted when absent
+    "trunk": "/home/code/o/r/canary",        // absolute path — what a UI opens
+    "trunk_branch": "canary",                // the branch it checks out; "" from an older daemon
+    "trunk_status": {...},                   // the trunk's own git drift; omitted when absent
     "worktrees": [{
       "name": "feat",
       "branch": "feature/x",                 // what the manifest DECLARES
@@ -160,6 +161,14 @@ looking at the same thing.
 
 Absent optionals are **omitted, never rendered as `null`**, and that is pinned byte for
 byte by `a_snapshot_serializes_the_shape_a_dashboard_renders`.
+
+`trunk_branch` travels beside `trunk` rather than being read back out of it: the checkout
+is named by folding the branch's `/` to `-`, so `feature-x` cannot be un-folded into
+`feature/x` by a consumer. It is also what tells the trunk apart from the ordinary
+worktrees beside it, none of which carry anything in their name to say which one is
+grove's. It is the one required field defaulted on the way in — a body from a daemon that
+predates it is a single absent key, and refusing the whole decode for that would cost
+`grove tree list` its status header and the row with it.
 
 `branch` and `status.branch` both travel because their disagreement is the drift a
 dashboard flags and doctor reports. `logs` is the daemon's bounded log ring (500 lines,
@@ -311,19 +320,31 @@ whole-home materializing converge.
 `degraded` are observable — neither is derivable from disk. A daemon with no engine room
 reports none, which is honest: nothing is driving those roots.
 
-`checks` is the git-plumbing pass, and it is **report-only**: `fix` stays scoped to shares.
-Every plumbing finding is either a human's edit to reconcile with or a job the reconciler
-already owns, and a doctor that silently re-cloned under an operator asking "what is wrong?"
-would be the opposite of a diagnosis.
+`checks` is the git-plumbing pass, and it is **report-only** but for one finding: `fix`
+stays scoped to shares plus the `legacy-layout` migration. Every other plumbing finding is
+either a human's edit to reconcile with or a job the reconciler already owns, and a doctor
+that silently re-cloned under an operator asking "what is wrong?" would be the opposite of
+a diagnosis.
 
 | `check` | asks |
 |---|---|
 | `manifest` | does `manifest.toml` parse, and does every declaration pass the validators |
 | `root` | only ever a finding: this root's pass did not answer inside its budget |
-| `bare` | is `<root>/.git` there |
-| `trunk` | is `<root>/.trunk` there |
+| `bare` | is `<root>/.bare` there |
+| `trunk` | is the trunk checkout there — the directory this root's trunk branch names |
+| `legacy-layout` | is this root laid out the old way — a bare at `.git`, a trunk at `.trunk` |
 | `worktree` | is a declared worktree realized, and on the branch it declares |
 | `drift` | what does git know about that the manifest does not |
+
+`legacy-layout` is the one finding `--fix` acts on, because it is the one a reconcile
+cannot reach: the root is intact and converged, it is simply named the old way. The fix
+migrates it in place, each step idempotent so an interrupted run resumes — rename the bare
+to `.bare` and rewrite every worktree's gitdir pointer, rename `.trunk` to the directory
+the trunk branch names and rewrite the registration that points back at it, set the bare's
+`HEAD`, then run the share pass, which repoints every link laid through the old name. It
+verifies with a `git status` in the trunk before reporting `fixed`, and refuses — reporting
+rather than guessing — when a `.bare` is already there beside a `.git`, which is a half-run
+migration rather than a legacy root.
 
 | `status` | means |
 |---|---|

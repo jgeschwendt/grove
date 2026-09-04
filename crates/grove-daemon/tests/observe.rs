@@ -228,6 +228,10 @@ async fn slow_the_stream_opens_with_a_snapshot_and_follows_the_mutations() {
             .display()
             .to_string()
     );
+    assert_eq!(
+        root.trunk_branch, "main",
+        "the branch travels beside the path: the checkout is named by it, and folding `/` to `-` is not reversible, so a UI cannot read it back off the path"
+    );
     let worktree = root
         .worktrees
         .iter()

@@ -183,7 +183,7 @@ wire_enum! {
     pub enum TaskKind {
         /// `root.reconcile` + the declared pool target, on the root's lane.
         Reconcile => "reconcile",
-        /// `root.sync` — fetch, fast-forward `.trunk`, recycle stranded slots.
+        /// `root.sync` — fetch, fast-forward the trunk, recycle stranded slots.
         Sync => "sync",
         /// `pool.fill` — one warm slot toward the declared target.
         Fill => "fill",

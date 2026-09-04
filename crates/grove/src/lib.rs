@@ -70,7 +70,7 @@ enum Command {
     Reboot,
     /// Run the server in the foreground (the launcher contract: `grove serve`).
     Serve,
-    /// Fetch a root and fast-forward its `.trunk` (never forced).
+    /// Fetch a root and fast-forward its trunk checkout (never forced).
     Sync {
         /// Repository slug (`owner/name`).
         slug: String,

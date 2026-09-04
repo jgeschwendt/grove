@@ -8,23 +8,32 @@
 //!   unless `dry_run`, and `--fix` is what turns a would-clobber into a backup.
 //! - [`checks`] — the git-plumbing half, new in v2. Read-only, always: does the
 //!   manifest parse and validate, is the install tree out from under the workspace,
-//!   is each root's bare and `.trunk` there, is each declared worktree present and on
+//!   is each root's bare and trunk there, is each declared worktree present and on
 //!   the branch it declares, and what is on disk that nothing declares.
 //!
 //! The second half answers what no other read can: a root whose bare survived but
-//! whose `.trunk` was deleted, or a worktree quietly sitting on the wrong branch, is
+//! whose trunk was deleted, or a worktree quietly sitting on the wrong branch, is
 //! otherwise invisible to the one command whose whole purpose is to find it. The
 //! vocabulary is contract — see `docs/api.md` § Doctor. Findings are
-//! **report-only** — `--fix` stays scoped to shares, because every plumbing finding
-//! here is either a human's edit to reconcile with (drift, a bad declaration) or a
-//! job the reconciler already owns (a missing clone), and doctor silently re-cloning
-//! under an operator asking "what is wrong?" is the opposite of a diagnosis.
+//! **report-only** — `--fix` is scoped to shares plus the one legacy-layout
+//! migration, because every other plumbing finding here is either a human's edit to
+//! reconcile with (drift, a bad declaration) or a job the reconciler already owns (a
+//! missing clone), and doctor silently re-cloning under an operator asking "what is
+//! wrong?" is the opposite of a diagnosis.
+//!
+//! The migration is the exception because nothing else can make it: reconcile is
+//! additive and would clone a second root beside the legacy one rather than rename
+//! what is there, so a root laid down under the old layout has no other path forward.
+//! It runs in [`run`] — the writing half — and the [`CheckKind::LegacyLayout`] row
+//! that [`root_checks`] emits afterwards is what reports the outcome: `ok` once the
+//! root is on the current layout, and the finding again, with the reason, when the
+//! migration refused or failed.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, env, manifest, pool, roots, worktrees};
+use crate::{Result, env, git, manifest, pool, roots, worktrees};
 
 /// Doctor's share/pool half, shared verbatim by the daemon's `POST /api/doctor` route
 /// and the offline CLI (`grove doctor`): diagnose only (`dry_run`) or materialize the
@@ -38,14 +47,147 @@ pub fn run(
     dry_run: bool,
     fix: bool,
 ) -> Result<(Vec<env::ShareOutcome>, Vec<pool::PoolStatus>)> {
-    let report = if dry_run {
+    // Before the share pass, and only under `--fix`: a legacy root's trunk moves out
+    // from under the links, so the pass that writes them has to run after the move.
+    // `dry_run` wins, as everywhere else here — a diagnosis mutates nothing.
+    let mut report = if fix && !dry_run {
+        migrate_legacy(home, slug)
+    } else {
+        Vec::new()
+    };
+    report.extend(if dry_run {
         env::diagnose(home, slug)?
     } else {
         let fix = if fix { env::Fix::Force } else { env::Fix::Safe };
         env::materialize(home, slug, fix)?
-    };
+    });
     let pools = pool::status(home, slug)?;
     Ok((report, pools))
+}
+
+/// The bare's directory under a root before the trunk was named by its branch, and
+/// the trunk checkout's beside it. The only two places grove still spells them are
+/// [`legacy_check`], which names the layout, and [`migrate_root`], which retires it;
+/// everything else reads [`roots::bare_dir`] and [`roots::trunk`].
+const LEGACY_BARE: &str = ".git";
+const LEGACY_TRUNK: &str = ".trunk";
+
+/// Is `<root>/.git` the legacy bare? A bare repository is a directory with a `HEAD`
+/// in it — which is what separates it from a linked worktree's gitlink of the same
+/// name, a *file*, and from a root that holds no repository at all.
+fn is_legacy_bare(path: &Path) -> bool {
+    path.is_dir() && path.join("HEAD").is_file()
+}
+
+/// Retire the legacy layout on every root in scope, reporting one error row per root
+/// that could not be migrated.
+///
+/// A row rather than an `Err`: one root grove will not touch must not blank the
+/// report for every other, and the share report is where a doctor row that carries a
+/// failing verdict already lives — an error there is what makes `grove doctor --fix`
+/// exit non-zero. A root that was never legacy, or that migrated cleanly, contributes
+/// nothing; the [`CheckKind::LegacyLayout`] row is where the operator reads that.
+fn migrate_legacy(home: &Path, slug: Option<&str>) -> Vec<env::ShareOutcome> {
+    let slugs = match slug {
+        Some(slug) => vec![slug.to_owned()],
+        None => roots::list(home)
+            .map(|roots| roots.into_iter().map(|root| root.slug).collect())
+            .unwrap_or_default(),
+    };
+    slugs
+        .into_iter()
+        .filter_map(|slug| {
+            migrate_root(home, &slug).err().map(|e| env::ShareOutcome {
+                slug,
+                worktree: None,
+                path: String::new(),
+                status: env::ShareStatus::Error,
+                reason: Some(format!("legacy layout: {e:#}")),
+            })
+        })
+        .collect()
+}
+
+/// Migrate one root off the legacy layout, in place.
+///
+/// Every step is idempotent and ordered so that a crash between any two of them
+/// resumes on the next `--fix` rather than leaving a shape neither half recognizes:
+///
+/// 1. the bare moves to `.bare`, and git re-derives the gitlink each checkout holds
+///    (the checkouts have not moved, so only the bare's own path changed);
+/// 2. the trunk moves to the directory its branch names, and git re-derives the admin
+///    pointer back at it — resolved only now, because the resolution reads the bare
+///    that step 1 just moved;
+/// 3. the bare's `HEAD` is set to the trunk branch, which is where every later reader
+///    learns what this root integrates on;
+/// 4. the shares materialize, repointing each `../.trunk/<p>` link onto the trunk's
+///    new name — `Safe`, because a migration is the wrong moment to start backing up
+///    a real file the operator put there; `run`'s own pass, which `--fix` authorized,
+///    is where that is decided;
+/// 5. the trunk is read as a git checkout. Nothing above proves the result works, and
+///    a migration that reported success over a tree git can no longer open would be
+///    worse than one that never ran.
+fn migrate_root(home: &Path, slug: &str) -> anyhow::Result<()> {
+    use anyhow::{Context as _, bail};
+
+    let root = roots::root_dir(home, slug);
+    let legacy_bare = root.join(LEGACY_BARE);
+    let legacy_trunk = root.join(LEGACY_TRUNK);
+    if !is_legacy_bare(&legacy_bare) && !legacy_trunk.is_dir() {
+        return Ok(());
+    }
+    let bare = roots::bare_dir(home, slug);
+
+    if is_legacy_bare(&legacy_bare) {
+        if bare.exists() {
+            bail!(
+                "both {} and {} are present — a half-finished migration. Grove will not \
+                 guess which one is the real bare; move or delete the wrong one by hand",
+                legacy_bare.display(),
+                bare.display()
+            );
+        }
+        std::fs::rename(&legacy_bare, &bare)
+            .with_context(|| format!("rename {} -> {}", legacy_bare.display(), bare.display()))?;
+        git::worktree_repair(&bare, &[])?;
+    }
+    if !bare.is_dir() {
+        bail!(
+            "{} has no bare at {}, so there is nothing to migrate its trunk onto",
+            slug,
+            bare.display()
+        );
+    }
+
+    let want = roots::trunk(home, slug).with_context(|| format!("resolve the trunk for {slug}"))?;
+    if legacy_trunk.is_dir() {
+        if want.dir.exists() {
+            bail!(
+                "{} is already there, so {} has nowhere to move; move it aside by hand",
+                want.dir.display(),
+                legacy_trunk.display()
+            );
+        }
+        std::fs::rename(&legacy_trunk, &want.dir).with_context(|| {
+            format!(
+                "rename {} -> {}",
+                legacy_trunk.display(),
+                want.dir.display()
+            )
+        })?;
+        git::worktree_repair(&bare, &[want.dir.as_path()])?;
+    }
+
+    git::set_head(&bare, &want.branch)?;
+    env::materialize(home, Some(slug), env::Fix::Safe)
+        .with_context(|| format!("materialize the shares of {slug}"))?;
+    git::status(&want.dir).with_context(|| {
+        format!(
+            "{} does not read as a git checkout after the migration",
+            want.dir.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// One plumbing finding — or one passing check, which is a finding too: an operator
@@ -120,14 +262,20 @@ pub enum CheckKind {
     /// The install tree — `versions/`, `current` and their siblings — is not sitting
     /// under the workspace root, where it used to live before the two were split.
     InstallUnderHome,
+    /// The pre-branch-named layout: a bare at `.git`, or a trunk checkout at
+    /// `.trunk`. Report-only like every kind here, but the one whose finding names a
+    /// remedy grove itself performs — `grove doctor --fix` migrates the root in
+    /// place, and this row reads `ok` once it has.
+    LegacyLayout,
     /// The root's pass as a whole. Only ever a finding: a root whose lane would not
     /// answer inside doctor's per-root budget contributes one of these instead of the
     /// rows below, so a wedged root is named rather than silently absent from a
     /// whole-home report. A root that answers never emits it.
     Root,
-    /// `<root>/.git` — the bare clone.
+    /// `<root>/.bare` — the bare clone.
     Bare,
-    /// `<root>/.trunk` — the default checkout, and the source every share links to.
+    /// The trunk checkout — the branch this root integrates on, and the source every
+    /// share links to.
     Trunk,
     /// A declared worktree: realized in git, and on the branch it declares.
     Worktree,
@@ -137,9 +285,10 @@ pub enum CheckKind {
 
 impl CheckKind {
     /// Every kind, in declaration order — what `contracts/wire-vocab.json` pins.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Manifest,
         Self::InstallUnderHome,
+        Self::LegacyLayout,
         Self::Root,
         Self::Bare,
         Self::Trunk,
@@ -282,15 +431,18 @@ pub fn manifest_checks(home: &Path) -> Vec<Check> {
     }
 }
 
-/// One root's git plumbing: bare, `.trunk`, every declared worktree, and the
-/// undeclared ones git knows about.
+/// One root's git plumbing: the layout it is on, bare, trunk, every declared
+/// worktree, and the undeclared ones git knows about.
 ///
 /// **Runs git**, so the daemon calls it on the root's lane. Infallible by
 /// construction — a read that fails is itself a finding (`unavailable`), never an
 /// error that blanks the rest of the report.
 #[must_use]
 pub fn root_checks(home: &Path, slug: &str) -> Vec<Check> {
-    let mut out = Vec::new();
+    // First, because it explains the two rows below it: a root still on the legacy
+    // layout has no `.bare` and no branch-named trunk, so both would otherwise read
+    // as `missing` with nothing saying why.
+    let mut out = vec![legacy_check(home, slug)];
 
     let bare = roots::bare_dir(home, slug);
     let has_bare = bare.is_dir();
@@ -314,7 +466,53 @@ pub fn root_checks(home: &Path, slug: &str) -> Vec<Check> {
     out
 }
 
-/// The bare/`.trunk` presence rows, which differ only in which path they name.
+/// Is this root still on the layout that predates naming the trunk by its branch?
+///
+/// One row per root, `ok` when it is not: `--fix` rewrites directory names under an
+/// operator, and a report that said nothing about a root about to be rewritten would
+/// be withholding the one thing they most need before running it.
+///
+/// Report-only, like every check here. The migration itself runs in [`run`], so the
+/// row an operator reads after a `--fix` is this check re-run against the result:
+/// `ok` when the root came out on the current layout, and the finding again — with
+/// the reason, in the share report's error row — when it did not.
+fn legacy_check(home: &Path, slug: &str) -> Check {
+    let root = roots::root_dir(home, slug);
+    let legacy_bare = root.join(LEGACY_BARE);
+    let legacy_trunk = root.join(LEGACY_TRUNK);
+    let bare = roots::bare_dir(home, slug);
+    let finding = |detail: String| {
+        Check::of(CheckKind::LegacyLayout, CheckStatus::Mismatch, slug).detailed(detail)
+    };
+
+    if is_legacy_bare(&legacy_bare) && bare.exists() {
+        return finding(format!(
+            "both {} and {} are present — a half-finished migration. `grove doctor --fix` \
+             will not guess which one is the real bare; move or delete the wrong one by hand",
+            legacy_bare.display(),
+            bare.display()
+        ));
+    }
+    let found: Vec<String> = [
+        is_legacy_bare(&legacy_bare).then(|| format!("{} is a bare repo", legacy_bare.display())),
+        legacy_trunk
+            .is_dir()
+            .then(|| format!("{} is the trunk checkout", legacy_trunk.display())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if found.is_empty() {
+        return Check::of(CheckKind::LegacyLayout, CheckStatus::Ok, slug);
+    }
+    finding(format!(
+        "{} — the layout that predates naming the trunk by its branch; \
+         `grove doctor --fix` migrates this root in place",
+        found.join(", and ")
+    ))
+}
+
+/// The bare/trunk presence rows, which differ only in which path they name.
 fn presence(kind: CheckKind, slug: &str, present: bool, path: &Path) -> Check {
     if present {
         Check::of(kind, CheckStatus::Ok, slug)
@@ -360,8 +558,12 @@ fn worktree_check(slug: &str, wt: &worktrees::WorktreeStatus) -> Check {
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckKind, CheckStatus, checks, install_checks, manifest_checks, root_checks};
-    use crate::{manifest, roots, testfix};
+    use super::{
+        CheckKind, CheckStatus, LEGACY_BARE, LEGACY_TRUNK, checks, install_checks, manifest_checks,
+        root_checks, run,
+    };
+    use crate::{git, manifest, roots, testfix};
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     /// Every kind and status has one wire spelling, and it is the `snake_case` one the
@@ -377,7 +579,7 @@ mod tests {
             s(&|| serde_json::to_value(CheckStatus::Undeclared).unwrap()),
             "undeclared"
         );
-        assert_eq!(CheckKind::ALL.len(), 7);
+        assert_eq!(CheckKind::ALL.len(), 8);
         assert_eq!(CheckStatus::ALL.len(), 6);
     }
 
@@ -407,7 +609,7 @@ url = "git@github.com:o/r.git"
 
 [roots."o/r"]
 
-[roots."o/r".worktrees.".trunk"]
+[roots."o/r".worktrees.".pool"]
 branch = "main"
 
 [roots."o/r".worktrees."ok"]
@@ -434,7 +636,7 @@ symlink = ["../../etc/passwd"]
             findings.contains(&("o/r", None)),
             "a root with no url can never realize: {findings:?}"
         );
-        assert!(findings.contains(&("o/r", Some(".trunk"))), "{findings:?}");
+        assert!(findings.contains(&("o/r", Some(".pool"))), "{findings:?}");
         assert!(findings.contains(&("o/r", Some("ok"))), "{findings:?}");
         assert!(
             findings.contains(&("o/r", Some("../../etc/passwd"))),
@@ -510,7 +712,7 @@ symlink = ["../../etc/passwd"]
         assert!(out[0].detail.is_none(), "a pass carries no migration");
     }
 
-    /// The v1 gap, closed: a root whose bare survived but whose `.trunk` was deleted
+    /// The v1 gap, closed: a root whose bare survived but whose trunk was deleted
     /// out from under it was invisible to doctor.
     #[test]
     fn a_vanished_trunk_is_reported_while_the_bare_stands() {
@@ -594,9 +796,8 @@ symlink = ["../../etc/passwd"]
     fn an_undeclared_worktree_on_disk_is_drift() {
         let tmp = TempDir::new().unwrap();
         let home = testfix::home_with_root(&tmp);
-        let root = testfix::root_dir(&home, testfix::SLUG);
         testfix::git(
-            &root.join(".trunk"),
+            &roots::trunk_dir(&home, testfix::SLUG),
             &["worktree", "add", "-q", "-b", "stray", "../stray"],
         );
 
@@ -627,5 +828,167 @@ symlink = ["../../etc/passwd"]
             .expect("the declared worktree is checked");
         assert_eq!(wt.status, CheckStatus::Missing);
         assert_eq!(wt.name.as_deref(), Some("feat"));
+    }
+
+    // ─── the legacy layout ──────────────────────────────────────────────────────
+
+    /// A home holding one root in the layout grove laid down before the trunk was
+    /// named by its branch: the bare at `.git`, the trunk checkout at `.trunk`, a
+    /// declared worktree beside it, and a declared share linked through `../.trunk`.
+    ///
+    /// Built by hand rather than through `testfix`, whose fixtures build the layout
+    /// that exists *now*. The shape this migration retires is written nowhere else in
+    /// the tree, and one produced by grove's own writers would be a fixture that
+    /// cannot regress with them.
+    fn legacy_home(tmp: &TempDir) -> PathBuf {
+        let src = tmp.path().join("src");
+        testfix::fixture_repo(&src);
+
+        let home = tmp.path().join("home");
+        let root = home.join("code").join(testfix::SLUG);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            roots::manifest_path(&home),
+            format!(
+                "[roots.\"o/r\"]\nurl = \"{}\"\n\n\
+                 [roots.\"o/r\".worktrees.feat]\nbranch = \"feature/x\"\n\n\
+                 [roots.\"o/r\".env._]\nsymlink = [\".env\"]\n",
+                src.display()
+            ),
+        )
+        .unwrap();
+
+        let bare = root.join(LEGACY_BARE);
+        let trunk = root.join(LEGACY_TRUNK);
+        let feat = root.join("feat");
+        testfix::git(&home, &["clone", "-q", "--bare", path(&src), path(&bare)]);
+        testfix::git(&bare, &["worktree", "add", "-q", path(&trunk), "main"]);
+        testfix::git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature/x",
+                path(&feat),
+                "main",
+            ],
+        );
+
+        std::fs::write(trunk.join(".env"), "K=v\n").unwrap();
+        std::os::unix::fs::symlink("../.trunk/.env", feat.join(".env")).unwrap();
+        home
+    }
+
+    fn path(p: &Path) -> &str {
+        p.to_str().expect("fixture paths are utf-8")
+    }
+
+    /// Report-only, and the report names the remedy: an operator who runs plain
+    /// `grove doctor` learns both what is old about the root and what will fix it,
+    /// and nothing on disk moves until they ask.
+    #[test]
+    fn a_legacy_layout_is_reported_with_the_command_that_migrates_it() {
+        let tmp = TempDir::new().unwrap();
+        let home = legacy_home(&tmp);
+        let root = roots::root_dir(&home, testfix::SLUG);
+
+        let out = root_checks(&home, testfix::SLUG);
+        let legacy = out
+            .iter()
+            .find(|c| c.check == CheckKind::LegacyLayout)
+            .expect("the layout is checked");
+        assert_eq!(legacy.status, CheckStatus::Mismatch);
+        let detail = legacy.detail.as_deref().unwrap();
+        assert!(detail.contains("is a bare repo"), "{detail}");
+        assert!(detail.contains("is the trunk checkout"), "{detail}");
+        assert!(detail.contains("grove doctor --fix"), "{detail}");
+
+        assert!(root.join(LEGACY_BARE).is_dir(), "the check is a read");
+        assert!(root.join(LEGACY_TRUNK).is_dir(), "the check is a read");
+    }
+
+    /// The migration, end to end: the bare and the trunk take their current names,
+    /// git still opens both checkouts, the share link follows the trunk, and the
+    /// check that reported it now passes. Run twice, because a migration an operator
+    /// re-runs after a crash must be a no-op the second time.
+    #[test]
+    fn fix_migrates_a_legacy_root_in_place_and_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let home = legacy_home(&tmp);
+        let root = roots::root_dir(&home, testfix::SLUG);
+
+        let (report, _) = run(&home, Some(testfix::SLUG), false, true).unwrap();
+        assert!(
+            report.iter().all(|row| !row.status.is_error()),
+            "{report:?}"
+        );
+
+        assert!(roots::bare_dir(&home, testfix::SLUG).is_dir());
+        assert!(!root.join(LEGACY_BARE).exists());
+        assert!(!root.join(LEGACY_TRUNK).exists());
+
+        let trunk = roots::trunk(&home, testfix::SLUG).unwrap();
+        assert_eq!(trunk.name, "main", "the fixture integrates on `main`");
+        assert!(trunk.dir.join("README.md").is_file());
+        git::status(&trunk.dir).expect("the trunk reads as a checkout");
+        git::status(&root.join("feat")).expect("the worktree reads as a checkout");
+        assert_eq!(
+            std::fs::read_link(root.join("feat").join(".env")).unwrap(),
+            Path::new("../main/.env"),
+            "the share follows the trunk to its new name"
+        );
+
+        let out = root_checks(&home, testfix::SLUG);
+        assert!(
+            out.iter().all(|c| c.status == CheckStatus::Ok),
+            "a migrated root passes every plumbing check: {out:?}"
+        );
+
+        let (again, _) = run(&home, Some(testfix::SLUG), false, true).unwrap();
+        assert!(again.iter().all(|row| !row.status.is_error()), "{again:?}");
+        assert!(root.join("feat").join(".env").is_symlink());
+    }
+
+    /// A migration that died between the rename and everything after it leaves two
+    /// bares. Only one of them holds the operator's history and grove cannot tell
+    /// which, so `--fix` stops on that root and says so, rather than renaming a
+    /// second directory over the first.
+    #[test]
+    fn a_bare_beside_the_legacy_one_refuses_rather_than_guessing() {
+        let tmp = TempDir::new().unwrap();
+        let home = legacy_home(&tmp);
+        let root = roots::root_dir(&home, testfix::SLUG);
+        let bare = roots::bare_dir(&home, testfix::SLUG);
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let (report, _) = run(&home, Some(testfix::SLUG), false, true).unwrap();
+        assert!(
+            report.iter().any(|row| row.status.is_error()
+                && row
+                    .reason
+                    .as_deref()
+                    .is_some_and(|why| why.contains("half-finished migration"))),
+            "{report:?}"
+        );
+        assert!(root.join(LEGACY_BARE).is_dir(), "nothing was renamed");
+        assert!(root.join(LEGACY_TRUNK).is_dir(), "nothing was renamed");
+
+        let out = root_checks(&home, testfix::SLUG);
+        let legacy = out
+            .iter()
+            .find(|c| c.check == CheckKind::LegacyLayout)
+            .expect("the layout is checked");
+        assert_eq!(legacy.status, CheckStatus::Mismatch);
+        assert!(
+            legacy
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("half-finished migration"),
+            "{legacy:?}"
+        );
     }
 }

@@ -19,7 +19,7 @@ pub enum Error {
     /// A root/slug not present in the manifest — nothing declared to act on.
     #[error("{0}")]
     NotDeclared(String),
-    /// Declared but not yet realized/ready on disk (a missing bare or `.trunk`).
+    /// Declared but not yet realized/ready on disk (a missing bare or trunk).
     #[error("{0}")]
     NotReady(String),
     /// Bad or missing caller input (malformed slug/name, missing param, unknown op).

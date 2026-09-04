@@ -140,7 +140,8 @@ fn root_view() -> RootView {
         },
         syncing: true,
         sync_note: Some(SyncNote::Diverged),
-        trunk: "/home/code/o/r/.trunk".into(),
+        trunk: "/home/code/o/r/main".into(),
+        trunk_branch: "main".into(),
         trunk_status: Some(git_status()),
         worktrees: vec![WorktreeView {
             name: "feat".into(),

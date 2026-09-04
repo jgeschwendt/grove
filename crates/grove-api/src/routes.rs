@@ -101,7 +101,7 @@ wire_enum! {
 }
 
 /// `POST /api/roots/sync {slug}` — fetch one root's default branch and fast-forward
-/// its `.trunk`.
+/// its trunk.
 ///
 /// A body-carrying POST for the reason every other slug-naming route is one: slugs
 /// contain `/`.
@@ -202,7 +202,7 @@ pub struct DoctorData {
     pub pools: Vec<PoolStatus>,
     #[serde(default)]
     pub statuses: Vec<RootStatusEntry>,
-    /// The plumbing pass: manifest validity, bare/`.trunk` presence, declared
+    /// The plumbing pass: manifest validity, bare/trunk presence, declared
     /// worktrees on their declared branches, and undeclared drift. **Report-only** —
     /// `fix` still converges shares and nothing else.
     #[serde(default)]
@@ -248,9 +248,24 @@ pub struct RootView {
     /// What the last sync left behind, if anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_note: Option<SyncNote>,
-    /// The absolute path of `.trunk` — what a UI opens a terminal or an editor at.
+    /// The absolute path of the trunk checkout — what a UI opens a terminal or an
+    /// editor at.
     pub trunk: String,
-    /// `.trunk`'s own git drift, or `None` when it is not on disk.
+    /// The branch the trunk checks out — the one grove integrates on, and the one
+    /// `tree add` forks from by default.
+    ///
+    /// Travels beside the path rather than being read back out of it: the checkout is
+    /// named by [`grove_ops::worktrees::name_for`] of the branch, which folds `/` to
+    /// `-`, so `feature-x` cannot be un-folded into `feature/x` by a consumer. It is
+    /// also what tells the trunk apart from the ordinary worktrees beside it, none of
+    /// which carry anything in their name to say which one is grove's own.
+    ///
+    /// Defaulted on the way in, alone among the required fields: a body from a daemon
+    /// that predates the field is one absent key, and refusing the whole decode for it
+    /// would cost `grove tree list` its status header and the whole snapshot row.
+    #[serde(default)]
+    pub trunk_branch: String,
+    /// The trunk's own git drift, or `None` when it is not on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trunk_status: Option<Status>,
     pub worktrees: Vec<WorktreeView>,
@@ -313,7 +328,8 @@ mod tests {
                 },
                 syncing: true,
                 sync_note: Some(SyncNote::Diverged),
-                trunk: "/home/code/o/r/.trunk".into(),
+                trunk: "/home/code/o/r/main".into(),
+                trunk_branch: "main".into(),
                 trunk_status: None,
                 worktrees: vec![WorktreeView {
                     name: "feat".into(),
@@ -338,7 +354,8 @@ mod tests {
                     "pool": {"observed": 1, "target": 2},
                     "syncing": true,
                     "sync_note": "diverged",
-                    "trunk": "/home/code/o/r/.trunk",
+                    "trunk": "/home/code/o/r/main",
+                    "trunk_branch": "main",
                     "worktrees": [{
                         "name": "feat",
                         "branch": "feature/x",

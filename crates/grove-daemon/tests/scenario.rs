@@ -218,8 +218,8 @@ async fn slow_a_root_is_declared_realized_promoted_synced_and_removed() {
     std::fs::remove_file(worktree.join("CLAIMED")).unwrap();
     assert_eq!(
         std::fs::read_link(&link).unwrap(),
-        Path::new("../.trunk/.env"),
-        "…and points through the sibling `.trunk` source"
+        Path::new("../main/.env"),
+        "…and points through the sibling trunk source"
     );
 
     // ── sync ────────────────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ async fn slow_a_root_is_declared_realized_promoted_synced_and_removed() {
     .await;
     assert!(
         trunk.join(".env").is_file(),
-        "the source in `.trunk` is a real file and is never collected"
+        "the source in the trunk is a real file and is never collected"
     );
 
     // ── remove the worktree ─────────────────────────────────────────────────────

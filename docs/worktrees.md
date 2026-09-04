@@ -17,7 +17,8 @@ human's comments.
 # my repos                              # comments survive every grove write
 
 [roots."owner/name"]
-url = "git@github.com:owner/name.git"
+url   = "git@github.com:owner/name.git"
+trunk = "canary"                        # integrates here; absent → the remote's HEAD
 
 [roots."owner/name".pool]
 size = 2                                # warm slots to keep ready; default 0
@@ -28,8 +29,19 @@ _.copy = ["config/local.json"]          # seeded once per worktree
 
 [roots."owner/name".worktrees.feature-x]
 branch = "feature/x"
-base = "main"                           # absent for worktrees adopted from git
+base = "canary"                         # absent for worktrees adopted from git
 ```
+
+`trunk` names the branch grove integrates on: the one its checkout is named after, the one
+`sync` fast-forwards, and the one every share reads through. Absent — the common case — it
+is the remote's `HEAD`, whatever the clone landed on.
+
+`base` is where a *new* branch forks from, and `grove tree add` without `--base` resolves
+it to the trunk branch and records it — named explicitly rather than left to git, whose own
+default start point is the bare's `HEAD`. The two agree in the settled state and differ in
+exactly the window that matters: between a `trunk` edit and the reconcile that applies it.
+A root not yet on disk resolves to nothing and the base stays unset, for the realizer to
+fill.
 
 `_.symlink`/`_.copy` are TOML *dotted keys* nesting as `env` → `_` → `symlink`, not
 literal `"_.symlink"` keys — mise's `_` directive-namespace convention. `_.setup`, a
@@ -50,15 +62,21 @@ git-synced manifest, so neither entrance is the only gate.
 | validator | rule |
 |---|---|
 | `validate_slug` | non-empty relative path, `Normal` components only — no `..`, absolute, `.`, or prefix parts; no backslash; no ASCII control characters |
-| `validate_name` | exactly one `Normal` segment (so no `/`), the slug rules otherwise, and never one of the reserved dirs |
-| `validate_share_path` | one or more safe segments (nesting allowed), canonical — no `.`, empty (`//`) or trailing-`/` segments — no segment beginning with `-`, and a first segment that is not reserved |
-| `validate_ref_arg` | a `branch`/`base` is non-empty and does not begin with `-`, so a crafted declaration cannot smuggle a git flag |
+| `validate_name` | exactly one `Normal` segment (so no `/`), the slug rules otherwise, and never a dotted name — those are grove's own |
+| `validate_share_path` | one or more safe segments (nesting allowed), canonical — no `.`, empty (`//`) or trailing-`/` segments — no segment beginning with `-`, and no dotted first segment once the path nests (`.env` is a share; a path *under* a dotted entry is not) |
+| `validate_ref_arg` | a `branch`, `base` or `trunk` is non-empty and does not begin with `-`, so a crafted declaration cannot smuggle a git flag |
 
-The reserved set is `.git`, `.trunk`, `.pool` (`worktrees::RESERVED`). Rejecting reserved
-names is load-bearing rather than tidy: a worktree declared at `<root>/.pool` sorts ahead
-of `<root>/.pool/slot-0`, so `promote` would `git worktree move` the entire warm pool into
-the user's new worktree — pool state destroyed, two registered worktrees nested inside a
-third. `a_reserved_pool_name_can_never_claim_the_warm_pool` pins it.
+**The dot rule.** Grove's own entries under a root are exactly the dotted ones, and every
+undotted child is a checkout — `worktrees::is_reserved` is that one-line predicate, not a
+list. Git refuses a ref component beginning with a dot, so no branch, and therefore no
+directory named after one, can collide with the bare, the warm pool or the in-flight-clone
+marker; a new grove-owned entry inherits the guarantee without an edit.
+
+Rejecting a dotted *declaration* is load-bearing rather than tidy: a worktree declared at
+`<root>/.pool` sorts ahead of `<root>/.pool/slot-0`, so `promote` would `git worktree move`
+the entire warm pool into the user's new worktree — pool state destroyed, two registered
+worktrees nested inside a third. `a_reserved_pool_name_can_never_claim_the_warm_pool` pins
+it.
 
 The share-path gate is the *string* half of a two-gate posture; the filesystem half is the
 `O_NOFOLLOW` descent in `docs/worktree-environment.md`.
@@ -74,34 +92,94 @@ $GROVE_HOME/
 ├── channel · pending · current · previous · versions/    # the install layout
 └── code/
     └── owner/name/
-        ├── .git/           # the bare clone
-        ├── .trunk/         # the default-branch checkout, and every share's source
-        ├── .pool/slot-0/   # warm slots, detached at the default-branch tip
-        └── feature-x/      # a user worktree — a direct sibling of .trunk
+        ├── .bare/          # the bare clone
+        ├── .pool/slot-0/   # warm slots, detached at the trunk tip
+        ├── canary/         # the trunk: the checkout of the trunk branch
+        └── feature-x/      # a user worktree — a direct sibling of the trunk
 ```
 
-`roots::root_dir`, `bare_dir` and `trunk_dir` are the published definition of those three
-joins; nothing else in the tree recomputes them.
+The bare is `.bare`, deliberately not the name git's own discovery walks upward for: a
+bare repo under that name makes the *root itself* look like a repository, so `git status`
+in the root errors and an editor opened there sees no working tree. `.bare` is inert to
+that search.
 
-**Worktree depth is load-bearing.** Every worktree is a *direct* sibling of `.trunk`, one
-level under the root, and shares materialize only at that canonical depth. `grove tree add`
-folds a branch name's `/` to `-` (`feature/x` → `feature-x`) for exactly this reason, and
-`worktrees::adoptable_name` refuses anything more than one segment below the root. Pool
-slots sit one level deeper on purpose and get no shares while they are slots — the relative
-link `../.trunk/<p>` would dangle from `.pool/slot-N/`, and the promote move would
-invalidate it anyway.
+`roots::root_dir` and `bare_dir` are the published definition of the first two joins, and
+`roots::trunk` of the third; nothing else in the tree recomputes them.
+
+**Checkout depth is load-bearing.** Every checkout — the trunk included — is a *direct*
+child of the root, and shares materialize only at that canonical depth.
+`worktrees::name_for` folds a branch name's `/` to `-` (`feature/x` → `feature-x`) for
+exactly this reason, and it is the one branch-to-directory rule in grove: `grove tree add`,
+the trunk and share targets all read it. `worktrees::adoptable_name` refuses anything more
+than one segment below the root. Pool slots sit one level deeper on purpose and get no
+shares while they are slots — the relative link `../<trunk>/<p>` would dangle from
+`.pool/slot-N/`, and the promote move would invalidate it anyway.
+
+A root laid out the legacy way — a bare at `.git`, a checkout at `.trunk` — is doctor's
+`legacy-layout` finding, and
+`grove doctor --fix` migrates it in place. Nothing else in grove reads those two names;
+see `docs/api.md` § Doctor.
+
+## The trunk
+
+The trunk is the checkout of the branch a root integrates on. It is not a special
+directory: it is named by `worktrees::name_for(branch)` exactly as every other checkout is
+(`canary` → `canary/`, `release/2` → `release-2/`), and what tells it apart from its
+siblings is that the manifest points at it.
+
+`roots::trunk(home, slug) -> Trunk { branch, name, dir }` is the one resolution, and
+nothing else spells the trunk's path. Desired state is read first — the root's `trunk` key
+when it declares one — else the bare's `HEAD`, which reconcile sets from that same
+declaration. So a root adopted off disk has a trunk too, whatever it was cloned onto, and a
+freshly-declared `trunk` resolves here before any convergence has run.
+`git::default_branch` is what reads `HEAD` back, and every consumer already went through
+it. `trunk_reads_the_declaration_and_falls_back_to_the_bares_head` pins both halves.
+
+`roots::trunk_dir` is the same lookup for a caller with nowhere to put a failure — a
+presence probe, a doctor row. A root whose bare cannot be read falls back to `<root>/main`,
+so the probe reports "missing" rather than blanking; anything able to report an error calls
+`trunk` instead.
+
+### Changing the trunk is a manifest edit
+
+Edit `trunk`, reconcile, and `converge_trunk` brings the disk onto it in three moves, each
+a no-op once it has run:
+
+- a `worktrees.<name>` entry already on the trunk branch is **dropped** — that checkout
+  *is* the trunk now, and leaving it declared would put the root's integration checkout
+  where a `tree remove` deletes it;
+- the trunk's checkout is **created** when nothing is there, an ordinary `git worktree add`
+  from the bare;
+- `HEAD` is **moved** onto the trunk branch, so actual state answers the declaration.
+
+**No trunk is ever deleted by a trunk change.** The previous trunk stays checked out where
+it is, and the worktree reconcile that follows adopts it into `worktrees.<name>` — an
+ordinary worktree from then on.
+`a_trunk_change_creates_the_new_checkout_and_adopts_the_old_one` and
+`a_declared_worktree_on_the_new_trunk_branch_becomes_the_trunk` pin the two directions.
+
+The branch is proved to exist before anything is written, so a typo'd `trunk` leaves the
+root exactly as it was rather than minting the typo as a branch. A *declared* worktree
+already occupying the new trunk's directory on a different branch is two checkouts asking
+for one path, which no order of operations resolves: reconcile refuses, naming both, rather
+than dropping somebody's declaration or leaving the trunk on a branch it does not name.
 
 ## Reconcile is two-way and additive
 
 `worktrees::reconcile(home, slug)` converges declared against actual and **never deletes**:
 
 - **declared, not in git** → `git worktree add` at `<root>/<name>` on the declared branch
-  (from `base` when given). A recreate git refuses is reported as `failed` with git's
-  reason, not silently dropped — the operator sees a wedged worktree instead of a silent
-  retry loop.
+  (from `base` when the declaration records one). A recreate git refuses is reported as
+  `failed` with git's reason, not silently dropped — the operator sees a wedged worktree
+  instead of a silent retry loop.
 - **in git, not declared** → written into the manifest as `adopted`, with no `base`
   (the fork point is unknown).
 - **both** → nothing.
+
+The trunk is never one of the three: `worktrees::adoptable_name` excludes the root's own
+checkout by name, so it is neither adopted into `worktrees` nor recreated as one. The
+checkout a trunk change left behind is not the trunk any more, so it *is* adopted, like any
+other undeclared branch-carrying checkout.
 
 Git-level ghosts are pruned first. A worktree directory removed out of band leaves a
 `prunable` registration that makes git report it as still present (masking the
@@ -122,37 +200,44 @@ wedged checkout must not blank the whole list.
 
 ## Root realization
 
-`roots::reconcile_one(home, slug)` realizes one declared root: clone the
-declared-but-missing bare, check out `.trunk` at the default branch, reconcile that root's
-worktrees, then materialize its shares. It is idempotent — a `present` root re-reconciles
-to a no-op.
+`roots::reconcile_one(home, slug)` realizes one declared root: converge the trunk, clone
+the declared-but-missing bare, check the trunk branch out at `<root>/<trunk name>`,
+reconcile that root's worktrees, then materialize its shares. It is idempotent — a
+`present` root re-reconciles to a no-op.
+
+Converging the trunk comes first because *which* directory is the trunk is a manifest
+question, and a trunk change left unapplied would make the rest of the pass see a root
+whose trunk checkout is missing — the destructive-adjacent path below — rather than one
+whose trunk simply moved.
 
 `Err` is reserved for not-declared and lookup faults. A clone or guard failure is an
 `Ok(Applied { status: Failed })`, so one wedged root never aborts a sweep;
 `grove_ops::apply` (the offline `grove apply`) relies on that to report a failed root
 beside its healthy neighbours.
 
-One path is destructive-adjacent and worth stating plainly: the bare exists but `.trunk`
-is gone (it vanished out of band — a stray `rm`, a `git worktree prune`; grove never
-produces this state itself). Three answers, cheapest and least destructive first:
+One path is destructive-adjacent and worth stating plainly: the bare exists but the trunk
+checkout is gone (it vanished out of band — a stray `rm`, a `git worktree prune`; grove
+never produces this state itself). Three answers, cheapest and least destructive first:
 
 1. **Refuse** if the bare carries other live worktrees — a user's checkouts, possibly with
    uncommitted work. Reconcile adds and never deletes. The outcome is `failed` with
-   "recreate `.trunk`, or `grove clone remove` the root", and the check fails safe: if
-   `git worktree list` errors at all, grove assumes worktrees may exist and refuses.
-2. **Re-add `.trunk`** from the bare that is already there (prune, then
+   "recreate it, or `grove clone remove` the root", and the check fails safe: if
+   `git worktree list` errors at all, grove assumes worktrees may exist and refuses. The
+   root's own checkouts — every dotted entry, the pool's slots by path, and the trunk being
+   recovered — are what that count excludes.
+2. **Re-add the trunk** from the bare that is already there (prune, then
    `git worktree add`). This is the whole of the real repair — a checkout, not a
    repository, is what went missing — and it touches nothing else under the root.
 3. Only when the bare cannot produce a worktree at all is a re-clone the answer, and a
    re-clone means deleting the root directory. That happens **only if the directory holds
-   nothing but grove's own entries** (`.git`, `.trunk`, `.pool`, the in-flight-clone
-   marker); anything else — a human's notes, a vendored tree, an unrelated clone — makes
-   it a `failed` outcome naming what it would have destroyed. This is the one path where
-   grove would `rm -rf` a directory a human also writes into, unattended, on a reconcile
-   nobody asked for.
+   nothing but grove's own entries** — the dotted ones: `.bare`, `.pool`, the
+   in-flight-clone marker. Anything else — a human's notes, a vendored tree, an unrelated
+   clone — makes it a `failed` outcome naming what it would have destroyed. This is the one
+   path where grove would `rm -rf` a directory a human also writes into, unattended, on a
+   reconcile nobody asked for.
 
 A clone in flight writes a `.grove-cloning` marker in the root for the length of the
-network fetch: `gix` materializes `<root>/.git` with its `origin` before a byte of the
+network fetch: `gix` materializes `<root>/.bare` with its `origin` before a byte of the
 transfer lands, and adoption must not read that as a discovery — otherwise an operator's
 undeclare is silently undone and the root re-cloned on the next manifest event.
 
@@ -166,7 +251,7 @@ log pipeline picks it up).
 Adoption is discovery, and it **never clones**.
 
 `roots::adopt(home)` walks `$GROVE_HOME/code/<org>/<repo>` and declares any directory that
-holds a `.git` bare with an `origin` remote and is not already declared. It:
+holds a `.bare` bare with an `origin` remote and is not already declared. It:
 
 - skips dotfile directories (a `.Trash` under `code/` is not an org);
 - skips a name that is not UTF-8, reporting it as `skipped` with a lossy rendering for the
@@ -217,10 +302,15 @@ worktree sends no nudge — a worktree has no engine.
 ## Sync
 
 `roots::sync(home, slug)` requires a ready root and does four things, as one lane call:
-fetch the default branch (bounded, single refspec), fast-forward `.trunk` onto the tracking
-ref, prune warm-pool slots stranded at a pre-sync tip, and report.
+fetch the trunk branch (bounded, single refspec), fast-forward the trunk checkout onto the
+tracking ref, prune warm-pool slots stranded at a pre-sync tip, and report.
 
-**It never forces.** A `.trunk` carrying local commits or dirty tracked files is a
+The branch is the trunk's own, not the bare's `HEAD`. Reconcile converges the two, but a
+sync in the window between a `trunk` edit and the reconcile that applies it must fetch and
+fast-forward the branch the manifest names, never the one being left behind
+(`sync_fetches_and_fast_forwards_the_declared_trunk`).
+
+**It never forces.** A trunk carrying local commits or dirty tracked files is a
 *reported* outcome, not a reset: `SyncReport::trunk` is `updated`, `already_current`,
 `diverged`, or `dirty`, and the daemon turns the latter two into the snapshot's `sync_note`.
 Syncing a root with nothing on disk is `not_ready` — a transient code, so the engine retries
@@ -244,15 +334,17 @@ cold-create on `Cold`. That is deliberate placement: a pool claimed from only on
 point is a pool that is filled, paid for on every clone, reported as `pool n/n` readiness,
 and redeemed by nothing.
 
-`pool::fill` adds **one** detached slot at the default-branch tip, and nothing else. N
-calls converge to N slots. `pool::reclaim` is its mirror — it removes the highest-indexed
-slot, non-forced — so a target that *drops* converges too rather than leaving the
-checkouts on disk forever with nothing able to reclaim them. The engine's fill task picks
-whichever direction the observed count needs. It prunes git-level ghosts first, for a specific failure: a slot
-directory removed out of band leaves a `prunable` registration, `free_slot` picks the now-
-empty path, and the detached add then fails with "missing but already registered" — wedging
-every future fill. It errors when the bare is missing, because the engine only fills a
-`ready` root, so a missing bare is a real fault rather than a steady state.
+`pool::fill` adds **one** detached slot at the trunk tip — resolved through `roots::trunk`,
+so a root that has declared a new trunk seeds onto that branch and not the one it is
+leaving — and nothing else. N calls converge to N slots. `pool::reclaim` is its mirror — it
+removes the highest-indexed slot, non-forced — so a target that *drops* converges too
+rather than leaving the checkouts on disk forever with nothing able to reclaim them. The
+engine's fill task picks whichever direction the observed count needs. It prunes git-level
+ghosts first, for a specific failure: a slot directory removed out of band leaves a
+`prunable` registration, `free_slot` picks the now-empty path, and the detached add then
+fails with "missing but already registered" — wedging every future fill. It errors when the
+bare is missing, because the engine only fills a `ready` root, so a missing bare is a real
+fault rather than a steady state.
 
 Slots get **no shares**. They sit one level deeper than a canonical worktree, so
 `env::materialize`'s depth invariant does not hold there, and the promote move would
@@ -261,7 +353,9 @@ of the declared set entirely, regardless of branch or detachment.
 
 `pool::promote(home, slug, name, branch, base)`:
 
-1. attaches the branch **in the slot** (DWIM, like `worktree_add`);
+1. attaches the branch **in the slot** (DWIM, like `worktree_add`), from `base` when the
+   caller named one and the trunk branch otherwise — named explicitly, so a promote is not
+   silently forked from whatever commit `fill` seeded the slot at;
 2. claims it with `git worktree move` — not a bare rename, which would strip git's gitdir
    pointers;
 3. declares it in the manifest;
@@ -291,6 +385,8 @@ that does not serialize per root loses an invariant this crate was written again
 `crates/grove-ops/src/roots.rs`, `worktrees.rs` and `pool.rs` carry the unit suites —
 including `remove_then_adopt_declares_nothing`, `remove_keeps_the_root_declared_on_a_partial_delete`,
 `reconcile_one_refuses_to_wipe_live_worktrees_when_trunk_is_missing`,
+`a_trunk_change_creates_the_new_checkout_and_adopts_the_old_one`,
+`create_without_a_base_forks_the_new_branch_from_the_trunk`,
 `a_pool_slot_is_excluded_from_list_and_reconcile_even_with_a_branch`,
 `promote_attach_failure_strands_no_orphan_and_keeps_the_slot`,
 `promote_never_clobbers_an_existing_worktree` and

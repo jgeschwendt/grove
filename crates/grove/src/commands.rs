@@ -95,9 +95,16 @@ const fn removal(force: bool) -> grove_ops::roots::Removal {
 
 /// `grove tree add <slug> <branch> [--base]` — the same gate as `clone add`.
 ///
-/// The worktree's directory name is the branch with `/` folded to `-`: worktrees are
-/// direct siblings of `.trunk` (carried law 7), so a `feature/x` checkout cannot
-/// nest a directory the layout does not allow.
+/// The worktree's directory name is [`grove_ops::worktrees::name_for`] of the branch:
+/// every checkout under a root, the trunk included, is a direct sibling (carried law
+/// 7), so a `feature/x` checkout cannot nest a directory the layout does not allow.
+///
+/// Without `--base` the new branch starts at the **trunk** — the branch this root
+/// integrates on, which is what a reader assumes "off the top of the repo" means and
+/// is not the same as git's `HEAD` while a `trunk` edit is still converging. It is
+/// resolved here rather than left to `worktrees::create`, so all three arms declare
+/// the same base and the line printed names it. A root that isn't on disk yet
+/// resolves to nothing, and the base stays unset for the daemon to fill.
 pub fn tree_add(
     home: &Path,
     api: &ApiClient,
@@ -105,14 +112,22 @@ pub fn tree_add(
     branch: &str,
     base: Option<&str>,
 ) -> Result<(), CliError> {
-    let name = worktree_name(branch);
+    let name = grove_ops::worktrees::name_for(branch);
+    let base = base.map(str::to_owned).or_else(|| {
+        grove_ops::roots::trunk(home, slug)
+            .ok()
+            .map(|trunk| trunk.branch)
+    });
+    let from = base
+        .as_deref()
+        .map_or_else(String::new, |base| format!(" based on {base}"));
     let declare = || {
         grove_ops::manifest::add_worktree(
             &grove_ops::roots::manifest_path(home),
             slug,
             &name,
             branch,
-            base,
+            base.as_deref(),
         )
         .map_err(io)
     };
@@ -121,24 +136,20 @@ pub fn tree_add(
         Reachability::Up => {
             declare()?;
             api.reconcile()?;
-            println!("declared worktree {name}; grove server is creating it");
+            println!("declared worktree {name}{from}; grove server is creating it");
         }
         Reachability::Busy => {
             declare()?;
-            println!("declared worktree {name}; grove server is busy and will create it shortly");
+            println!(
+                "declared worktree {name}{from}; grove server is busy and will create it shortly"
+            );
         }
         Reachability::Offline => {
-            grove_ops::worktrees::create(home, slug, &name, branch, base)?;
-            println!("created worktree {name} ({branch})");
+            grove_ops::worktrees::create(home, slug, &name, branch, base.as_deref())?;
+            println!("created worktree {name} ({branch}){from}");
         }
     }
     Ok(())
-}
-
-/// The directory name a branch checks out under: `feature/x` → `feature-x`.
-#[must_use]
-pub fn worktree_name(branch: &str) -> String {
-    branch.replace('/', "-")
 }
 
 /// `grove tree remove <slug> <name>` — the same gate as `clone remove`.
@@ -206,27 +217,47 @@ fn listing(home: &Path, api: &ApiClient, slug: &str) -> Result<Vec<String>, CliE
             root.pool.target
         ));
         if root.status != grove_api::RootStatus::Unavailable {
+            // The snapshot's own answer for which branch this root integrates on. A
+            // daemon that predates `trunk_branch` sends nothing, and a row named
+            // after an empty branch would say less than no row at all.
+            let name = grove_ops::worktrees::name_for(&root.trunk_branch);
+            lines.extend(checkouts(
+                (!name.is_empty()).then_some((name.as_str(), root.trunk_branch.as_str())),
+                root.worktrees.iter().map(|w| Checkout {
+                    name: &w.name,
+                    branch: &w.branch,
+                    present: w.present,
+                    declared: w.declared,
+                }),
+            ));
             if root.worktrees.is_empty() {
                 lines.push(format!("no worktrees for {slug}"));
             }
-            lines.extend(
-                root.worktrees
-                    .into_iter()
-                    .map(|w| format!("{}  {}{}", w.name, w.branch, note(w.present, w.declared))),
-            );
             return Ok(lines);
         }
     }
 
     let worktrees = grove_ops::worktrees::list(home, slug)?;
+    // Gated on the bare being there, and best-effort past it: `git::default_branch`
+    // answers `main` for a bare it cannot read — right for a fresh bare that has no
+    // HEAD yet, but it would also invent a trunk row for a root with nothing on disk
+    // at all.
+    let trunk = grove_ops::roots::bare_dir(home, slug)
+        .is_dir()
+        .then(|| grove_ops::roots::trunk(home, slug).ok())
+        .flatten();
+    lines.extend(checkouts(
+        trunk.as_ref().map(|t| (t.name.as_str(), t.branch.as_str())),
+        worktrees.iter().map(|w| Checkout {
+            name: &w.name,
+            branch: &w.branch,
+            present: w.present,
+            declared: w.declared,
+        }),
+    ));
     if worktrees.is_empty() {
         lines.push(format!("no worktrees for {slug}"));
     }
-    lines.extend(
-        worktrees
-            .into_iter()
-            .map(|w| format!("{}  {}{}", w.name, w.branch, note(w.present, w.declared))),
-    );
     Ok(lines)
 }
 
@@ -261,6 +292,56 @@ fn snapshot_row(api: &ApiClient, slug: &str) -> Option<grove_api::routes::RootVi
     }
 }
 
+/// One checkout as a listing row reads it — the two sources' rows ([`grove_api`]'s
+/// `WorktreeView` and `grove_ops`' `WorktreeStatus`) narrowed to what a line says, so
+/// both arms render through the same code rather than through two `format!`s that
+/// drift apart.
+struct Checkout<'a> {
+    name: &'a str,
+    branch: &'a str,
+    present: bool,
+    declared: bool,
+}
+
+/// A root's checkouts as lines, the trunk first: the one an operator opens most, then
+/// the worktrees kept beside it.
+///
+/// `trunk` is that checkout's `(name, branch)`, or `None` when the source could not
+/// say. It is rendered from the resolved trunk rather than found among `worktrees`
+/// because neither source lists it: the trunk is the checkout the root owns, and
+/// adopting it into `worktrees.<name>` is what would let a `tree remove` delete it.
+/// The marker is what names it at all — since a trunk is named by its branch like
+/// every other checkout, nothing in the row says which one is grove's own. A trunk
+/// that *is* in the list anyway (a root mid-migration, whose manifest still declares
+/// a worktree on the branch grove integrates on) is marked in place, never printed a
+/// second time.
+fn checkouts<'a>(
+    trunk: Option<(&str, &str)>,
+    worktrees: impl Iterator<Item = Checkout<'a>>,
+) -> Vec<String> {
+    let mut listed = false;
+    let mut rows: Vec<String> = worktrees
+        .map(|w| {
+            let marker = if trunk.is_some_and(|(name, _)| name == w.name) {
+                listed = true;
+                " (trunk)"
+            } else {
+                ""
+            };
+            format!(
+                "{}  {}{}{marker}",
+                w.name,
+                w.branch,
+                note(w.present, w.declared)
+            )
+        })
+        .collect();
+    if let Some((name, branch)) = trunk.filter(|_| !listed) {
+        rows.insert(0, format!("{name}  {branch} (trunk)"));
+    }
+    rows
+}
+
 /// The drift a listing flags: in git but undeclared, or declared but unrealized.
 const fn note(present: bool, declared: bool) -> &'static str {
     match (present, declared) {
@@ -270,7 +351,7 @@ const fn note(present: bool, declared: bool) -> &'static str {
     }
 }
 
-/// `grove sync <slug>` — fetch the root and fast-forward its `.trunk`.
+/// `grove sync <slug>` — fetch the root and fast-forward its trunk checkout.
 ///
 /// The three-way gate is doctor's, not `clone add`'s, and the difference is worth
 /// stating: a sync is a **git write on the root** (fetch, fast-forward, prune stranded
@@ -370,7 +451,7 @@ pub fn doctor(
 }
 
 /// Offline there are no engines, so `cloning`/`degraded` are not observable — derive
-/// `ready`/`missing` from disk per declared root (bare + `.trunk` present ⇒ ready).
+/// `ready`/`missing` from disk per declared root (bare + trunk present ⇒ ready).
 ///
 /// A manifest that will not read yields no statuses rather than an error: doctor's own
 /// manifest check is what reports that, and blanking the whole report over it would
@@ -381,8 +462,9 @@ fn offline_statuses(home: &Path, slug: Option<&str>) -> Vec<grove_api::RootStatu
         .into_iter()
         .filter(|root| slug.is_none_or(|s| s == root.slug))
         .map(|root| {
-            let dir = grove_ops::roots::root_dir(home, &root.slug);
-            let status = if dir.join(".git").is_dir() && dir.join(".trunk").is_dir() {
+            let status = if grove_ops::roots::bare_dir(home, &root.slug).is_dir()
+                && grove_ops::roots::trunk_dir(home, &root.slug).is_dir()
+            {
                 grove_api::RootStatus::Ready
             } else {
                 grove_api::RootStatus::Missing
@@ -528,7 +610,7 @@ mod tests {
         clone_add(&home, &offline(), src.to_str().unwrap()).unwrap();
 
         assert!(
-            home.join("code/o/r/.git").is_dir(),
+            grove_ops::roots::bare_dir(&home, "o/r").is_dir(),
             "offline dispatch clones the declared root in-process"
         );
     }
@@ -558,7 +640,7 @@ mod tests {
 
         assert_eq!(err.exit_code(), 4, "Busy refuses with Daemon");
         assert!(
-            home.join("code/o/r/.git").is_dir(),
+            grove_ops::roots::bare_dir(&home, "o/r").is_dir(),
             "a busy server must not delete on-disk state (would race the realizer)"
         );
         assert!(
@@ -589,7 +671,7 @@ mod tests {
         clone_remove(&home, &up(), SLUG, false).unwrap();
 
         assert!(
-            home.join("code/o/r/.git").is_dir(),
+            grove_ops::roots::bare_dir(&home, "o/r").is_dir(),
             "Up delegates to the server; the CLI must not delete in-process"
         );
         assert!(
@@ -783,14 +865,14 @@ mod tests {
     // ─── tree list: the resolved inconsistency ───────────────────────────────
 
     /// A snapshot row with a real status: the engine status and pool level — neither
-    /// of which any disk read can recover — reach the operator, and the daemon's
-    /// worktrees are what gets rendered.
+    /// of which any disk read can recover — reach the operator, the trunk leads the
+    /// checkouts under its own branch's name, and the daemon's worktrees follow.
     #[test]
     fn tree_list_up_renders_the_daemon_snapshot() {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"cloning",
             "pool":{"observed":0,"target":2},"syncing":false,
-            "trunk":"/h/code/o/r/.trunk","worktrees":[
+            "trunk":"/h/code/o/r/release-2","trunk_branch":"release/2","worktrees":[
               {"name":"feat","branch":"feature/x","declared":true,"present":false,
                "path":"/h/code/o/r/feat"}]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
@@ -800,7 +882,61 @@ mod tests {
         // these lines at all proves the snapshot arm ran.
         let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
         assert_eq!(lines[0], "root o/r: cloning — pool 0/2");
+        assert_eq!(lines[1], "release-2  release/2 (trunk)", "{lines:?}");
+        assert!(lines[2].starts_with("feat  feature/x"), "{lines:?}");
+    }
+
+    /// The trunk is a checkout no worktree list carries — adopting it is what would
+    /// let a `tree remove` delete grove's own — so `tree list` renders it from the
+    /// resolved trunk, marked. Without the marker the row is a plain sibling: the
+    /// trunk is named by its branch exactly as `feat` is, and an operator reading the
+    /// list has nothing to tell them which checkout the root integrates on.
+    #[test]
+    fn tree_list_marks_the_trunk_row_read_from_disk() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root_and_worktree(&tmp);
+
+        let lines = super::listing(&home, &offline(), SLUG).unwrap();
+
+        assert_eq!(lines[0], "main  main (trunk)", "{lines:?}");
         assert!(lines[1].starts_with("feat  feature/x"), "{lines:?}");
+    }
+
+    /// Nothing on disk, nothing to call a trunk: `git::default_branch` answers `main`
+    /// for a bare it cannot read — deliberate, for a fresh bare with no HEAD — so
+    /// without the gate a root that was never cloned would list a trunk it does not
+    /// have.
+    #[test]
+    fn a_root_with_no_bare_on_disk_gets_no_trunk_row() {
+        let tmp = TempDir::new().unwrap();
+
+        let lines = super::listing(tmp.path(), &offline(), SLUG).unwrap();
+
+        assert_eq!(lines, vec![format!("no worktrees for {SLUG}")], "{lines:?}");
+    }
+
+    /// A root mid-migration can still declare a worktree on the branch grove
+    /// integrates on. That row *is* the trunk, so it is marked where it stands —
+    /// printing a second trunk row above it would claim two checkouts of one branch.
+    #[test]
+    fn a_trunk_already_in_the_list_is_marked_in_place_rather_than_repeated() {
+        let body = r#"{"ok":true,"data":{"roots":[{
+            "slug":"o/r","url":"file:///src","status":"ready",
+            "pool":{"observed":1,"target":1},"syncing":false,
+            "trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[
+              {"name":"main","branch":"main","declared":true,"present":true,
+               "path":"/h/code/o/r/main"}]}],"logs":[]}}"#;
+        let api = ApiClient::at(envelope_server(body), BUDGET);
+        let tmp = TempDir::new().unwrap();
+
+        let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
+
+        assert_eq!(lines[1], "main  main (trunk)", "{lines:?}");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("(trunk)")).count(),
+            1,
+            "{lines:?}"
+        );
     }
 
     /// `Busy` and `Offline` fall back to the local read rather than refusing: a list
@@ -836,7 +972,7 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"unavailable",
             "pool":{"observed":0,"target":0},"syncing":false,
-            "trunk":"/h/code/o/r/.trunk","worktrees":[]}],"logs":[]}}"#;
+            "trunk":"/h/code/o/r/main","worktrees":[]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
 
         let lines = super::listing(&home, &api, SLUG).unwrap();
@@ -887,8 +1023,8 @@ mod tests {
 
     #[test]
     fn a_branch_folds_to_a_sibling_directory_name() {
-        assert_eq!(super::worktree_name("feature/x"), "feature-x");
-        assert_eq!(super::worktree_name("a/b/c"), "a-b-c");
-        assert_eq!(super::worktree_name("main"), "main");
+        assert_eq!(grove_ops::worktrees::name_for("feature/x"), "feature-x");
+        assert_eq!(grove_ops::worktrees::name_for("a/b/c"), "a-b-c");
+        assert_eq!(grove_ops::worktrees::name_for("main"), "main");
     }
 }

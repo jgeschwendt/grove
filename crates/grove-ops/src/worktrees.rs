@@ -12,9 +12,25 @@ use crate::roots::{bare_dir, manifest_path, root_dir};
 use crate::wire::WorktreeOutcomeStatus;
 use crate::{Error, git, manifest};
 
-/// Directories under a root that are never managed worktrees: the bare repo, the
-/// default checkout, and the reserved nursery-pool namespace.
-pub(crate) const RESERVED: &[&str] = &[".git", ".trunk", ".pool"];
+/// Grove's own entries under a root are exactly the dotted ones, and every undotted
+/// child is a checkout. Git refuses a ref component that begins with a dot, so no
+/// branch — and therefore no directory named after one — can ever collide with the
+/// bare, the warm pool or the in-flight-clone marker. That is why this is a predicate
+/// and not a list: a new grove-owned entry needs no edit here, and a user worktree can
+/// never be mistaken for one.
+pub(crate) fn is_reserved(name: &str) -> bool {
+    name.starts_with('.')
+}
+
+/// The directory name a branch checks out under: `feature/x` → `feature-x`.
+///
+/// The one branch-to-directory rule in grove. The trunk is named by it exactly as
+/// every user worktree is, so the trunk directory is not a special name — it is
+/// whichever checkout the manifest's `trunk` (or the bare's HEAD) points at.
+#[must_use]
+pub fn name_for(branch: &str) -> String {
+    branch.replace('/', "-")
+}
 
 /// A worktree with both views: what the manifest declares and whether git has it.
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -72,6 +88,14 @@ pub fn create(
     branch: &str,
     base: Option<&str>,
 ) -> Result<(), Error> {
+    // A branch that doesn't exist yet starts at the trunk unless the caller named a
+    // base. Git's own default start point is the bare's `HEAD`, which reconcile
+    // converges onto the trunk — so the two agree in the settled state and differ in
+    // exactly the window that matters: between a `trunk` edit and the reconcile that
+    // applies it, where `HEAD` still names the branch the root is leaving. A root
+    // whose trunk cannot be resolved (no bare yet) keeps git's default.
+    let trunk = crate::roots::trunk(home, slug).ok().map(|t| t.branch);
+    let base = base.or(trunk.as_deref());
     if crate::pool::promote(home, slug, name, branch, base)? == crate::pool::Promotion::Promoted {
         return Ok(());
     }
@@ -114,7 +138,7 @@ pub fn remove(home: &Path, slug: &str, name: &str) -> Result<(), Error> {
         git::worktree_remove(&bare, &dir).map_err(Error::git)?;
     } else if bare.exists() {
         // The directory was removed out-of-band (a stray `rm -rf`), but git still
-        // holds a `prunable` registration under `.git/worktrees/<name>`. Skipping
+        // holds a `prunable` registration under the bare's `worktrees/<name>`. Skipping
         // the git side would leave that registration alive, so the *next* reconcile
         // re-adopts the worktree we're deleting — the delete wouldn't stick. Prune
         // it so the removal is git-visible before we undeclare.
@@ -300,8 +324,8 @@ pub fn reconcile(home: &Path, slug: &str) -> Result<Vec<WorktreeOutcome>> {
 }
 
 /// git's worktrees as `(name, branch?)` — name from the dir, restricted to checkouts
-/// that sit *directly* under this root (`<root>/<name>`), excluding the bare and the
-/// reserved namespaces (`.trunk`/`.pool`) and nested paths. **A detached checkout is
+/// that sit *directly* under this root (`<root>/<name>`), excluding grove's own dotted
+/// entries, the trunk, and nested paths. **A detached checkout is
 /// retained** (`branch: None`): presence is independent of the branch, so a managed
 /// worktree the user has detached (`git bisect`, `git switch --detach`) still reads as
 /// present — callers that *adopt* (which needs a branch to record) filter `None` out
@@ -316,9 +340,15 @@ fn actual(home: &Path, slug: &str) -> Result<Vec<(String, Option<String>)>> {
     // the as-declared root when it isn't on disk.
     let root = root_dir(home, slug);
     let root = root.canonicalize().unwrap_or(root);
+    // The trunk is a git worktree like any other, and since it is named by its branch
+    // there is no longer anything in its *name* to tell it apart. Which one it is is a
+    // manifest question, asked once per pass. Unresolvable (a root with no bare yet)
+    // excludes nothing — there are no worktrees to classify in that state anyway.
+    let trunk = crate::roots::trunk(home, slug).ok();
+    let trunk = trunk.as_ref().map(|t| t.name.as_str());
     let mut out = Vec::new();
     for wt in git::worktree_list(&bare)? {
-        let Some(name) = adoptable_name(&root, &wt.path) else {
+        let Some(name) = adoptable_name(&root, trunk, &wt.path) else {
             continue;
         };
         out.push((name, wt.branch));
@@ -327,14 +357,17 @@ fn actual(home: &Path, slug: &str) -> Result<Vec<(String, Option<String>)>> {
 }
 
 /// The adoptable name of a git worktree: its basename, IFF it sits *directly* under
-/// `root` (`<root>/<name>`) and isn't a reserved dir. Returns `None` for:
+/// `root` (`<root>/<name>`) and is neither reserved nor the trunk. Returns `None` for:
 /// - an **out-of-tree** worktree (`git worktree add ~/elsewhere/x`) — its path
 ///   doesn't strip under `root`, so it's never adopted by basename as if it lived here;
 /// - a **nested** path (`<root>/.pool/slot-1`, `<root>/a/b`) — more than one segment
 ///   below root, so a warm-pool slot (or any sub-path) never enters the declared set
 ///   *regardless of branch or detachment*;
-/// - a **reserved** direct child (`.git`/`.trunk`/`.pool`).
-fn adoptable_name(root: &Path, wt: &Path) -> Option<String> {
+/// - a **reserved** direct child — any dotted one (`.bare`/`.pool`/the clone marker);
+/// - the **trunk**, which is a checkout the root owns rather than a worktree the
+///   manifest declares: adopting it would put grove's own integration checkout in
+///   `worktrees.<name>`, where a `tree remove` could delete it.
+fn adoptable_name(root: &Path, trunk: Option<&str>, wt: &Path) -> Option<String> {
     // git reports canonical paths; canonicalize again to match the canonical `root`,
     // falling back to the reported path if the dir was removed out-of-band.
     let canonical = wt.canonicalize();
@@ -347,7 +380,7 @@ fn adoptable_name(root: &Path, wt: &Path) -> Option<String> {
         return None; // nested below root — not a direct child
     }
     let name = first.to_str()?;
-    (!RESERVED.contains(&name)).then(|| name.to_string())
+    (!is_reserved(name) && trunk != Some(name)).then(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -367,7 +400,7 @@ mod tests {
         );
     }
 
-    /// A home with one cloned root `o/r` (bare + `.trunk` on `main`).
+    /// A home with one cloned root `o/r` (bare + a `main` trunk checkout).
     fn home_with_root(tmp: &TempDir) -> PathBuf {
         crate::testfix::home_with_root(tmp)
     }
@@ -442,6 +475,51 @@ mod tests {
         );
     }
 
+    /// Without a base, a new branch forks from the **trunk** — the branch this root
+    /// integrates on. Git's own default start point is the bare's `HEAD`, which is
+    /// the same commit once a `trunk` edit has been reconciled and a different one in
+    /// exactly the window this test stands in: declared, not yet converged.
+    #[test]
+    fn create_without_a_base_forks_the_new_branch_from_the_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        let root = root_dir(&home, "o/r");
+
+        // A `canary` one commit ahead of `main`, declared as the trunk by a hand-edit
+        // so the bare's HEAD still names `main`.
+        let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
+        let trunk = root.join("main");
+        git(&trunk, &["checkout", "-q", "-b", "canary"]);
+        std::fs::write(trunk.join("AHEAD.md"), "canary only").unwrap();
+        git(&trunk, &[&id[..], &["add", "."]].concat());
+        git(
+            &trunk,
+            &[&id[..], &["commit", "-q", "-m", "ahead"]].concat(),
+        );
+        git(&trunk, &["checkout", "-q", "main"]);
+        let mpath = manifest_path(&home);
+        let mut doc: toml_edit::DocumentMut =
+            std::fs::read_to_string(&mpath).unwrap().parse().unwrap();
+        doc["roots"]["o/r"]["trunk"] = toml_edit::value("canary");
+        std::fs::write(&mpath, doc.to_string()).unwrap();
+
+        create(&home, "o/r", "feat", "feature/x", None).unwrap();
+
+        assert!(
+            root.join("feat/AHEAD.md").exists(),
+            "the new branch forked from the trunk, not from HEAD"
+        );
+        let declared = manifest::list_worktrees(&mpath, "o/r").unwrap();
+        assert_eq!(
+            declared
+                .iter()
+                .find(|w| w.name == "feat")
+                .and_then(|w| w.base.as_deref()),
+            Some("canary"),
+            "and the base it actually used is the one declared: {declared:?}"
+        );
+    }
+
     #[test]
     fn create_list_remove() {
         let tmp = TempDir::new().unwrap();
@@ -466,7 +544,7 @@ mod tests {
     fn reconcile_adopts_an_out_of_band_worktree() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         let stray = home.join("code/o/r/stray");
         git(
             &bare,
@@ -503,7 +581,7 @@ mod tests {
     fn a_pool_slot_is_excluded_from_list_and_reconcile_even_with_a_branch() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         // A slot under `.pool/` that carries a BRANCH (not detached) — basename-only
         // exclusion would have listed/adopted it; the path-based rule must not.
         let slot = home.join("code/o/r/.pool/slot-1");
@@ -548,7 +626,7 @@ mod tests {
         create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
 
         // Delete the checkout from git but leave it declared.
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         git(
             &bare,
             &[
@@ -596,7 +674,7 @@ mod tests {
         let home = home_with_root(&tmp);
         create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
 
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         let dir = home.join("code/o/r/feat");
         std::fs::remove_dir_all(&dir).unwrap(); // still registered in git
 
@@ -692,7 +770,7 @@ mod tests {
     fn an_out_of_tree_worktree_is_not_adopted() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        let bare = home.join("code/o/r/.git");
+        let bare = bare_dir(&home, "o/r");
         // A worktree OUTSIDE the root dir entirely.
         let outside = tmp.path().join("elsewhere/x");
         std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
@@ -719,5 +797,27 @@ mod tests {
             declared.iter().all(|w| w.name != "x"),
             "out-of-tree worktree not adopted into the manifest"
         );
+    }
+
+    /// The dot rule, both directions. Git refuses a ref component beginning with a
+    /// dot, so "reserved" and "not a possible branch name" are the same set — which
+    /// is what lets grove drop the hand-maintained list the layout used to carry.
+    #[test]
+    fn reserved_is_exactly_the_dotted_names() {
+        for owned in [".bare", ".pool", ".grove-cloning", ".anything-later"] {
+            assert!(is_reserved(owned), "{owned:?} is grove's");
+        }
+        for checkout in ["main", "canary", "feature-x", "release-1.2"] {
+            assert!(!is_reserved(checkout), "{checkout:?} is a checkout");
+        }
+    }
+
+    /// One rule names every checkout, the trunk included — a branch with `/` folded
+    /// to `-`, so a `feature/x` checkout never nests a directory the layout forbids.
+    #[test]
+    fn name_for_folds_slashes_into_dashes() {
+        assert_eq!(name_for("main"), "main");
+        assert_eq!(name_for("feature/x"), "feature-x");
+        assert_eq!(name_for("a/b/c"), "a-b-c");
     }
 }

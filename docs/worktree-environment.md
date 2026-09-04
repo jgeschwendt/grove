@@ -1,7 +1,7 @@
 # The worktree environment
 
 A root's worktrees are separate checkouts of one repository, so each starts without the
-untracked files a developer's `.trunk` accumulated — `.env`, a local config, a credentials
+untracked files a developer's trunk accumulated — `.env`, a local config, a credentials
 file. **Shares** close that gap: a root declares files it wants present in every worktree,
 and grove materializes them.
 
@@ -12,7 +12,7 @@ creates, repoints, or removes a share.
 
 ```toml
 [roots."owner/name".env]
-_.symlink = [".env", "config/app.json"]   # live: a link to the .trunk source
+_.symlink = [".env", "config/app.json"]   # live: a link to the trunk's copy
 _.copy    = ["config/local.json"]         # seeded once: an independent real file
 ```
 
@@ -20,13 +20,13 @@ Two modes, and the asymmetry between them is the whole design:
 
 | | `_.symlink` | `_.copy` |
 |---|---|---|
-| what lands in the worktree | a relative symlink to `../…/.trunk/<p>` | a real file, seeded from `.trunk/<p>` |
+| what lands in the worktree | a relative symlink to `../…/<trunk>/<p>` | a real file, seeded from `<trunk>/<p>` |
 | edits | shared — one file, every worktree sees it | independent per worktree |
 | re-run behaviour | self-heals: a stale grove link is repointed | seed-once: never overwritten |
 | `--fix` | backs a conflict up, then links | no bearing — a copy has no wrong state to heal |
 | on undeclare | GC'd (it holds no data) | left in place (it is a real file the worktree owns) |
 
-A symlink is identifiable as grove's own — its target points under `.trunk` — so it can be
+A symlink is identifiable as grove's own — its target points under the trunk — so it can be
 healed and collected. A seeded copy is indistinguishable from a file the user wrote, so it
 is never overwritten and never collected. `_.setup`, a per-worktree setup command, is
 reserved in the schema and not implemented.
@@ -34,23 +34,24 @@ reserved in the schema and not implemented.
 A path declared in both lists is materialized as a symlink: `manifest::list_shares` gives
 `_.symlink` precedence.
 
-## The source is `.trunk`
+## The source is the trunk
 
-Every share's source is `<root>/.trunk/<p>` — the default-branch checkout. That is what
-makes a symlink share *live*: the worktree link and the operator's own `.trunk` are the
-same file.
+Every share's source is `<trunk>/<p>` — the trunk checkout, resolved once per pass through
+`roots::trunk` and named by its branch like every other checkout under the root (see
+`docs/worktrees.md` § The trunk). That is what makes a symlink share *live*: the worktree
+link and the operator's own trunk copy are the same file.
 
-A source pass runs first, per declared share, and creates `.trunk/<p>` empty when it is
+A source pass runs first, per declared share, and creates `<trunk>/<p>` empty when it is
 missing. A real file or a pre-made directory already there **is** the source and is left
 alone.
 
 **D5 — a user symlink at the source is read through, never replaced.** A symlink where the
-source belongs is the user's own choice of source (`.trunk/.env → ~/secrets/env`), and
-grove respects it: a `_.symlink` share reads *through* it (worktree → `.trunk/<p>` → the
+source belongs is the user's own choice of source (`<trunk>/.env → ~/secrets/env`), and
+grove respects it: a `_.symlink` share reads *through* it (worktree → `<trunk>/<p>` → the
 user's target), and a `_.copy` share's `NOFOLLOW` source open refuses it downstream, so the
 copy is reported per worktree rather than silently following a redirect. Only a non-file,
 non-dir, non-symlink oddity (a fifo, a socket) is replaced, and only because it sits inside
-`.trunk`, which is grove's domain.
+the trunk, which is grove's domain.
 
 ## Detect → fix
 
@@ -64,8 +65,8 @@ before and after, which is what `--dry-run` promises and
 | state at `<wt>/<p>` | verdict | `materialize` (Safe) | `materialize` (Force) |
 |---|---|---|---|
 | absent | `linked` | create the relative link | same |
-| symlink → exactly `../…/.trunk/<p>` | `ok` | nothing | nothing |
-| symlink pointing *under* `.trunk`, wrong path | `repointed` | repoint (temp + same-dir `rename(2)`) | same |
+| symlink → exactly `../…/<trunk>/<p>` | `ok` | nothing | nothing |
+| symlink pointing *under* the trunk, wrong path | `repointed` | repoint (temp + same-dir `rename(2)`) | same |
 | symlink pointing elsewhere (foreign) | `conflict` | **never touched** | back up, then link → `created` |
 | real file / directory / other | `conflict` | **never touched** | back up, then link → `created` |
 
@@ -73,8 +74,8 @@ before and after, which is what `--dry-run` promises and
 
 | state at `<wt>/<p>` | verdict | action |
 |---|---|---|
-| absent | `copied` | seed from `.trunk/<p>` |
-| symlink pointing under `.trunk` (a prior `_.symlink` for this path) | `copied` | replace — the link is data-free; this is the symlink → copy migration |
+| absent | `copied` | seed from `<trunk>/<p>` |
+| symlink pointing under the trunk (a prior `_.symlink` for this path) | `copied` | replace — the link is data-free; this is the symlink → copy migration |
 | foreign symlink / real file / directory | `ok` | leave it: the worktree owns it |
 
 `--fix` (`Fix::Force`) is not in that table because it has no bearing on a copy. Seed-once
@@ -82,7 +83,7 @@ means there is no wrong state to heal.
 
 ### GC on undeclare
 
-A worktree top-level entry that is a symlink to `../.trunk/<name>` for a `<name>` no longer
+A worktree top-level entry that is a symlink to `../<trunk>/<name>` for a `<name>` no longer
 declared is an orphan and is removed (`gc`). `unlinkat` removes the *link*, never its
 target. A real file — including a `_.copy`'s seeded file — or a symlink pointing anywhere
 else is left alone. GC is top-level only; nested-share GC is not implemented.
@@ -101,8 +102,14 @@ row and never aborts the batch.
 ## Never clobber
 
 Only a symlink that is grove's *own* is ever touched. "Grove's own" is a purely lexical
-test on the link target — after any leading `..` components, the first segment is `.trunk`
-— with no I/O and no canonicalization, so it cannot be steered by what is on disk.
+test on the link target — after any leading `..` components, the first segment names the
+trunk — with no I/O and no canonicalization, so it cannot be steered by what is on disk.
+
+The test accepts one further name: `.trunk`, the fixed directory a root still on the legacy
+layout carries its trunk in. A link through it is grove's own, so the next materialize
+repoints it onto the branch-named trunk rather than reading it as a stranger's and leaving
+it (`materialize_repoints_a_legacy_trunk_link`). That is the share half of what
+`grove doctor --fix` migrates, and the only reason the name appears in this module.
 
 A real file, a directory, or a foreign symlink is reported as `conflict` and left exactly
 as it was. `grove doctor` exits **5** on any unresolved conflict, which makes it a usable
@@ -123,10 +130,11 @@ Two independent gates, string and filesystem.
 
 **The string gate** is `manifest::validate_share_path`, applied at `list_shares`, so only
 canonical, traversal-free paths reach the materializer: relative, `Normal` components only,
-no segment beginning with `-`, no `.`/empty/trailing-`/` segments, and a first segment that
-is not one of `.git`/`.trunk`/`.pool`. Canonicality matters beyond traversal: the link pass
-and the GC pass derive paths differently, so a non-canonical stored string would let them
-disagree about the same share.
+no segment beginning with `-`, no `.`/empty/trailing-`/` segments, and no dotted first
+segment once the path nests — the dot rule (`docs/worktrees.md` § Validation), which keeps
+a share from reaching down into grove's own entries while leaving `.env` a share like any
+other. Canonicality matters beyond traversal: the link pass and the GC pass derive paths
+differently, so a non-canonical stored string would let them disagree about the same share.
 
 **The filesystem gate** is a dirfd-pinned `O_NOFOLLOW` descent. Every component of a share
 path *within* the worktree is opened with `openat(NOFOLLOW)` from a pinned dirfd, so a
@@ -134,7 +142,7 @@ symlinked parent (`config → /etc`) trips `ELOOP` and can never redirect a writ
 worktree. `open_dir_nofollow` is the only place a parent component is opened — the one place
 `NOFOLLOW` could be forgotten. Classify and act share one pinned dirfd, which closes the
 lstat → create TOCTOU, and the leaf write is a relative-target temp plus a same-dir
-`rename(2)` on that fd. The base worktree and `.trunk` directories themselves sit under the
+`rename(2)` on that fd. The base worktree and trunk directories themselves sit under the
 grove-controlled `$GROVE_HOME` and are opened `NOFOLLOW` on their final component; their
 ancestors are grove's own, not attacker-influenced.
 
@@ -148,11 +156,11 @@ No `unsafe`, no `libc` — the syscalls come from `rustix`, and the workspace fo
 ## Depth
 
 Shares materialize **only at canonical depth** — a worktree that is a direct sibling of
-`.trunk`. The link target is built as one `..` per path component plus `.trunk/<p>`, which
-is correct exactly one level under the root.
+the trunk. The link target is built as one `..` per path component plus `<trunk>/<p>`,
+which is correct exactly one level under the root.
 
 Warm-pool slots therefore get no shares while they are slots: `<root>/.pool/slot-N` is one
-level deeper, the link would dangle at `.pool/.trunk/…`, and the promote move would
+level deeper, the link would dangle at `.pool/<trunk>/…`, and the promote move would
 invalidate it anyway. `pool::promote` materializes *after* the move, when the worktree has
 reached canonical depth. `fill_materializes_no_shares_in_slots` pins the negative half.
 
@@ -170,8 +178,8 @@ reconcile, because doctor and the next reconcile retry it. Doctor is the pass wh
 an operator reads, so its report is the answer.
 
 Only **present** worktrees are visited (`worktrees::list`, filtered on `present`), and
-`.trunk` and the reserved namespaces are never treated as worktrees. A root whose `.trunk`
-is missing contributes a single `error` row — "trunk missing — clone/realize the root
+neither the trunk nor grove's own dotted entries are ever treated as worktrees. A root
+whose trunk is missing contributes a single `error` row — "trunk missing — clone/realize the root
 first" — rather than a per-share pile.
 
 ## The report

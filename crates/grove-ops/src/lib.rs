@@ -228,7 +228,7 @@ mod tests {
         let roots = crate::roots::list(&home).unwrap();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].slug, SLUG);
-        assert!(crate::roots::root_dir(&home, SLUG).join(".trunk").is_dir());
+        assert!(crate::roots::trunk_dir(&home, SLUG).is_dir());
 
         crate::roots::remove(&home, SLUG, crate::roots::Removal::Guarded).unwrap();
         assert!(crate::roots::list(&home).unwrap().is_empty());
@@ -241,7 +241,7 @@ mod tests {
     fn apply_adopts_an_undeclared_bare_then_realizes_it() {
         let tmp = TempDir::new().unwrap();
         let (home, _src) = home_with_writable_src(&tmp);
-        // Undeclare, leaving the bare + .trunk on disk: exactly what adopt is for.
+        // Undeclare, leaving the bare + trunk on disk: exactly what adopt is for.
         crate::manifest::remove_root(&home.join("manifest.toml"), SLUG).unwrap();
         assert!(crate::roots::list(&home).unwrap().is_empty());
 
@@ -339,7 +339,7 @@ mod tests {
         );
     }
 
-    /// The realized half of the pair above: a root with a `.trunk` on disk reports
+    /// The realized half of the pair above: a root with a trunk checkout on disk reports
     /// its git drift inline, so the dashboard reads status and worktrees in one call.
     #[test]
     fn worktree_list_carries_trunk_git_status() {

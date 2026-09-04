@@ -285,7 +285,7 @@ impl ApiClient {
     }
 
     /// `POST /api/roots/sync {slug}` — ask a running daemon to fetch one root and
-    /// fast-forward its `.trunk`.
+    /// fast-forward its trunk.
     ///
     /// **Accept-only**, like the reconcile nudge and unlike doctor: the ack says the
     /// root's engine recorded the request, never that the fetch finished, so this
@@ -816,7 +816,7 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"ready",
             "pool":{"observed":1,"target":2},"syncing":false,
-            "trunk":"/home/code/o/r/.trunk","worktrees":[
+            "trunk":"/home/code/o/r/main","trunk_branch":"main","worktrees":[
               {"name":"feat","branch":"feature/x","declared":true,"present":true,
                "path":"/home/code/o/r/feat"}
             ]}],"logs":[]}}"#;

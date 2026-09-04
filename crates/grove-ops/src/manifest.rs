@@ -20,6 +20,13 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 pub struct Root {
     pub slug: String,
     pub url: String,
+    /// The branch this repo integrates on — the one whose checkout is the root's
+    /// trunk, and the source every share links through. Absent is the common case
+    /// and means "whatever the bare's HEAD names", i.e. the remote's default: a
+    /// declaration is only needed by a repo that integrates somewhere else (`canary`
+    /// while the remote's default stays `main`). Read leniently — an unusable value
+    /// reads as absent, and `audit` is where it is named.
+    pub trunk: Option<String>,
 }
 
 /// A declared worktree, nested under its root (`[roots."<slug>".worktrees."<name>"]`).
@@ -32,7 +39,7 @@ pub struct Worktree {
 }
 
 /// A declared static share under `[roots."<slug>".env]` — a file the root shares
-/// into every worktree, as a live `_.symlink` (link to the `.trunk` source) or a
+/// into every worktree, as a live `_.symlink` (link to the trunk's copy) or a
 /// seeded `_.copy` (an independent real file). `_.setup` (a per-worktree setup
 /// command) is reserved for a later slice. See `docs/worktrees.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,8 +48,8 @@ pub struct Share {
     pub mode: ShareMode,
 }
 
-/// How a share is materialized into a worktree: a live `Symlink` to the `.trunk`
-/// source, or an independent `Copy` seeded from it (seed-once — the worktree owns
+/// How a share is materialized into a worktree: a live `Symlink` to the trunk's
+/// copy, or an independent `Copy` seeded from it (seed-once — the worktree owns
 /// the copy thereafter, so it is never overwritten or GC'd).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -72,18 +79,20 @@ pub fn validate_slug(slug: &str) -> Result<()> {
 
 /// A worktree `name` is one directory level under the root + a TOML key, so it
 /// must be a single safe path segment — exactly one `Normal` component (stricter
-/// than a slug: no `/`), no `..`/absolute/control/backslash — and never one of
-/// grove's own RESERVED dirs (`.git`/`.trunk`/`.pool`), the same rejection
-/// [`validate_share_path`] makes on a share's first segment.
+/// than a slug: no `/`), no `..`/absolute/control/backslash — and never a dotted
+/// name ([`crate::worktrees::is_reserved`]), the same rejection
+/// [`validate_share_path`] makes on a share's first path segment.
 ///
 /// The reserved gate is load-bearing, not tidiness. A worktree declared at
 /// `<root>/.pool` is a *sibling of the slots and their parent*: `promote` sorts
 /// slots by path, picks `<root>/.pool` ahead of `<root>/.pool/slot-0`, and
 /// `git worktree move`s the entire warm pool into the user's new worktree —
 /// warm-pool state destroyed, two registered worktrees nested inside a third.
-/// `.trunk` is milder but also real: the declaration persists while the git-side
+/// `.bare` is milder but also real: the declaration persists while the git-side
 /// `worktree add` fails on the existing dir, leaving a permanent `failed` row on
-/// every reconcile. Rejecting here covers both entrances at once — the API
+/// every reconcile. Nothing is lost by the breadth of the rule — git refuses a ref
+/// component beginning with a dot, so no branch a worktree could hold is spelled
+/// this way. Rejecting here covers both entrances at once — the API
 /// (`add_worktree`) and a hand-edited/git-synced manifest (`list_worktrees`, which
 /// skips names that fail this).
 pub fn validate_name(name: &str) -> Result<()> {
@@ -93,14 +102,14 @@ pub fn validate_name(name: &str) -> Result<()> {
     let safe = !name.is_empty()
         && !name.contains('\\')
         && !name.bytes().any(|b| b.is_ascii_control())
-        && !crate::worktrees::RESERVED.contains(&name)
+        && !crate::worktrees::is_reserved(name)
         && single_segment;
     if safe {
         Ok(())
     } else {
         bail!(
             "invalid worktree name {name:?}: must be a single path segment with no '/' or '..', \
-             and not one of grove's reserved dirs (.git/.trunk/.pool)"
+             and must not begin with '.' (grove's own entries under a root)"
         );
     }
 }
@@ -120,18 +129,20 @@ fn validate_ref_arg(kind: &str, v: &str) -> Result<()> {
 /// A share `path` is a RELATIVE path of one-or-more safe segments — nested
 /// (`config/app.json`) is allowed, unlike a worktree `name`. It is `validate_slug`'s
 /// twin with two added rejections: no segment may begin with `-` (anti-flag, like
-/// [`validate_ref_arg`]), and the first segment may not be a RESERVED dir
-/// (`.git`/`.trunk`/`.pool`) — a share must never alias grove's own dirs or link
-/// into the bare. (`.env` is a dotfile *leaf*, not a reserved dir, so it passes.)
+/// [`validate_ref_arg`]), and a share may not be rooted at a *directory* whose name is
+/// reserved ([`crate::worktrees::is_reserved`]) — it must never alias grove's own
+/// entries or link into the bare. The gate is on the first segment **as a directory**,
+/// so a dotfile *leaf* (`.env`, the share this exists for) passes.
 /// It must also be **canonical** — no `.`/empty (`//`)/trailing-`/` segments — so
 /// the stored string equals what `grove_ops::env` materializes (else the link pass
 /// and GC pass, which derive paths differently, would disagree on the same share).
 /// The string gate; `grove_ops::env`'s `O_NOFOLLOW` descent is the filesystem gate.
 pub fn validate_share_path(p: &str) -> Result<()> {
     let path = Path::new(p);
-    let first_reserved = match path.components().next() {
+    let mut segments = path.components();
+    let first_reserved = match segments.next() {
         Some(Component::Normal(s)) => {
-            crate::worktrees::RESERVED.contains(&s.to_str().unwrap_or(""))
+            segments.next().is_some() && crate::worktrees::is_reserved(&s.to_string_lossy())
         }
         _ => false,
     };
@@ -213,6 +224,16 @@ pub fn audit(path: &Path) -> Result<Vec<Invalid>> {
                 "root has no `url` string; it is never realized".into(),
             );
         }
+        if let Some(trunk) = item.get("trunk") {
+            match trunk.as_str() {
+                None => invalid(None, "`trunk` is not a string; it names a branch".into()),
+                Some(branch) => {
+                    if let Err(e) = validate_ref_arg("trunk", branch) {
+                        invalid(None, format!("{e:#}"));
+                    }
+                }
+            }
+        }
         for (name, worktree) in worktrees_table(&doc, slug).into_iter().flatten() {
             if let Err(e) = validate_name(name) {
                 invalid(Some(name), format!("{e:#}"));
@@ -288,6 +309,7 @@ pub fn list(path: &Path) -> Result<Vec<Root>> {
                 roots.push(Root {
                     slug: slug.to_string(),
                     url: url.to_string(),
+                    trunk: trunk_of(item),
                 });
             }
         }
@@ -422,6 +444,16 @@ pub fn remove_worktree(path: &Path, slug: &str, name: &str) -> Result<()> {
         }
         Ok(())
     })
+}
+
+/// A root's declared `trunk` branch, or `None` when absent — or present and
+/// unusable. Lenient like every other read here: a non-string or flag-shaped value
+/// reads as "undeclared", so the root falls back to the bare's HEAD and converges
+/// rather than wedging on a typo. [`audit`] is the loud half.
+fn trunk_of(root: &Item) -> Option<String> {
+    let branch = root.get("trunk")?.as_str()?;
+    validate_ref_arg("trunk", branch).ok()?;
+    Some(branch.to_string())
 }
 
 fn worktrees_table<'a>(doc: &'a DocumentMut, slug: &str) -> Option<&'a Table> {
@@ -931,14 +963,15 @@ mod tests {
 
     #[test]
     fn validate_name_requires_a_single_safe_segment() {
-        for ok in ["my-feature", "wt1", "..foo"] {
+        for ok in ["my-feature", "wt1", "release-1.2"] {
             assert!(validate_name(ok).is_ok(), "{ok:?} should be ok");
         }
-        // `.git`/`.trunk`/`.pool` are grove's own dirs: a worktree declared at one
-        // of them either wedges reconcile (`.trunk`) or lets `promote` move the whole
-        // warm pool into a user worktree (`.pool`).
+        // A dotted name is grove's own: a worktree declared at one either wedges
+        // reconcile (`.bare`) or lets `promote` move the whole warm pool into a user
+        // worktree (`.pool`). `..foo` is rejected by the same rule, and loses nothing
+        // — git will not carry a ref component that begins with a dot either.
         for bad in [
-            "", "a/b", "..", ".", "/abs", "a\\b", ".git", ".trunk", ".pool",
+            "", "a/b", "..", ".", "/abs", "a\\b", ".bare", ".pool", "..foo",
         ] {
             assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
         }
@@ -1067,8 +1100,67 @@ mod tests {
             list(&path).unwrap(),
             vec![Root {
                 slug: "owner/repo".into(),
-                url: "https://x/owner/repo.git".into()
+                url: "https://x/owner/repo.git".into(),
+                trunk: None,
             }]
+        );
+    }
+
+    /// The `trunk` key is the one thing a root may say about *which* branch it
+    /// integrates on. It reads back as declared, and — the property every grove
+    /// mutator depends on — a read-modify-write of some other key leaves it alone.
+    #[test]
+    fn trunk_reads_back_and_survives_a_read_modify_write() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        std::fs::write(&path, "[roots.\"o/r\"]\nurl = \"u\"\ntrunk = \"canary\"\n").unwrap();
+
+        assert_eq!(list(&path).unwrap()[0].trunk.as_deref(), Some("canary"));
+        add_worktree(&path, "o/r", "feat", "feature/x", None).unwrap();
+        assert_eq!(
+            list(&path).unwrap()[0].trunk.as_deref(),
+            Some("canary"),
+            "an unrelated mutation round-trips the declaration untouched"
+        );
+    }
+
+    /// Absent is the common case, and must stay absent: a root that never declared a
+    /// trunk follows the bare's HEAD, and a write must not mint a key that pins it.
+    #[test]
+    fn an_undeclared_trunk_stays_absent_through_a_write() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        add_root(&path, "o/r", "u").unwrap();
+        add_worktree(&path, "o/r", "feat", "feature/x", None).unwrap();
+
+        assert_eq!(list(&path).unwrap()[0].trunk, None);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("trunk"));
+    }
+
+    /// `trunk` reaches `git worktree add` as a commit-ish, so it is validated like
+    /// `branch`/`base`: the read side drops an unusable value (the root still
+    /// converges on its bare's HEAD) and `audit` is where the operator sees it named.
+    #[test]
+    fn an_invalid_trunk_is_dropped_on_read_and_reported_by_audit() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        std::fs::write(
+            &path,
+            "[roots.\"o/r\"]\nurl = \"u\"\ntrunk = \"--orphan\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            list(&path).unwrap()[0].trunk,
+            None,
+            "unusable reads as absent"
+        );
+        let audited = audit(&path).unwrap();
+        assert!(
+            audited
+                .iter()
+                .any(|i| i.slug == "o/r" && i.item.is_none() && i.reason.contains("trunk")),
+            "{audited:?}"
         );
     }
 
@@ -1519,7 +1611,7 @@ mod tests {
 
     #[test]
     fn validate_share_path_rejects_reserved_dir_first_segment() {
-        for bad in [".git/config", ".trunk/x", ".pool/y"] {
+        for bad in [".bare/config", ".pool/y", ".grove-cloning/z"] {
             assert!(
                 validate_share_path(bad).is_err(),
                 "{bad:?} should be rejected"
@@ -1528,8 +1620,8 @@ mod tests {
         // The reserved check is on the first SEGMENT as a dir, not dotfile leaves.
         assert!(validate_share_path(".env").is_ok());
         assert!(
-            validate_share_path("sub/.git").is_ok(),
-            ".git as a non-first segment is fine"
+            validate_share_path("sub/.bare").is_ok(),
+            "a dotted name below the first segment is a leaf, not grove's dir"
         );
     }
 

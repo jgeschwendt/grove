@@ -34,8 +34,8 @@ Nothing depends on process continuity:
 - desired state is `manifest.toml`, actual state is git on disk, and there is no database;
 - engine status, the pool count and the log ring are caches, re-derived or simply empty on
   the next boot;
-- an abandoned clone is re-derived from disk — a bare with no `.trunk` is exactly the
-  half-realized state `reconcile_one` finishes;
+- an abandoned clone is re-derived from disk — a bare with no trunk checkout is exactly
+  the half-realized state `reconcile_one` finishes;
 - `roots::adopt` at boot re-declares any on-disk bare that lost its manifest entry.
 
 So a substrate may stop, snapshot, move and restart the process freely. The bounded drain

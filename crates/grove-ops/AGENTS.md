@@ -17,13 +17,13 @@ invariants:
     anchor: crates/grove-ops/src/roots.rs#unsaved_work
   - claim: "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone"
     anchor: lm:reconcile-additive
-  - claim: "a share never destroys a human's or agent's file — only a symlink pointing under .trunk is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
+  - claim: "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
     anchor: lm:never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: lm:sync-never-forces
-  - claim: "a root whose .trunk vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own"
+  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own"
     anchor: lm:trunk-recovery-guard
-  - claim: "worktree depth is load-bearing: every worktree is a direct sibling of .trunk and shares materialize only at that depth, so pool.fill adds a slot one level deeper and materializes nothing"
+  - claim: "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout and shares materialize only at that depth, so pool.fill adds a slot one level deeper and materializes nothing"
     anchor: lm:worktree-depth
   - claim: "the warm pool is claimed by the realizer, not by a caller: worktrees::create and worktrees::reconcile both promote a slot before cold-checking-out, so every path that realizes a declared worktree redeems the pool; and convergence runs both ways, fill adding a slot below target and reclaim giving the highest one back above it"
     anchor: crates/grove-ops/src/worktrees.rs#create
@@ -42,15 +42,15 @@ hazards:
 ## Anchors in this territory
 
 - lm:clock-seam → tests/harness_meta.rs:354
-- lm:delete-before-undeclare → src/roots.rs:119
-- lm:files-authoritative → src/manifest.rs:277
-- lm:lane-is-callers → src/env.rs:120
-- lm:never-clobber → src/env.rs:250
-- lm:promote-attach-before-move → src/pool.rs:159
-- lm:reconcile-additive → src/worktrees.rs:227
-- lm:sync-never-forces → src/roots.rs:436
+- lm:delete-before-undeclare → src/roots.rs:167
+- lm:files-authoritative → src/manifest.rs:298
+- lm:lane-is-callers → src/env.rs:122
+- lm:never-clobber → src/env.rs:273
+- lm:promote-attach-before-move → src/pool.rs:163
+- lm:reconcile-additive → src/worktrees.rs:251
+- lm:sync-never-forces → src/roots.rs:594
 - lm:test-reachability → tests/harness_meta.rs:152
-- lm:trunk-recovery-guard → src/roots.rs:391
+- lm:trunk-recovery-guard → src/roots.rs:547
 - lm:wire-error-codes → src/error.rs:48
 - lm:worktree-depth → src/pool.rs:59
 

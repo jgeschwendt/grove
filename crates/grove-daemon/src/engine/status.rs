@@ -15,7 +15,7 @@ use grove_api::status::RootStatus;
 /// What disk says about a root, and the *only* filesystem read the engine does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiskStatus {
-    /// The bare clone and `.trunk` are both there.
+    /// The bare clone and the trunk checkout are both there.
     Ready,
     /// One or both are absent.
     Missing,
@@ -73,9 +73,9 @@ pub const fn next_status(current: RootStatus, transition: Transition) -> RootSta
 }
 
 /// The engine's one filesystem read: a root is `Ready` on disk when its bare clone
-/// **and** its `.trunk` checkout are both present.
+/// **and** its trunk checkout are both present.
 ///
-/// Both, not either: a bare with no `.trunk` is exactly the half-realized state
+/// Both, not either: a bare with no trunk checkout is exactly the half-realized state
 /// reconcile exists to finish, and calling it ready would leave the share source —
 /// and every worktree link into it — dangling.
 #[must_use]
@@ -239,7 +239,7 @@ mod tests {
     }
 
     /// The disk read itself, against real fixtures: a realized root is `Ready`, an
-    /// undeclared one is `Missing`, and a bare whose `.trunk` vanished is `Missing`
+    /// undeclared one is `Missing`, and a bare whose trunk checkout vanished is `Missing`
     /// rather than half-ready.
     #[test]
     fn disk_status_wants_both_the_bare_and_the_trunk() {
@@ -248,11 +248,11 @@ mod tests {
         assert_eq!(disk_status(&home, testfix::SLUG), DiskStatus::Ready);
         assert_eq!(disk_status(&home, "o/never-declared"), DiskStatus::Missing);
 
-        std::fs::remove_dir_all(testfix::root_dir(&home, testfix::SLUG).join(".trunk")).unwrap();
+        std::fs::remove_dir_all(testfix::trunk_dir(&home, testfix::SLUG)).unwrap();
         assert_eq!(
             disk_status(&home, testfix::SLUG),
             DiskStatus::Missing,
-            "a bare with no .trunk is not ready — that is what reconcile finishes"
+            "a bare with no trunk checkout is not ready — that is what reconcile finishes"
         );
     }
 }

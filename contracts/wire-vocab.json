@@ -1,6 +1,6 @@
 {
   "adopt_status": ["adopted", "skipped"],
-  "check_kind": ["manifest", "install_under_home", "root", "bare", "trunk", "worktree", "drift"],
+  "check_kind": ["manifest", "install_under_home", "legacy_layout", "root", "bare", "trunk", "worktree", "drift"],
   "check_status": ["ok", "missing", "mismatch", "invalid", "undeclared", "unavailable"],
   "cold_reason": ["empty", "conflict"],
   "error_codes": ["not_declared", "not_ready", "invalid_input", "conflict", "network", "git", "io"],
@@ -18,7 +18,7 @@
   "reconcile_ack": ["scheduled"],
   "reconcile_status": ["cloned", "present", "failed"],
   "root_status": ["ready", "cloning", "degraded", "missing", "unknown", "unavailable"],
-  "root_view_keys": ["pool", "slug", "status", "sync_note", "syncing", "trunk", "trunk_status", "url", "worktrees"],
+  "root_view_keys": ["pool", "slug", "status", "sync_note", "syncing", "trunk", "trunk_branch", "trunk_status", "url", "worktrees"],
   "share_status": ["ok", "created", "linked", "copied", "repointed", "conflict", "gc", "error"],
   "snapshot_keys": ["logs", "roots"],
   "sync_ack": ["accepted"],
