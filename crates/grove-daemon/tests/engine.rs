@@ -700,14 +700,27 @@ async fn a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_
 async fn a_restarted_engine_re_derives_its_status_from_disk() {
     let tmp = TempDir::new().unwrap();
     let (home, _src) = declared_home(&tmp);
-    let room = Room::new(home.clone());
+    let mut room = Room::new(home.clone());
 
     let first = room.start(SLUG);
     settles_on(&first, RootStatus::Ready).await;
     first.stop();
+    room.drain();
 
     let restarted = room.start(SLUG);
     settles_on(&restarted, RootStatus::Ready).await;
+    // That `ready` was derived from disk before the start-up reconcile ran, and the
+    // reconcile outlives `stop()` — in-flight lane work runs to completion and reports
+    // to a mailbox nobody reads. Let it land before pulling the root out from under
+    // it: a reconcile that reaches `realize` after the deletions below re-clones the
+    // root, and the third engine's own clone then collides with it and reports a
+    // failure over a disk that is by then `ready`.
+    collect_until(
+        &mut room.events,
+        "the restarted engine's reconcile to finish",
+        |e| is_finished(e, TaskKind::Reconcile),
+    )
+    .await;
 
     // And the other direction: a root whose trunk checkout vanished out of band is
     // rediscovered as missing, not remembered as ready.
