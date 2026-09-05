@@ -494,6 +494,106 @@ async fn slow_doctor_reports_the_plumbing_checks_beside_the_share_report() {
     daemon.state.shutdown.fire();
 }
 
+/// The refusal's whole life over the wire: a root still on the legacy layout reads
+/// `degraded` in `GET /api/roots` **with the reason beside it**, and a scoped
+/// `POST /api/doctor {"fix": true}` both migrates it and leaves it `ready` — no
+/// second request, no restart.
+///
+/// The second half is the one that needs a live daemon to pin. Convergence is
+/// push-based, and the migration touches nothing the watcher watches (it renames
+/// directories under the root; the watch is on `manifest.toml`), so without the
+/// route's own nudge the engine would sit on a `degraded` it earned before the fix,
+/// over a disk that has been realized since.
+#[tokio::test]
+async fn slow_doctor_fix_migrates_a_legacy_root_and_leaves_it_ready() {
+    let tmp = TempDir::new().unwrap();
+    let home = legacy_home(&tmp);
+    let daemon = Harness::start(&home, false).await;
+
+    let degraded = until(&daemon, "the legacy root to be refused", |root| {
+        (root.status == RootStatus::Degraded).then(|| root.error.clone())
+    })
+    .await;
+    let error = degraded.expect("a refused root carries the reason it was refused");
+    assert!(error.contains("legacy layout"), "{error}");
+    assert!(error.contains("grove doctor --fix"), "{error}");
+
+    daemon
+        .post("/api/doctor", &json!({"slug": testfix::SLUG, "fix": true}))
+        .await;
+
+    let ready = until(&daemon, "the migrated root to re-derive", |root| {
+        (root.status == RootStatus::Ready).then(|| root.error.clone())
+    })
+    .await;
+    assert_eq!(ready, None, "a ready root carries no failure text");
+    assert!(grove_ops::roots::bare_dir(&home, testfix::SLUG).is_dir());
+    assert!(
+        grove_ops::roots::root_dir(&home, testfix::SLUG)
+            .join("main")
+            .is_dir()
+    );
+}
+
+/// A home declaring `o/r` over the layout grove laid down before the trunk was named
+/// by its branch: the bare at `.git`, the trunk checkout at `.trunk`.
+///
+/// Built by hand rather than through `testfix`, whose fixtures build the layout that
+/// exists *now* — one produced by grove's own writers would be a fixture that cannot
+/// regress with them.
+fn legacy_home(tmp: &TempDir) -> PathBuf {
+    let src = tmp.path().join("src");
+    testfix::fixture_repo(&src);
+
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    grove_ops::manifest::add_root(
+        &grove_ops::roots::manifest_path(&home),
+        testfix::SLUG,
+        src.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let root = grove_ops::roots::root_dir(&home, testfix::SLUG);
+    std::fs::create_dir_all(&root).unwrap();
+    let bare = root.join(grove_ops::layout::LEGACY_BARE);
+    let trunk = root.join(grove_ops::layout::LEGACY_TRUNK);
+    let path = |p: &Path| p.to_str().expect("fixture paths are utf-8").to_owned();
+    testfix::git(&home, &["clone", "-q", "--bare", &path(&src), &path(&bare)]);
+    testfix::git(&bare, &["worktree", "add", "-q", &path(&trunk), "main"]);
+    home
+}
+
+/// Poll `GET /api/roots` for `o/r` until `probe` accepts its row, or fail the test.
+///
+/// A poll over the snapshot rather than a wait on the stream, for the reason the
+/// engine suite polls: what is asserted here is a *settled* row, and waiting on the
+/// event that happens to carry it would couple the assertion to an event order
+/// neither the refusal nor the migration promises.
+async fn until<T>(
+    daemon: &Harness,
+    what: &str,
+    probe: impl Fn(&grove_api::routes::RootView) -> Option<T>,
+) -> T {
+    // One budget around the whole loop rather than a count of turns: a snapshot is a
+    // full round trip, so a fixed number of them is a deadline nobody can read off
+    // the page — and on the failing path, the only one that ever spends it, that is
+    // what turns a regression into a several-minute test.
+    tokio::time::timeout(BUDGET, async {
+        loop {
+            let snapshot: Snapshot = daemon.get("/api/roots").await;
+            if let Some(row) = snapshot.roots.iter().find(|r| r.slug == testfix::SLUG)
+                && let Some(value) = probe(row)
+            {
+                return value;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
 /// A whole-home doctor over a root whose lane will not answer: the root is *named*
 /// as unavailable, its engine status still travels, and the run still succeeds —
 /// v1's "a slow root contributes nothing", made visible.

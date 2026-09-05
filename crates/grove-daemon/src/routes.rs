@@ -331,6 +331,14 @@ pub async fn remove_worktree(
 /// or stopped on a terminal fault is invisible to every other check doctor runs. A
 /// daemon with no engine room (a caller that claimed the reconcile mailbox) reports
 /// none, which is honest — nothing is driving those roots.
+///
+/// **A root this pass migrated off the legacy layout is nudged afterwards.** Its
+/// engine refused to clone over that layout and is resting on `degraded`, which
+/// convergence is push-based (invariant `push-only`) and nothing here re-derives:
+/// the root would read `degraded` over a now-realized disk until some unrelated
+/// event moved it. The migration is that event, so this route delivers it — the same
+/// `roots_changed` a manifest change sends, and the reason `--fix` is the whole of
+/// the operator's recovery rather than `--fix` plus a restart.
 pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let request = match doctor_request(&headers, &body) {
         Ok(request) => request,
@@ -376,12 +384,16 @@ pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Byt
         })
         .collect();
 
+    let mut migrated = Vec::new();
     for (slug, pass) in slugs.into_iter().zip(passes) {
         let outcome = pass
             .await
             .unwrap_or_else(|e| Err(format!("the doctor pass panicked: {e}")));
         match outcome {
             Ok(pass) => {
+                if pass.migrated {
+                    migrated.push(slug.clone());
+                }
                 data.report.extend(pass.report);
                 data.pools.extend(pass.pools);
                 data.checks.extend(pass.checks);
@@ -395,6 +407,16 @@ pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Byt
 
     if let Some(engines) = state.engines.get() {
         data.statuses = engines.statuses(request.slug.as_deref()).await;
+        // After the report, so it describes the home doctor found rather than the one
+        // the nudge is on its way to producing. A migrated root is `degraded` in
+        // `statuses` — that is what the operator's `--fix` just cleared — and the
+        // nudge is what turns it `ready` without waiting for an unrelated event.
+        for slug in migrated {
+            if let Some(engine) = engines.engine(&slug).await {
+                tracing::info!(slug = %slug, "root migrated off the legacy layout; re-deriving");
+                engine.roots_changed();
+            }
+        }
     }
     Reply::ok(data).into_response()
 }
@@ -415,11 +437,20 @@ async fn root_pass(
     let job = state.lanes.run(&slug, Priority::Foreground, {
         let slug = slug.clone();
         move || {
+            // Observed here rather than read out of the report, because a *successful*
+            // migration contributes nothing to it: `doctor::run` reports one row per
+            // root it could not migrate and stays silent on the ones it did. Both
+            // reads sit inside this job, so they bracket the migration on the same
+            // lane the migration ran on and no other writer can move the root between
+            // them.
+            let root = grove_ops::roots::root_dir(&home, &slug);
+            let was_legacy = grove_ops::layout::legacy(&root).is_some();
             let (report, pools) = grove_ops::doctor::run(&home, Some(&slug), dry_run, fix)?;
             Ok::<_, grove_ops::Error>(RootPass {
                 report,
                 pools,
                 checks: grove_ops::doctor::root_checks(&home, &slug),
+                migrated: was_legacy && grove_ops::layout::legacy(&root).is_none(),
             })
         }
     });
@@ -441,6 +472,10 @@ struct RootPass {
     report: Vec<grove_ops::env::ShareOutcome>,
     pools: Vec<grove_ops::pool::PoolStatus>,
     checks: Vec<Check>,
+    /// This pass retired the root's legacy layout — the one finding here that leaves
+    /// an engine's cached status stale, since the root it refused to clone is now
+    /// realized on disk. See [`doctor`], which nudges it.
+    migrated: bool,
 }
 
 /// The row a root that did not answer contributes to a whole-home report.

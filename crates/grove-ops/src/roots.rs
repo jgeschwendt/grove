@@ -439,6 +439,46 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
         }
     }
 
+    // The clone arm below is the only path here that writes into a root directory
+    // grove has never realized, and it reads the absence of `.bare` as "nothing is
+    // here" — which is false in two shapes, each guarded once, in this order:
+    //
+    // 1. **A legacy root.** Its bare is at `.git` and its checkout at `.trunk`, so
+    //    every probe the arm makes says missing and it would clone a whole second
+    //    root beside the first, leaving both to be untangled by hand. The order is
+    //    load-bearing: both legacy names are dotted, so the occupancy check below
+    //    reads them as grove's own and would not fire.
+    // 2. **An occupied root.** Anything under the root that is not grove's own is a
+    //    human's, and cloning into it interleaves grove's layout with theirs.
+    //
+    // Both refuse rather than migrate or move: reconcile adds, never deletes, and the
+    // migration is `grove doctor --fix`'s, where the operator asked for it.
+    let dir = root_dir(home, &root.slug);
+    if let Some(legacy) = crate::layout::legacy(&dir) {
+        return Applied {
+            slug: root.slug.clone(),
+            status: ReconcileStatus::Failed,
+            default_branch: None,
+            error: Some(format!(
+                "root is in the legacy layout ({legacy}): run `grove doctor --fix` to \
+                 migrate it in place"
+            )),
+        };
+    }
+    let foreign = foreign_entries(&dir);
+    if !foreign.is_empty() {
+        return Applied {
+            slug: root.slug.clone(),
+            status: ReconcileStatus::Failed,
+            default_branch: None,
+            error: Some(format!(
+                "root directory holds {}; refusing to clone into it (remove them, or \
+                 `grove clone remove` the root)",
+                foreign.join(", ")
+            )),
+        };
+    }
+
     match clone_and_trunk(home, root, &bare) {
         Ok(branch) => Applied {
             slug: root.slug.clone(),
@@ -1300,6 +1340,87 @@ mod tests {
             reconcile_one(&home, "o/r").unwrap().status,
             ReconcileStatus::Present
         );
+    }
+
+    /// A root declared without realizing it, so the clone arm is what runs.
+    fn declared_unrealized(tmp: &TempDir) -> PathBuf {
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        manifest::add_root(&manifest_path(&home), "o/r", src.to_str().unwrap()).unwrap();
+        home
+    }
+
+    /// The pre-0.2 layout reads as "no bare here" to every probe the clone arm makes,
+    /// so an un-guarded reconcile lays a whole second root down beside the first and
+    /// leaves the operator to remove it by hand. The refusal names the remedy, and —
+    /// because a legacy root is one `grove doctor --fix` away from working — writes
+    /// nothing at all.
+    #[test]
+    fn reconcile_one_refuses_a_root_in_the_legacy_layout() {
+        let tmp = TempDir::new().unwrap();
+        let home = declared_unrealized(&tmp);
+        let root = root_dir(&home, "o/r");
+        let legacy_bare = root.join(crate::layout::LEGACY_BARE);
+        let legacy_trunk = root.join(crate::layout::LEGACY_TRUNK);
+        std::fs::create_dir_all(&legacy_bare).unwrap();
+        std::fs::write(legacy_bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(&legacy_trunk).unwrap();
+
+        let applied = reconcile_one(&home, "o/r").unwrap();
+
+        assert_eq!(applied.status, ReconcileStatus::Failed);
+        let error = applied.error.as_deref().unwrap();
+        assert!(error.contains("legacy layout"), "{applied:?}");
+        assert!(error.contains("grove doctor --fix"), "{applied:?}");
+        assert!(
+            !bare_dir(&home, "o/r").exists(),
+            "no second root beside the legacy one"
+        );
+        assert!(
+            legacy_bare.join("HEAD").is_file(),
+            "the legacy bare is read"
+        );
+        assert!(legacy_trunk.is_dir(), "the legacy trunk is read");
+    }
+
+    /// The same arm would clone into any occupied root — a directory an operator laid
+    /// out by hand, a root whose bare was deleted under it. What is not grove's own is
+    /// somebody's, and the refusal names it rather than interleaving a clone with it.
+    #[test]
+    fn reconcile_one_refuses_to_clone_into_an_occupied_root() {
+        let tmp = TempDir::new().unwrap();
+        let home = declared_unrealized(&tmp);
+        let root = root_dir(&home, "o/r");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("notes.txt"), "mine").unwrap();
+
+        let applied = reconcile_one(&home, "o/r").unwrap();
+
+        assert_eq!(applied.status, ReconcileStatus::Failed);
+        assert!(
+            applied.error.as_deref().unwrap().contains("notes.txt"),
+            "the refusal names what it found: {applied:?}"
+        );
+        assert!(!bare_dir(&home, "o/r").exists(), "nothing was cloned");
+        assert!(root.join("notes.txt").exists());
+    }
+
+    /// And grove's own entries are not occupancy: a `.pool` left behind by a removed
+    /// root — or by a crashed clone — still clones, because the fill pass prunes stale
+    /// slots and the alternative is a root nothing but a hand-delete can realize.
+    #[test]
+    fn reconcile_one_clones_into_a_root_holding_only_groves_own() {
+        let tmp = TempDir::new().unwrap();
+        let home = declared_unrealized(&tmp);
+        let root = root_dir(&home, "o/r");
+        std::fs::create_dir_all(root.join(".pool")).unwrap();
+
+        let applied = reconcile_one(&home, "o/r").unwrap();
+
+        assert_eq!(applied.status, ReconcileStatus::Cloned, "{applied:?}");
+        assert!(bare_dir(&home, "o/r").join("HEAD").exists());
+        assert!(trunk_dir(&home, "o/r").join("README.md").exists());
     }
 
     #[test]

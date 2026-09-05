@@ -326,6 +326,7 @@ mod tests {
         let entry = RootStatusEntry {
             slug: "o/r".into(),
             status: RootStatus::Cloning,
+            error: None,
         };
         let err = ApiError::new(ErrorCode::Unavailable, "still cloning")
             .with_data(serde_json::to_value(&entry).unwrap());

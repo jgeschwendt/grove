@@ -139,6 +139,7 @@ looking at the same thing.
     "slug": "o/r",
     "url": "git@github.com:o/r.git",
     "status": "ready",                       // root_status
+    "error": "root is in the legacy…",       // why it is degraded; omitted otherwise
     "pool": {"observed": 1, "target": 2},
     "syncing": true,
     "sync_note": "diverged",                 // omitted when there is none
@@ -161,6 +162,16 @@ looking at the same thing.
 
 Absent optionals are **omitted, never rendered as `null`**, and that is pinned byte for
 byte by `a_snapshot_serializes_the_shape_a_dashboard_renders`.
+
+`error` is why a `degraded` root is degraded: the text of the reconcile failure that put it
+there, carried so an operator reads a next move rather than reconstructing one. Reconcile's
+refusals are the case that needs it — a root still on the legacy layout, or one whose
+directory holds files that are not grove's, is a deliberate no-op with a specific command
+that clears it, and `degraded` alone reads as a broken clone to retry
+(`docs/worktrees.md` § Root realization). It is present only while the status *is*
+`degraded`, and only for a root whose engine is running: nothing on disk records why a
+reconcile failed, so a restarted daemon re-derives the status and re-earns the text on its
+next reconcile.
 
 `trunk_branch` travels beside `trunk` rather than being read back out of it: the checkout
 is named by folding the branch's `/` to `-`, so `feature-x` cannot be un-folded into
@@ -316,8 +327,9 @@ whole-home materializing converge.
 
 `report` is required; the other three default to empty.
 
-`statuses` carries every running engine's status and is the only place `cloning` and
-`degraded` are observable — neither is derivable from disk. A daemon with no engine room
+`statuses` carries every running engine's status — with the same `error` text beside a
+`degraded` one that the snapshot's row carries — and is the only place `cloning` and
+`degraded` are observable at all: neither is derivable from disk. A daemon with no engine room
 reports none, which is honest: nothing is driving those roots.
 
 `checks` is the git-plumbing pass, and it is **report-only** but for one finding: `fix`
@@ -337,7 +349,8 @@ a diagnosis.
 | `drift` | what does git know about that the manifest does not |
 
 `legacy-layout` is the one finding `--fix` acts on, because it is the one a reconcile
-cannot reach: the root is intact and converged, it is simply named the old way. The fix
+cannot reach: the content is all there, simply named the old way, and realization refuses
+such a root rather than cloning beside it (`docs/worktrees.md` § Root realization). The fix
 migrates it in place, each step idempotent so an interrupted run resumes — rename the bare
 to `.bare` and rewrite every worktree's gitdir pointer, rename `.trunk` to the directory
 the trunk branch names and rewrite the registration that points back at it, set the bare's

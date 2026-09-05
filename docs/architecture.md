@@ -45,6 +45,16 @@ no second source of truth. Everything the daemon holds in memory is a cache:
 A daemon may be killed and restarted with only the filesystem intact. Nothing depends on
 process continuity, and an abandoned clone is re-derived from disk on the next boot.
 
+Reading actual state means reading the whole root directory, not the one entry the realizer
+came for. A root carrying the legacy layout — a bare at `.git`, a checkout at `.trunk` —
+and a root holding anything that is not grove's own both read as *missing* to the clone
+arm's probes, and cloning either would lay a second root down beside what is there.
+Realization refuses both instead, naming what it found: reconcile adds and never deletes,
+so the four answers a declared-but-absent root can get are two refusals, a trunk recovery
+and a clone (`docs/worktrees.md` § Root realization). A refusal is a `failed` outcome, so
+the daemon degrades that root and waits; `grove doctor --fix` migrates a legacy root in
+place, and the engine re-derives it from disk.
+
 The manifest is edited format-preservingly through `toml_edit`, under an exclusive
 advisory `flock` on a sibling `manifest.toml.lock` — never on the manifest itself, which
 a write replaces by rename, so a lock on its inode would not survive its own

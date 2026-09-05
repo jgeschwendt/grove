@@ -291,7 +291,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
         Some(engines) => engines.engine(&slug).await,
         None => None,
     };
-    let (status, syncing, sync_note) = engine_state(engine.as_ref()).await;
+    let state_of = engine_state(engine.as_ref()).await;
 
     let deadline = state.clock.deadline(SNAPSHOT_BUDGET);
     let reads = {
@@ -313,10 +313,11 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
         Some(Ok(reads)) => RootView {
             slug,
             url: root.url,
-            status,
+            status: state_of.status,
+            error: state_of.error,
             pool: reads.pool,
-            syncing,
-            sync_note,
+            syncing: state_of.syncing,
+            sync_note: state_of.sync_note,
             trunk,
             trunk_branch,
             trunk_status: reads.trunk_status,
@@ -340,9 +341,13 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
                 slug,
                 url: root.url,
                 status: RootStatus::Unavailable,
+                // Not the engine's degrade text: the row no longer reports the
+                // status that text explains, and a reason printed beside
+                // `unavailable` would name a failure this row is not describing.
+                error: None,
                 pool: PoolView::default(),
-                syncing,
-                sync_note,
+                syncing: state_of.syncing,
+                sync_note: state_of.sync_note,
                 trunk,
                 trunk_branch,
                 trunk_status: None,
@@ -381,20 +386,36 @@ fn trunk_view(home: &Path, slug: &str) -> (String, String) {
     )
 }
 
+/// Everything a row reads out of the running engine, as one value: what the two
+/// in-memory reads below answer.
+struct EngineState {
+    status: RootStatus,
+    /// Why the root is `degraded`; see [`grove_api::routes::RootView::error`].
+    error: Option<String>,
+    syncing: bool,
+    sync_note: Option<SyncNote>,
+}
+
 /// The two in-memory engine reads. A root with no engine — the daemon is running
 /// without an engine room, or the set has not caught up with a fresh declaration —
 /// reports `unknown`, which is what "no driver has an opinion yet" means.
-async fn engine_state(engine: Option<&Engine>) -> (RootStatus, bool, Option<SyncNote>) {
+async fn engine_state(engine: Option<&Engine>) -> EngineState {
     let Some(engine) = engine else {
-        return (RootStatus::Unknown, false, None);
+        return EngineState {
+            status: RootStatus::Unknown,
+            error: None,
+            syncing: false,
+            sync_note: None,
+        };
     };
-    let status = engine.status().await.unwrap_or(RootStatus::Unavailable);
+    let info = engine.status_info().await.ok();
     let sync = engine.sync_info().await.ok();
-    (
-        status,
-        sync.is_some_and(|sync| sync.syncing),
-        sync.and_then(|sync| sync.note),
-    )
+    EngineState {
+        status: info.as_ref().map_or(RootStatus::Unavailable, |i| i.status),
+        error: info.and_then(|i| i.error),
+        syncing: sync.is_some_and(|sync| sync.syncing),
+        sync_note: sync.and_then(|sync| sync.note),
+    }
 }
 
 fn worktree_view(root_dir: &std::path::Path, wt: WorktreeStatus) -> WorktreeView {

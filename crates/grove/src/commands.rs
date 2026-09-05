@@ -216,6 +216,12 @@ fn listing(home: &Path, api: &ApiClient, slug: &str) -> Result<Vec<String>, CliE
             root.pool.observed,
             root.pool.target
         ));
+        // Under the header, before the checkouts: a degraded root's reason is the
+        // whole reason to read this listing, and the daemon is the only place it
+        // exists — nothing on disk records why a reconcile refused.
+        if let Some(error) = &root.error {
+            lines.push(format!("  {error}"));
+        }
         if root.status != grove_api::RootStatus::Unavailable {
             // The snapshot's own answer for which branch this root integrates on. A
             // daemon that predates `trunk_branch` sends nothing, and a row named
@@ -472,6 +478,9 @@ fn offline_statuses(home: &Path, slug: Option<&str>) -> Vec<grove_api::RootStatu
             grove_api::RootStatusEntry {
                 slug: root.slug,
                 status,
+                // Nothing on disk records why a reconcile failed, and the two
+                // statuses derivable here are never the one that carries a reason.
+                error: None,
             }
         })
         .collect()
@@ -884,6 +893,25 @@ mod tests {
         assert_eq!(lines[0], "root o/r: cloning — pool 0/2");
         assert_eq!(lines[1], "release-2  release/2 (trunk)", "{lines:?}");
         assert!(lines[2].starts_with("feat  feature/x"), "{lines:?}");
+    }
+
+    /// A `degraded` root's reason is on the wire and nowhere else: reconcile refuses a
+    /// legacy or occupied root without writing a thing, so the listing is the only
+    /// place an operator learns which of those it is — and which command clears it.
+    #[test]
+    fn tree_list_prints_why_a_degraded_root_degraded() {
+        let body = r#"{"ok":true,"data":{"roots":[{
+            "slug":"o/r","url":"file:///src","status":"degraded",
+            "error":"root is in the legacy layout (.git is a bare repo): run `grove doctor --fix` to migrate it in place",
+            "pool":{"observed":0,"target":0},"syncing":false,
+            "trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[]}],"logs":[]}}"#;
+        let api = ApiClient::at(envelope_server(body), BUDGET);
+        let tmp = TempDir::new().unwrap();
+
+        let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
+
+        assert_eq!(lines[0], "root o/r: degraded — pool 0/0", "{lines:?}");
+        assert!(lines[1].contains("grove doctor --fix"), "{lines:?}");
     }
 
     /// The trunk is a checkout no worktree list carries — adopting it is what would

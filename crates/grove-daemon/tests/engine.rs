@@ -337,6 +337,87 @@ async fn a_terminal_fault_degrades_where_a_transient_one_re_derives() {
     );
 }
 
+/// A root still on the layout grove laid down before the trunk was named by its
+/// branch — the bare at `.git`, the checkout at `.trunk` — degrades, and the degrade
+/// is **readable**: the engine carries the refusal's own sentence beside the status,
+/// so an operator reads which command clears it rather than a bare `degraded`.
+///
+/// Clearing it is the second half, and it takes both moves. `grove doctor --fix` is
+/// the only thing that can migrate the root — reconcile is additive and refuses —
+/// and convergence is push-based (invariant `push-only`), so without the nudge
+/// `POST /api/doctor` sends afterwards the root would read `degraded` over a realized
+/// disk until some unrelated event moved it.
+#[tokio::test]
+async fn a_legacy_root_degrades_with_its_reason_and_clears_after_doctor_fix() {
+    let tmp = TempDir::new().unwrap();
+    let (home, src) = declared_home(&tmp);
+
+    // Laid out by hand: grove's own writers only produce the layout that exists now,
+    // so a fixture built through them could not regress with them.
+    let dir = grove_ops::roots::root_dir(&home, SLUG);
+    let legacy_bare = dir.join(grove_ops::layout::LEGACY_BARE);
+    let legacy_trunk = dir.join(grove_ops::layout::LEGACY_TRUNK);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |p: &Path| p.to_str().expect("fixture paths are utf-8").to_owned();
+    testfix::git(
+        &home,
+        &["clone", "-q", "--bare", &path(&src), &path(&legacy_bare)],
+    );
+    testfix::git(
+        &legacy_bare,
+        &["worktree", "add", "-q", &path(&legacy_trunk), "main"],
+    );
+
+    let mut room = Room::new(home.clone());
+    let engine = room.start(SLUG);
+    settles_on(&engine, RootStatus::Degraded).await;
+
+    let error = engine
+        .status_info()
+        .await
+        .unwrap()
+        .error
+        .expect("a degraded root carries the reason it degraded");
+    assert!(error.contains("legacy layout"), "{error}");
+    assert!(error.contains("grove doctor --fix"), "{error}");
+    assert!(
+        !grove_ops::roots::bare_dir(&home, SLUG).exists(),
+        "the refusal cloned a second root beside the legacy one"
+    );
+
+    // The reconcile outlives the status it set, and the migration below renames the
+    // very directories that reconcile reads — let it land first, exactly as
+    // `a_restarted_engine_re_derives_its_status_from_disk` does before its deletions.
+    collect_until(&mut room.events, "the refused reconcile to finish", |e| {
+        is_finished(e, TaskKind::Reconcile)
+    })
+    .await;
+
+    // What `POST /api/doctor {"fix": true}` runs, and the nudge that route sends
+    // after a root it migrated.
+    let migrated = tokio::task::spawn_blocking({
+        let home = home.clone();
+        move || grove_ops::doctor::run(&home, Some(SLUG), false, true)
+    })
+    .await
+    .unwrap();
+    let (report, _pools) = migrated.expect("the doctor pass ran");
+    assert!(
+        report.is_empty(),
+        "the migration reported a failure: {report:?}"
+    );
+    engine.roots_changed();
+
+    settles_on(&engine, RootStatus::Ready).await;
+    assert_eq!(
+        engine.status_info().await.unwrap().error,
+        None,
+        "the reason outlived the degrade it explained"
+    );
+    assert!(grove_ops::roots::bare_dir(&home, SLUG).is_dir());
+    assert!(dir.join("main").is_dir());
+}
+
 // ── sync ────────────────────────────────────────────────────────────────────────
 
 /// The note's whole life: absent after a clean sync, set when the trunk diverges,

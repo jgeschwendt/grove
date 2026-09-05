@@ -53,6 +53,7 @@ use rustix::fs::{
 use rustix::io::Errno;
 use serde::{Deserialize, Serialize};
 
+use crate::layout::LEGACY_TRUNK;
 use crate::manifest::{self, Share, ShareMode};
 use crate::roots::{self, list as list_roots, manifest_path, root_dir};
 use crate::{Error, worktrees};
@@ -653,13 +654,6 @@ fn trunk_relative_target(trunk: &str, p: &Path) -> PathBuf {
     target.push(p);
     target
 }
-
-/// The directory a root's trunk sits in on a layout that predates naming it by its
-/// branch — the one legacy name this module knows, and the only reason the string
-/// appears here at all. It is grove's own directory, so a link through it is grove's
-/// own link: recognizing it below is the whole of the share migration, since the next
-/// materialize then repoints every such link onto the branch-named trunk.
-const LEGACY_TRUNK: &str = ".trunk";
 
 /// Is a symlink target grove's own — i.e. `(../)* <trunk>/…`, with the trunk spelled
 /// either by its branch-derived name or as [`LEGACY_TRUNK`]? Such a link is a

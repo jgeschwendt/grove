@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod env;
 mod error;
 pub mod git;
+pub mod layout;
 pub mod manifest;
 pub mod pool;
 pub mod roots;

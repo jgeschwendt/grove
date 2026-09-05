@@ -204,13 +204,13 @@ impl Set {
             let mut out = Vec::with_capacity(engines.len());
             for engine in engines {
                 // On the injected clock, not tokio's — see `wait::within`.
-                let status = crate::wait::within(budget, &*clock, engine.status())
+                let info = crate::wait::within(budget, &*clock, engine.status_info())
                     .await
-                    .unwrap_or(Ok(RootStatus::Unavailable))
-                    .unwrap_or(RootStatus::Unavailable);
+                    .and_then(Result::ok);
                 out.push(RootStatusEntry {
                     slug: engine.slug().to_owned(),
-                    status,
+                    status: info.as_ref().map_or(RootStatus::Unavailable, |i| i.status),
+                    error: info.and_then(|i| i.error),
                 });
             }
             // Degraded first, then by slug: the recovery channel for a wedged clone

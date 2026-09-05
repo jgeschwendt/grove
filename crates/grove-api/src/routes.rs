@@ -214,6 +214,10 @@ pub struct DoctorData {
 pub struct RootStatusEntry {
     pub slug: String,
     pub status: RootStatus,
+    /// Why the root is `degraded` — see [`RootView::error`], which carries the same
+    /// text for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// The whole observable world: `GET /api/roots`' body, and the first frame of
@@ -242,6 +246,22 @@ pub struct RootView {
     /// are empty, and saying "ready" beside an empty worktree list would be a lie a
     /// UI cannot detect.
     pub status: RootStatus,
+    /// Why the root is `degraded`: the text of the reconcile failure that put it
+    /// there, as the operator's next move rather than a diagnosis to reconstruct.
+    ///
+    /// A refusal is the case that needs it. `degraded` alone reads as "the clone
+    /// broke, retry it", and grove's two refusals — a root still on the legacy
+    /// layout, a root directory holding someone else's files — are the opposite: the
+    /// reconcile deliberately touched nothing and there is a specific command that
+    /// clears it. Without the text an operator cannot tell those apart from an
+    /// unreachable remote.
+    ///
+    /// Present only while the status *is* `degraded`, and only for a root whose
+    /// engine is running: nothing on disk records why a reconcile failed
+    /// (invariant `status-is-a-cache`), so a restarted daemon re-derives the status
+    /// and re-earns the text on its next reconcile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub pool: PoolView,
     /// A sync is pending or in flight.
     pub syncing: bool,
@@ -322,6 +342,7 @@ mod tests {
                 slug: "o/r".into(),
                 url: "git@github.com:o/r.git".into(),
                 status: RootStatus::Ready,
+                error: None,
                 pool: PoolView {
                     observed: 1,
                     target: 2,

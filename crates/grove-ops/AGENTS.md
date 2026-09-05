@@ -21,7 +21,7 @@ invariants:
     anchor: lm:never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: lm:sync-never-forces
-  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own"
+  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own; and a root carrying the legacy layout, or any entry that is not grove's own, is refused outright — reconcile never clones into an occupied directory"
     anchor: lm:trunk-recovery-guard
   - claim: "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout and shares materialize only at that depth, so pool.fill adds a slot one level deeper and materializes nothing"
     anchor: lm:worktree-depth
@@ -44,13 +44,13 @@ hazards:
 - lm:clock-seam → tests/harness_meta.rs:354
 - lm:delete-before-undeclare → src/roots.rs:167
 - lm:files-authoritative → src/manifest.rs:298
-- lm:lane-is-callers → src/env.rs:122
-- lm:never-clobber → src/env.rs:273
+- lm:lane-is-callers → src/env.rs:123
+- lm:never-clobber → src/env.rs:274
 - lm:promote-attach-before-move → src/pool.rs:163
 - lm:reconcile-additive → src/worktrees.rs:251
-- lm:sync-never-forces → src/roots.rs:594
+- lm:sync-never-forces → src/roots.rs:634
 - lm:test-reachability → tests/harness_meta.rs:152
-- lm:trunk-recovery-guard → src/roots.rs:547
+- lm:trunk-recovery-guard → src/roots.rs:587
 - lm:wire-error-codes → src/error.rs:48
 - lm:worktree-depth → src/pool.rs:59
 

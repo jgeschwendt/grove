@@ -33,6 +33,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::layout::{LEGACY_BARE, LEGACY_TRUNK, is_legacy_bare};
 use crate::{Result, env, git, manifest, pool, roots, worktrees};
 
 /// Doctor's share/pool half, shared verbatim by the daemon's `POST /api/doctor` route
@@ -63,20 +64,6 @@ pub fn run(
     });
     let pools = pool::status(home, slug)?;
     Ok((report, pools))
-}
-
-/// The bare's directory under a root before the trunk was named by its branch, and
-/// the trunk checkout's beside it. The only two places grove still spells them are
-/// [`legacy_check`], which names the layout, and [`migrate_root`], which retires it;
-/// everything else reads [`roots::bare_dir`] and [`roots::trunk`].
-const LEGACY_BARE: &str = ".git";
-const LEGACY_TRUNK: &str = ".trunk";
-
-/// Is `<root>/.git` the legacy bare? A bare repository is a directory with a `HEAD`
-/// in it — which is what separates it from a linked worktree's gitlink of the same
-/// name, a *file*, and from a root that holds no repository at all.
-fn is_legacy_bare(path: &Path) -> bool {
-    path.is_dir() && path.join("HEAD").is_file()
 }
 
 /// Retire the legacy layout on every root in scope, reporting one error row per root

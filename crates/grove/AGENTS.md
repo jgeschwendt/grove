@@ -35,7 +35,7 @@ edges:
 
 ## Anchors in this territory
 
-- lm:apply-is-ungated → src/commands.rs:410
+- lm:apply-is-ungated → src/commands.rs:416
 - lm:busy-refuses-destructive → src/commands.rs:69
 - lm:cli-health-poll → src/server.rs:489
 - lm:pending-marker → src/update/layout.rs:178

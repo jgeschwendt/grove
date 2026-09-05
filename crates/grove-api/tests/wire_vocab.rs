@@ -134,6 +134,11 @@ fn root_view() -> RootView {
         slug: "o/r".into(),
         url: "https://example.invalid/o/r.git".into(),
         status: RootStatus::Ready,
+        // `Some`, against the status beside it: the row is built with nothing omitted
+        // so that `skip_serializing_if` cannot hide a key from the fixture, and a
+        // `ready` root that also names a failure is exactly the shape no producer
+        // emits — which is the point, since this pins names, not consistency.
+        error: Some("root is in the legacy layout".into()),
         pool: PoolView {
             observed: 1,
             target: 2,

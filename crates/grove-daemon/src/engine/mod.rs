@@ -84,6 +84,24 @@ pub struct SyncInfo {
     pub note: Option<SyncNote>,
 }
 
+/// A root's cached status and, while it is `degraded`, the text of the failure that
+/// put it there.
+///
+/// The two travel together because the second is only ever read beside the first:
+/// `degraded` is the engine's word for "the last reconcile did not converge this
+/// root", and it covers an unreachable remote and a deliberate refusal alike. Only
+/// the text tells an operator which one they are looking at — and, for a refusal,
+/// which command clears it.
+///
+/// Like the status itself, the text is a cache and nothing else (invariant
+/// `status-is-a-cache`): a restarted daemon re-derives the status from disk and
+/// re-earns the text on its next reconcile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusInfo {
+    pub status: RootStatus,
+    pub error: Option<String>,
+}
+
 /// Why an engine could not answer.
 #[derive(Debug)]
 pub enum EngineError {
@@ -139,7 +157,7 @@ pub struct Engine {
 enum Msg {
     /// The manifest changed (or was re-announced): re-derive, mark a reconcile.
     RootsChanged,
-    Status(oneshot::Sender<RootStatus>),
+    Status(oneshot::Sender<StatusInfo>),
     SyncInfo(oneshot::Sender<SyncInfo>),
     /// Accept-only: set the flag, kick the driver, answer at once.
     Sync(oneshot::Sender<()>),
@@ -188,6 +206,7 @@ impl Engine {
             slug: Arc::clone(&slug),
             deps,
             status: RootStatus::Unknown,
+            error: None,
             target: 0,
             pool: 0,
             bg: None,
@@ -215,6 +234,12 @@ impl Engine {
 
     /// This root's cached status.
     pub async fn status(&self) -> Result<RootStatus, EngineError> {
+        self.status_info().await.map(|info| info.status)
+    }
+
+    /// This root's cached status and, while it is `degraded`, why — the pair every
+    /// view that renders a degraded root needs. See [`StatusInfo`].
+    pub async fn status_info(&self) -> Result<StatusInfo, EngineError> {
         self.ask(Msg::Status).await
     }
 
@@ -259,6 +284,13 @@ struct Driver {
     slug: Arc<str>,
     deps: Deps,
     status: RootStatus,
+    /// Why the last reconcile left this root `degraded`.
+    ///
+    /// Written by every path that *enters* `degraded` and read only while the status
+    /// is still that, so a text can neither be missing under a fresh degrade nor
+    /// outlive the one it describes — [`Driver::status_info`] is where the second
+    /// half of that is enforced.
+    error: Option<String>,
     /// The declared warm-slot target, re-read by every reconcile task.
     target: u32,
     /// The observed warm-slot count — **a hint, not truth**. The one cache in a
@@ -293,7 +325,7 @@ impl Driver {
                     self.drive();
                 }
                 Msg::Status(reply) => {
-                    let _ = reply.send(self.status);
+                    let _ = reply.send(self.status_info());
                 }
                 Msg::SyncInfo(reply) => {
                     let _ = reply.send(SyncInfo {
@@ -557,6 +589,11 @@ impl Driver {
                     );
                 }
                 self.status = status;
+                // The op's own sentence, verbatim: `realize` writes the remedy into
+                // it (`grove doctor --fix` for a legacy root, which entries to move
+                // for an occupied one), and anything this end composed instead would
+                // be a second, worse rendering of a fact ops already phrased.
+                self.error = applied.error;
                 outcome
             }
             // A *terminal* fault will not heal on the next manifest event — a
@@ -569,6 +606,7 @@ impl Driver {
                     slug = %self.slug, code = e.code(), error = %e,
                     "reconcile hit a terminal ops fault; degrading"
                 );
+                self.error = Some(e.to_string());
                 self.status = RootStatus::Degraded;
                 TaskOutcome::Failed
             }
@@ -650,6 +688,7 @@ impl Driver {
         match kind {
             TaskKind::Reconcile => {
                 tracing::warn!(slug = %self.slug, "reconcile task crashed; degrading root");
+                self.error = Some("the reconcile task crashed".into());
                 self.status = RootStatus::Degraded;
             }
             TaskKind::Sync => {
@@ -678,6 +717,23 @@ impl Driver {
             tracing::info!(slug = %self.slug, from = %self.status, to = %status, "engine status");
         }
         self.status = status;
+    }
+
+    /// The status, and the failure text only while the status is still the one that
+    /// text describes.
+    ///
+    /// Masked here rather than cleared on the way out of `degraded` because the ways
+    /// out are many — a derive from disk, a dispatched reconcile, an applied one —
+    /// and each would have to remember. The ways *in* are three, each of which sets
+    /// the text, so this one read is where the pairing is total.
+    fn status_info(&self) -> StatusInfo {
+        StatusInfo {
+            status: self.status,
+            error: match self.status {
+                RootStatus::Degraded => self.error.clone(),
+                _ => None,
+            },
+        }
     }
 
     fn publish(&self, event: Event) {

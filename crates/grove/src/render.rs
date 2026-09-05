@@ -141,6 +141,12 @@ pub fn statuses(rows: &[RootStatusEntry]) {
     });
     for row in rows {
         println!("root {}: {}", row.slug, row.status.as_str());
+        // Indented under the row it explains: `degraded` alone reads as "the clone
+        // broke", and grove's refusals — a legacy layout, an occupied root
+        // directory — are the opposite, each naming the command that clears it.
+        if let Some(error) = &row.error {
+            println!("  {error}");
+        }
     }
 }
 

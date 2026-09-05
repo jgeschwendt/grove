@@ -45,7 +45,7 @@ edges:
 - lm:loopback-bind-gate → src/config.rs:200
 - lm:mutation-guard → src/guard.rs:66
 - lm:per-root-lane → src/lane.rs:172
-- lm:push-only → src/engine/mod.rs:323
+- lm:push-only → src/engine/mod.rs:355
 - lm:readiness-whitelist → src/guard.rs:21
 - lm:status-is-a-cache → src/engine/status.rs:52
 - lm:unauthenticated-api → src/guard.rs:31

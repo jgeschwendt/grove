@@ -116,9 +116,10 @@ shares while they are slots — the relative link `../<trunk>/<p>` would dangle 
 `.pool/slot-N/`, and the promote move would invalidate it anyway.
 
 A root laid out the legacy way — a bare at `.git`, a checkout at `.trunk` — is doctor's
-`legacy-layout` finding, and
-`grove doctor --fix` migrates it in place. Nothing else in grove reads those two names;
-see `docs/api.md` § Doctor.
+`legacy-layout` finding, and `grove doctor --fix` migrates it in place. Realization refuses
+such a root rather than cloning beside it (§ Root realization). `grove_ops::layout` is
+where those two names are spelled, and nothing else in grove reads them; see
+`docs/api.md` § Doctor.
 
 ## The trunk
 
@@ -207,34 +208,55 @@ reconcile that root's worktrees, then materialize its shares. It is idempotent �
 
 Converging the trunk comes first because *which* directory is the trunk is a manifest
 question, and a trunk change left unapplied would make the rest of the pass see a root
-whose trunk checkout is missing — the destructive-adjacent path below — rather than one
-whose trunk simply moved.
+whose trunk checkout is missing — the trunk recovery below — rather than one whose trunk
+simply moved.
 
 `Err` is reserved for not-declared and lookup faults. A clone or guard failure is an
 `Ok(Applied { status: Failed })`, so one wedged root never aborts a sweep;
 `grove_ops::apply` (the offline `grove apply`) relies on that to report a failed root
 beside its healthy neighbours.
 
-One path is destructive-adjacent and worth stating plainly: the bare exists but the trunk
-checkout is gone (it vanished out of band — a stray `rm`, a `git worktree prune`; grove
-never produces this state itself). Three answers, cheapest and least destructive first:
+A root that is not already present is decided by reading the root *directory*, not the
+manifest: the absence of `.bare` is not the same as nothing being there. Four answers,
+cheapest and least destructive first — only the last two write anything.
 
-1. **Refuse** if the bare carries other live worktrees — a user's checkouts, possibly with
-   uncommitted work. Reconcile adds and never deletes. The outcome is `failed` with
-   "recreate it, or `grove clone remove` the root", and the check fails safe: if
+1. **Refuse a legacy root.** A bare at `.git` with a checkout at `.trunk` is the layout
+   that predates naming the trunk by its branch, and every probe the clone arm makes reads
+   *missing* against it — so cloning would lay a whole second root down beside the first,
+   both left to be untangled by hand. The outcome is `failed` with "run `grove doctor
+   --fix` to migrate it in place", and nothing under the root is created or removed:
+   migration stays in doctor, where an operator asked for it. `grove_ops::layout` is the
+   one spelling of those two names, read by doctor's `legacy-layout` finding and by the
+   realizer, so the two cannot disagree about what a legacy root is.
+2. **Refuse an occupied root.** Anything under the root that is not grove's own is
+   somebody's, and a clone would interleave grove's layout with theirs, so the outcome is
+   `failed` naming the entries. A root holding *only* grove's own — a `.pool` a removed
+   root or a crashed clone left behind — still clones: the fill pass prunes stale slots,
+   and the alternative is a root nothing but a hand-delete can realize. The legacy check
+   comes first, and that order is load-bearing: both legacy names are dotted, so occupancy
+   alone reads them as grove's own and would clone straight past them.
+3. **Re-add the trunk** when the bare is there and its checkout is gone — it vanished out
+   of band (a stray `rm`, a `git worktree prune`); grove never produces this state itself.
+   Prune, then `git worktree add` from the bare that is already there: a checkout, not a
+   repository, is what went missing, so this is the whole of the real repair and it touches
+   nothing else under the root. It is **refused** when the bare carries other live
+   worktrees — a user's checkouts, possibly with uncommitted work — as `failed` with
+   "recreate it, or `grove clone remove` the root". That check fails safe: if
    `git worktree list` errors at all, grove assumes worktrees may exist and refuses. The
    root's own checkouts — every dotted entry, the pool's slots by path, and the trunk being
-   recovered — are what that count excludes.
-2. **Re-add the trunk** from the bare that is already there (prune, then
-   `git worktree add`). This is the whole of the real repair — a checkout, not a
-   repository, is what went missing — and it touches nothing else under the root.
-3. Only when the bare cannot produce a worktree at all is a re-clone the answer, and a
-   re-clone means deleting the root directory. That happens **only if the directory holds
-   nothing but grove's own entries** — the dotted ones: `.bare`, `.pool`, the
-   in-flight-clone marker. Anything else — a human's notes, a vendored tree, an unrelated
-   clone — makes it a `failed` outcome naming what it would have destroyed. This is the one
-   path where grove would `rm -rf` a directory a human also writes into, unattended, on a
-   reconcile nobody asked for.
+   recovered — are what its count excludes.
+4. **Clone**, which is a root's first realization and, when the bare cannot produce a
+   worktree at all, its re-clone. A re-clone means deleting the root directory first, so it
+   happens **only if the directory holds nothing but grove's own entries** — the dotted
+   ones: `.bare`, `.pool`, the in-flight-clone marker — and names what it would have
+   destroyed otherwise. This is the one path where grove would `rm -rf` a directory a human
+   also writes into, unattended, on a reconcile nobody asked for.
+
+A refusal is an `Applied` carrying its reason, so it reads the same on both realizers:
+`grove apply` prints `failed  <slug>: <reason>` beside the roots that converged, and the
+daemon degrades that root, where it waits for an operator rather than a retry clock.
+`grove doctor --fix` is what clears a legacy root — it migrates the layout in place, and
+the engine re-derives the root as `ready` from disk on the next event.
 
 A clone in flight writes a `.grove-cloning` marker in the root for the length of the
 network fetch: `gix` materializes `<root>/.bare` with its `origin` before a byte of the
@@ -385,6 +407,8 @@ that does not serialize per root loses an invariant this crate was written again
 `crates/grove-ops/src/roots.rs`, `worktrees.rs` and `pool.rs` carry the unit suites —
 including `remove_then_adopt_declares_nothing`, `remove_keeps_the_root_declared_on_a_partial_delete`,
 `reconcile_one_refuses_to_wipe_live_worktrees_when_trunk_is_missing`,
+`reconcile_one_refuses_a_root_in_the_legacy_layout`,
+`reconcile_one_refuses_to_clone_into_an_occupied_root`,
 `a_trunk_change_creates_the_new_checkout_and_adopts_the_old_one`,
 `create_without_a_base_forks_the_new_branch_from_the_trunk`,
 `a_pool_slot_is_excluded_from_list_and_reconcile_even_with_a_branch`,

@@ -18,7 +18,7 @@
   "reconcile_ack": ["scheduled"],
   "reconcile_status": ["cloned", "present", "failed"],
   "root_status": ["ready", "cloning", "degraded", "missing", "unknown", "unavailable"],
-  "root_view_keys": ["pool", "slug", "status", "sync_note", "syncing", "trunk", "trunk_branch", "trunk_status", "url", "worktrees"],
+  "root_view_keys": ["error", "pool", "slug", "status", "sync_note", "syncing", "trunk", "trunk_branch", "trunk_status", "url", "worktrees"],
   "share_status": ["ok", "created", "linked", "copied", "repointed", "conflict", "gc", "error"],
   "snapshot_keys": ["logs", "roots"],
   "sync_ack": ["accepted"],
