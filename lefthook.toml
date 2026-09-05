@@ -15,25 +15,27 @@
 # mise.toml's pin — and a newer clippy carries lints the pinned one doesn't, so
 # the two gates disagree: `mise run check` passes while the commit hook rejects
 # untouched code. Pinning both to mise makes that class of failure impossible.
-pre-commit:
-  parallel: true
-  commands:
-    # `--check`, not the mutating form: lefthook does not re-stage what a command
-    # rewrites, so a bare `cargo fmt` reformats the tree AFTER the index was read —
-    # the unformatted blob lands in history, the worktree is left dirty, and CI's
-    # `cargo fmt --all -- --check` fails on the pushed commit. A gate that agrees
-    # with `mise run check` is the whole point of this file.
-    cargo-fmt:
-      glob: "*.rs"
-      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo fmt --all -- --check
-    cargo-lint:
-      glob: "*.rs"
-      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo clippy --workspace -- -D warnings
-    # Lib-fast tier: the default nextest profile (no `slow_*`), unit tests only.
-    # Integration targets and doctests are the full `mise run test`/CI gate's job.
-    cargo-test:
-      glob: "*.rs"
-      run: unset $(git rev-parse --local-env-vars) && mise exec -- cargo nextest run --workspace --lib
+[pre-commit]
+parallel = true
+
+# `--check`, not the mutating form: lefthook does not re-stage what a command
+# rewrites, so a bare `cargo fmt` reformats the tree AFTER the index was read —
+# the unformatted blob lands in history, the worktree is left dirty, and CI's
+# `cargo fmt --all -- --check` fails on the pushed commit. A gate that agrees
+# with `mise run check` is the whole point of this file.
+[pre-commit.commands.cargo-fmt]
+glob = "*.rs"
+run = "unset $(git rev-parse --local-env-vars) && mise exec -- cargo fmt --all -- --check"
+
+[pre-commit.commands.cargo-lint]
+glob = "*.rs"
+run = "unset $(git rev-parse --local-env-vars) && mise exec -- cargo clippy --workspace -- -D warnings"
+
+# Lib-fast tier: the default nextest profile (no `slow_*`), unit tests only.
+# Integration targets and doctests are the full `mise run test`/CI gate's job.
+[pre-commit.commands.cargo-test]
+glob = "*.rs"
+run = "unset $(git rev-parse --local-env-vars) && mise exec -- cargo nextest run --workspace --lib"
 
 # The push gate. Unglobbed and unconditional: `check` runs the whole workspace and the
 # stele lock is staled by an edit anywhere inside an anchored claim's region, so there
@@ -51,24 +53,27 @@ pre-commit:
 # This hook does not enforce the doc-truth claim `docs/doc-gate` names it in `enforced_by`
 # for — nothing here reads a doc — which is why that claim names no enforcer and runs on
 # the churn leash in `.stele/config.toml` instead.
-pre-push:
-  parallel: true
-  commands:
-    # The lock is a committed artifact: `check` proves it still describes the code, and
-    # `emit --check` proves the AGENTS.md projections still match the lock.
-    stele:
-      run: |
-        unset $(git rev-parse --local-env-vars)
-        command -v stele >/dev/null 2>&1 || {
-          echo "stele is not on PATH — install it (pinned, as CI does):" >&2
-          echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0" >&2
-          exit 1
-        }
-        stele check && stele emit --check
-    # The fast tier: the default nextest profile (no `slow_*`) across every target, plus
-    # format and lint. The `slow_*` tier and the install smoke stay CI's, so a push costs
-    # seconds rather than the clone-driven minutes the full gate spends.
-    check-and-fast-tests:
-      run: |
-        unset $(git rev-parse --local-env-vars)
-        mise run check && mise exec -- cargo nextest run --workspace
+[pre-push]
+parallel = true
+
+# The lock is a committed artifact: `check` proves it still describes the code, and
+# `emit --check` proves the AGENTS.md projections still match the lock.
+[pre-push.commands.stele]
+run = """
+unset $(git rev-parse --local-env-vars)
+command -v stele >/dev/null 2>&1 || {
+  echo "stele is not on PATH — install it (pinned, as CI does):" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0" >&2
+  exit 1
+}
+stele check && stele emit --check
+"""
+
+# The fast tier: the default nextest profile (no `slow_*`) across every target, plus
+# format and lint. The `slow_*` tier and the install smoke stay CI's, so a push costs
+# seconds rather than the clone-driven minutes the full gate spends.
+[pre-push.commands.check-and-fast-tests]
+run = """
+unset $(git rev-parse --local-env-vars)
+mise run check && mise exec -- cargo nextest run --workspace
+"""

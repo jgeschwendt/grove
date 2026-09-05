@@ -18,7 +18,7 @@ description = "Install the rustup components `check` needs (rustfmt, clippy)"
 run = "rustup component add rustfmt clippy"
 
 # First-run bootstrap. `lefthook install` is the load-bearing line: lefthook is pinned
-# above and configured in lefthook.yaml, but a fresh clone or a new worktree has NO
+# above and configured in lefthook.toml, but a fresh clone or a new worktree has NO
 # hook until something writes `.git/hooks/pre-commit` — the gate protects nobody by
 # default. It must be fatal: a bootstrap that "succeeds" without the hook — or without
 # the components `check` shells out to — is the failure this exists to prevent.
