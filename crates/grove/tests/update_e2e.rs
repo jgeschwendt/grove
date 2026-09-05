@@ -14,10 +14,13 @@
 //! version-aware one rolls it back, which is exactly the failure v1's gate was
 //! written to catch.
 //!
-//! Hermetic: a `TempDir` home, a `TempDir` release base (no network), and a port
+//! Hermetic on both roots: a `TempDir` workspace home, a `TempDir` install root (the
+//! layout `grove up` flips), a `TempDir` release base (no network), and a port
 //! bound-then-released rather than the default `127.0.0.1:7777` — which on a
 //! developer's box is their own running daemon, and `grove up` bounces whatever
-//! answers there.
+//! answers there. Every child's `HOME` is redirected into the same scratch as well, so
+//! the *default* install root resolves inside it and [`Box_::no_stray_install`] can
+//! prove after each run that nothing fell back to the operator's own.
 
 use std::io::Write as _;
 use std::net::TcpListener;
@@ -69,16 +72,21 @@ impl Run {
     }
 }
 
-/// One installed world: a home, a fixture release base, and the bind every command
-/// in it points at.
+/// One installed world: a workspace home, the install root beside it, a fixture
+/// release base, and the bind every command in it points at.
+///
+/// The two roots are separate here because they are separate in production: the
+/// workspace carries the manifest and `code/`, the install carries `versions/`,
+/// `current`, `previous` and `pending`. A harness that named only the workspace left
+/// `grove up` resolving the install root of whoever ran the test.
 struct Box_ {
     home: PathBuf,
+    install: PathBuf,
     base: PathBuf,
     bind: String,
-    #[expect(
-        dead_code,
-        reason = "the scratch both paths live in; dropped last, reclaiming them"
-    )]
+    /// The scratch all three live in — dropped last, reclaiming them — and the `HOME`
+    /// every child is handed, so a root this harness forgot to name resolves inside
+    /// the scratch instead of on the box.
     tmp: TempDir,
 }
 
@@ -86,11 +94,14 @@ impl Box_ {
     fn new(bind: String) -> Self {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
+        let install = tmp.path().join("install");
         let base = tmp.path().join("release");
         std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&install).unwrap();
         std::fs::create_dir_all(&base).unwrap();
         Self {
             home,
+            install,
             base,
             bind,
             tmp,
@@ -106,13 +117,21 @@ impl Box_ {
     /// Run the binary the layout's `current` symlink resolves to — what an operator
     /// on PATH actually invokes after an install.
     fn installed(&self, args: &[&str]) -> Run {
-        self.run(&self.home.join("current/bin/grove"), args)
+        self.run(&self.install.join("current/bin/grove"), args)
     }
 
     fn run(&self, program: &Path, args: &[&str]) -> Run {
         let out = Command::new(program)
             .args(args)
             .env("GROVE_HOME", &self.home)
+            // The root `grove up` flips. Unnamed, it is whatever `install_home`
+            // derives for the user running the test — which is their real one, and
+            // fixture releases landed in it.
+            .env("GROVE_INSTALL", &self.install)
+            // The fallback both roots resolve through, pointed at the scratch so that
+            // `no_stray_install` below can tell a forgotten root from a named one.
+            .env("HOME", self.tmp.path())
+            .env_remove("XDG_DATA_HOME")
             .env("GROVE_BIND", &self.bind)
             .env("GROVE_INSTALL_BASE_URL", &self.base)
             // The watcher is irrelevant here and would put a second thread on the
@@ -129,11 +148,38 @@ impl Box_ {
             .env_remove("GROVE_CHANNEL")
             .output()
             .expect("the grove binary runs");
+        self.no_stray_install();
         Run {
             code: out.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         }
+    }
+
+    /// Assert the run just made reached no install root but the one it was given.
+    ///
+    /// The child's `HOME` is the scratch, so `install_home`'s `$HOME/.local/share/
+    /// grove` rung resolves inside it: anything there is a process spawned without
+    /// `GROVE_INSTALL`, which on a real box installs fixture releases into the
+    /// operator's own layout and lets two tests in one job clobber each other. Cheap
+    /// enough to run after every invocation, which is the only placement that names
+    /// the offending command.
+    ///
+    /// Silent while unwinding: `Stopped` runs one last command on the way out of a
+    /// failing test, and a panic from a drop would abort the process and take the
+    /// assertion that actually failed with it.
+    #[track_caller]
+    fn no_stray_install(&self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let default = self.tmp.path().join(".local/share/grove");
+        assert!(
+            !default.exists(),
+            "a child resolved the default install root at {} — it was spawned without \
+             GROVE_INSTALL, and on a real box that is the operator's own",
+            default.display()
+        );
     }
 
     /// Stage one fixture release version: `<base>/<v>/<target>.tar.gz` carrying
@@ -153,13 +199,15 @@ impl Box_ {
         std::fs::write(self.base.join("latest"), v).unwrap();
     }
 
+    /// A link of the *install* layout — `current` or `previous` — by the version it
+    /// resolves to.
     fn link(&self, name: &str) -> Option<String> {
-        let target = std::fs::read_link(self.home.join(name)).ok()?;
+        let target = std::fs::read_link(self.install.join(name)).ok()?;
         Some(target.file_name()?.to_str()?.to_owned())
     }
 
     fn pending(&self) -> Option<String> {
-        std::fs::read_to_string(self.home.join("pending"))
+        std::fs::read_to_string(self.install.join("pending"))
             .ok()
             .map(|s| s.trim().to_owned())
     }
@@ -278,7 +326,7 @@ fn slow_an_interrupted_flip_is_undone_by_the_next_up() {
     // the forward direction included, because that is the half that decides whether
     // recovery may move `current` at all.
     std::fs::write(
-        world.home.join("pending"),
+        world.install.join("pending"),
         format!("to={LYING}\nkind=forward\n"),
     )
     .unwrap();
