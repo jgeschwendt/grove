@@ -255,8 +255,8 @@ fn scratch(tmp: &TempDir) -> (PathBuf, String) {
     (home, src.to_str().unwrap().to_owned())
 }
 
-fn root_dir(home: &Path) -> PathBuf {
-    home.join("code").join(SLUG)
+fn code_dir(home: &Path) -> PathBuf {
+    grove_ops::roots::code_dir(home, SLUG)
 }
 
 /// The scratch the workspace home was laid inside, and with it the install root and
@@ -319,7 +319,7 @@ fn slow_the_served_flow_drives_a_real_daemon() {
     .ok()
     .says("grove server is creating it");
     until("created the worktree", || {
-        root_dir(&home).join(NAME).is_dir()
+        code_dir(&home).join(NAME).is_dir()
     });
 
     // tree list against a running daemon reports what only the daemon knows — the
@@ -348,12 +348,16 @@ fn slow_the_served_flow_drives_a_real_daemon() {
     grove(&home, bind, &["tree", "remove", SLUG, NAME])
         .ok()
         .says("grove server is deleting it");
-    assert!(!root_dir(&home).join(NAME).exists(), "the worktree is gone");
+    assert!(!code_dir(&home).join(NAME).exists(), "the worktree is gone");
 
     grove(&home, bind, &["clone", "remove", SLUG])
         .ok()
         .says("grove server is deleting it");
-    assert!(!root_dir(&home).exists(), "the root is gone");
+    assert!(!code_dir(&home).exists(), "the checkouts are gone");
+    assert!(
+        !grove_ops::roots::root_dir(&home, SLUG).exists(),
+        "and so is everything grove owned for the root"
+    );
     assert!(!manifest(&home).contains(r#"[roots."o/r"]"#), "undeclared");
 
     // `off` with no pid file is the served-mode drain: identify the listener as grove,
@@ -393,12 +397,38 @@ fn slow_the_offline_flow_realizes_in_process() {
     )
     .ok()
     .says("created worktree");
-    assert!(root_dir(&home).join(NAME).is_dir(), "realized in-process");
+    assert!(code_dir(&home).join(NAME).is_dir(), "realized in-process");
 
     grove(&home, bind, &["tree", "list", SLUG])
         .ok()
         .says(NAME)
         .says(BRANCH);
+
+    // `--verbose` adds grove's own directory for this root; the default listing does
+    // not, which is the whole point of the flag.
+    let root = grove_ops::roots::root_dir(&home, SLUG)
+        .display()
+        .to_string();
+    assert!(
+        !grove(&home, bind, &["tree", "list", SLUG])
+            .stdout
+            .contains(&root)
+    );
+    grove(&home, bind, &["tree", "list", SLUG, "--verbose"])
+        .ok()
+        .says(&root);
+
+    // The workspace file is the editor's view of the same join, written on demand —
+    // and once it exists, a `tree` mutation says it has gone stale.
+    grove(&home, bind, &["workspace"])
+        .ok()
+        .says("grove.code-workspace");
+    let workspace = std::fs::read_to_string(home.join("grove.code-workspace")).unwrap();
+    assert!(workspace.contains("o/r · main"), "{workspace}");
+    assert!(
+        workspace.contains(&code_dir(&home).join(NAME).display().to_string()),
+        "{workspace}"
+    );
 
     // Doctor offline runs the same share pass plus the plumbing checks, and derives
     // the one status a filesystem can support.
@@ -422,13 +452,15 @@ fn slow_the_offline_flow_realizes_in_process() {
 
     grove(&home, bind, &["tree", "remove", SLUG, NAME])
         .ok()
-        .says("removed worktree");
-    assert!(!root_dir(&home).join(NAME).exists());
+        .says("removed worktree")
+        .says("workspace file is stale: run grove workspace");
+    assert!(!code_dir(&home).join(NAME).exists());
 
     grove(&home, bind, &["clone", "remove", SLUG])
         .ok()
         .says("removed o/r");
-    assert!(!root_dir(&home).exists());
+    assert!(!code_dir(&home).exists());
+    assert!(!grove_ops::roots::root_dir(&home, SLUG).exists());
     assert!(!manifest(&home).contains(r#"[roots."o/r"]"#), "undeclared");
 
     // And the exit codes an operator reads. Listing a root that is not there is not an

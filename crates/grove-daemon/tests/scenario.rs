@@ -190,14 +190,14 @@ async fn slow_a_root_is_declared_realized_promoted_synced_and_removed() {
     // daemon: the reconcile that realizes the worktree is what claims the slot. The
     // mark inside the slot is how we know it MOVED rather than a cold checkout
     // landing at the same path.
-    let slot_mark = grove_ops::roots::root_dir(&home, SLUG).join(".pool/slot-0/CLAIMED");
+    let slot_mark = testfix::pool_dir(&home, SLUG).join("slot-0/CLAIMED");
     std::fs::write(&slot_mark, "warm").unwrap();
     grove_ops::manifest::add_worktree(&manifest, SLUG, "feat", "feature/x", Some("main")).unwrap();
     let _: Envelope<Value> = harness.post("/api/roots/reconcile", &json!({})).await;
 
     // The share is the last step of a claim (attach → move → declare →
     // materialize), so waiting on it waits for the whole thing to land.
-    let worktree = grove_ops::roots::root_dir(&home, SLUG).join("feat");
+    let worktree = grove_ops::roots::code_dir(&home, SLUG).join("feat");
     let link = worktree.join(".env");
     until(
         "the declared worktree to be realized with its share",
@@ -283,6 +283,7 @@ async fn slow_a_root_is_declared_realized_promoted_synced_and_removed() {
         .await;
     assert_eq!(removed.into_result().unwrap().removed, SLUG);
     assert!(!grove_ops::roots::root_dir(&home, SLUG).exists());
+    assert!(!grove_ops::roots::code_dir(&home, SLUG).exists());
     assert!(grove_ops::roots::list(&home).unwrap().is_empty());
 
     harness

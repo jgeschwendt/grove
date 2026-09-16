@@ -593,7 +593,7 @@ mod tests {
     /// The failure this closes: `GROVE_HOME=~/.grove-dev grove clone remove o/r` —
     /// the safe-looking way to exercise a second home — found the ordinary daemon on
     /// the default bind, delegated the remove to it, and deleted `~/.grove/code/o/r`
-    /// with its uncommitted work, printing success. `GROVE_BIND` has its own default,
+    /// and `~/.grove/roots/o/r` with their uncommitted work, printing success. `GROVE_BIND` has its own default,
     /// so the mismatch is what happens *by default* whenever `GROVE_HOME` is
     /// overridden alone.
     #[test]
@@ -816,7 +816,7 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"ready",
             "pool":{"observed":1,"target":2},"syncing":false,
-            "trunk":"/home/code/o/r/main","trunk_branch":"main","worktrees":[
+            "root":"/home/roots/o/r","trunk":"/home/code/o/r/main","trunk_branch":"main","worktrees":[
               {"name":"feat","branch":"feature/x","declared":true,"present":true,
                "path":"/home/code/o/r/feat"}
             ]}],"logs":[]}}"#;

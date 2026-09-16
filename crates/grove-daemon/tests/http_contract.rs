@@ -468,8 +468,13 @@ async fn roots_remove_deletes_a_declared_root_from_disk() {
     let tmp = TempDir::new().unwrap();
     let home = testfix::home_with_root(&tmp);
     let mut daemon = Harness::ready(&home).await;
+    let code = testfix::code_dir(&home, testfix::SLUG);
     let root = testfix::root_dir(&home, testfix::SLUG);
-    assert!(root.is_dir(), "the fixture root is on disk to begin with");
+    assert!(
+        code.is_dir(),
+        "the fixture checkouts are on disk to begin with"
+    );
+    assert!(root.is_dir(), "and so is what grove owns for the root");
 
     let data: RemoveRootData = ok_body(
         daemon
@@ -480,7 +485,8 @@ async fn roots_remove_deletes_a_declared_root_from_disk() {
     .await;
 
     assert_eq!(data.removed, testfix::SLUG);
-    assert!(!root.exists(), "delete-on-disk before undeclare");
+    assert!(!code.exists(), "delete-on-disk before undeclare");
+    assert!(!root.exists(), "both trees, not just the checkouts");
     assert!(grove_ops::roots::list(&home).unwrap().is_empty());
     assert!(
         daemon.nudged(),
@@ -691,7 +697,7 @@ async fn worktrees_remove_removes_a_declared_worktree() {
     let tmp = TempDir::new().unwrap();
     let home = testfix::home_with_root_and_worktree(&tmp);
     let daemon = Harness::ready(&home).await;
-    let worktree = testfix::root_dir(&home, testfix::SLUG).join("feat");
+    let worktree = testfix::code_dir(&home, testfix::SLUG).join("feat");
     assert!(worktree.is_dir());
 
     let data: RemoveWorktreeData = ok_body(

@@ -143,6 +143,7 @@ looking at the same thing.
     "pool": {"observed": 1, "target": 2},
     "syncing": true,
     "sync_note": "diverged",                 // omitted when there is none
+    "root": "/home/roots/o/r",               // everything grove owns for this root
     "trunk": "/home/code/o/r/canary",        // absolute path — what a UI opens
     "trunk_branch": "canary",                // the branch it checks out; "" from an older daemon
     "trunk_status": {...},                   // the trunk's own git drift; omitted when absent
@@ -165,13 +166,22 @@ byte by `a_snapshot_serializes_the_shape_a_dashboard_renders`.
 
 `error` is why a `degraded` root is degraded: the text of the reconcile failure that put it
 there, carried so an operator reads a next move rather than reconstructing one. Reconcile's
-refusals are the case that needs it — a root still on the legacy layout, or one whose
-directory holds files that are not grove's, is a deliberate no-op with a specific command
+refusals are the case that needs it — a root still on a superseded layout, or one whose
+code dir already holds somebody's files, is a deliberate no-op with a specific command
 that clears it, and `degraded` alone reads as a broken clone to retry
 (`docs/worktrees.md` § Root realization). It is present only while the status *is*
 `degraded`, and only for a root whose engine is running: nothing on disk records why a
 reconcile failed, so a restarted daemon re-derives the status and re-earns the text on its
 next reconcile.
+
+`root` and `trunk` are the root's whole address: `roots/<slug>`, everything grove owns for
+it — the bare, the warm pool, the in-flight-clone marker — and the checkout of its trunk
+branch inside `code/<slug>`. Both are absolute, and both travel because a consumer holding
+one cannot derive the other: the two trees are siblings under the home, and nothing in a
+trunk path says where the home is. The root directory is grove's own rather than the
+operator's, so it belongs where a diagnosis is being read and not where a checkout is being
+opened — `grove tree list --verbose` prints it under the trunk line, and the default
+listing does not.
 
 `trunk_branch` travels beside `trunk` rather than being read back out of it: the checkout
 is named by folding the branch's `/` to `-`, so `feature-x` cannot be un-folded into
@@ -333,7 +343,7 @@ whole-home materializing converge.
 reports none, which is honest: nothing is driving those roots.
 
 `checks` is the git-plumbing pass, and it is **report-only** but for one finding: `fix`
-stays scoped to shares plus the `legacy-layout` migration. Every other plumbing finding is
+stays scoped to shares plus the `legacy_layout` migration. Every other plumbing finding is
 either a human's edit to reconcile with or a job the reconciler already owns, and a doctor
 that silently re-cloned under an operator asking "what is wrong?" would be the opposite of
 a diagnosis.
@@ -341,23 +351,53 @@ a diagnosis.
 | `check` | asks |
 |---|---|
 | `manifest` | does `manifest.toml` parse, and does every declaration pass the validators |
+| `install_under_home` | is an install tree (`current`, `versions/`) sitting in the workspace instead of `$GROVE_INSTALL` |
+| `legacy_layout` | is this root on a superseded layout generation, and which one |
+| `orphan_code` | which code dirs hold something with no root directory behind them |
 | `root` | only ever a finding: this root's pass did not answer inside its budget |
-| `bare` | is `<root>/.bare` there |
+| `bare` | is the root's `bare/` there |
 | `trunk` | is the trunk checkout there — the directory this root's trunk branch names |
-| `legacy-layout` | is this root laid out the old way — a bare at `.git`, a trunk at `.trunk` |
 | `worktree` | is a declared worktree realized, and on the branch it declares |
 | `drift` | what does git know about that the manifest does not |
 
-`legacy-layout` is the one finding `--fix` acts on, because it is the one a reconcile
-cannot reach: the content is all there, simply named the old way, and realization refuses
-such a root rather than cloning beside it (`docs/worktrees.md` § Root realization). The fix
-migrates it in place, each step idempotent so an interrupted run resumes — rename the bare
-to `.bare` and rewrite every worktree's gitdir pointer, rename `.trunk` to the directory
-the trunk branch names and rewrite the registration that points back at it, set the bare's
-`HEAD`, then run the share pass, which repoints every link laid through the old name. It
+`manifest` and `install_under_home` answer for the whole home on every invocation —
+scoping doctor to one slug narrows the *roots* it walks, and one of those two rows is
+where an operator reads why a checkout went missing. `orphan_code` walks the whole code
+tree and then narrows to a named slug; the rest are per-root.
+
+`legacy_layout` is the one finding `--fix` acts on, because it is the one a reconcile
+cannot reach: the content is all there, simply in the wrong place, and realization refuses
+such a root rather than cloning beside it (`docs/worktrees.md` § Root realization). Two
+generations precede the current layout, and a root interrupted mid-migration carries halves
+of more than one:
+
+| generation | shape |
+|---|---|
+| v1 | the bare at `.git` and the trunk checkout at `.trunk`, both inside the code dir |
+| v2 | the bare at `.bare` and the warm pool at `.pool`, both inside the code dir |
+| v3 | `roots/<slug>/{bare,pool}` beside a code dir of checkouts — the current layout |
+
+`grove_ops::layout::legacy(home, slug)` is the one detector, and it names every half it
+finds rather than returning a verdict: an operator reading the refusal needs to know which
+directory to go look at. The fix migrates any generation to the current one in a single
+idempotent pass, so an interrupted run resumes — create `roots/<slug>/`, move the bare into
+`bare/` and `git worktree repair` every checkout's pointer onto it, move each slot into
+`pool/` and repair those, then, for a v1 root, rename the trunk checkout to the directory
+its branch names, rewrite the registration that points back at it, and set the bare's
+`HEAD`. The share pass that follows repoints every link laid through the old trunk name. It
 verifies with a `git status` in the trunk before reporting `fixed`, and refuses — reporting
-rather than guessing — when a `.bare` is already there beside a `.git`, which is a half-run
-migration rather than a legacy root.
+rather than guessing — a half-moved root: one carrying a `roots/<slug>/bare` *and* a bare
+in its code dir is two answers to the same question, and picking one would be a guess.
+
+`orphan_code` is the mirror of adoption, and it is report-only. It walks `code/` at the
+same depth and by the same rules adoption walks `roots/`, and names every slug whose code
+dir holds something — "something" being exactly what the realizer's occupancy refusal
+counts, so anything but `.DS_Store` — while its `roots/<slug>` is absent. Nothing else
+will ever pick that up: adoption reads `roots/` and cannot see a code dir, and reconcile
+refuses to clone into an occupied one. So the row is `mismatch`, never `undeclared` —
+`undeclared` promises the reader that additive reconcile adopts these, and it never will —
+and the detail says what an operator can do: declare the root, or move the directory
+aside.
 
 | `status` | means |
 |---|---|
@@ -368,11 +408,11 @@ migration rather than a legacy root.
 | `undeclared` | on disk and undeclared; additive reconcile adopts these |
 | `unavailable` | the check could not run — git would not answer, or the root exceeded its budget |
 
-Execution: the manifest check runs once for the whole request, off any lane — it reads no
-git and must answer even when every root is wedged. Each root's share converge, pool read
-and plumbing checks then run as **one** job on **that root's own** lane (foreground tier)
-under a 30 s budget, concurrently across roots, with reports concatenated in declared
-order.
+Execution: the whole-home checks — manifest, install layout, orphan code — run once for
+the request, off any lane; they read no git and must answer even when every root is wedged.
+Each root's share converge, pool read and plumbing checks then run as **one** job on **that
+root's own** lane (foreground tier) under a 30 s budget, concurrently across roots, with
+reports concatenated in declared order.
 
 A root that misses its budget is *named rather than absent*: in the whole-home form it
 contributes a `root`/`unavailable` check and every other root's answer still returns. A

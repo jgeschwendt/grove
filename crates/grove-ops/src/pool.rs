@@ -1,18 +1,19 @@
-//! The warm-worktree pool: pre-checked-out slots under `<root>/.pool/` that
+//! The warm-worktree pool: pre-checked-out slots under `roots/<slug>/pool/` that
 //! `promote` claims into user worktrees near-instantly, skipping a cold checkout.
 //!
 //! Two ops, both serialized on their root's per-root lane like every other
 //! mutation on that root (different roots run in parallel):
 //!
 //! - [`fill`] adds **one** detached slot at the default-branch tip — and *nothing
-//!   else*. No share materialization: a slot at `.pool/slot-N` is one level deeper
-//!   than a canonical worktree, so `env::materialize`'s sibling-of-the-trunk depth
-//!   invariant doesn't hold there (links would dangle at `.pool/<trunk>/…`), and the
-//!   promote move would invalidate them regardless. Slots stay out of the declared
-//!   set via the path-based reserved exclusion in `worktrees::actual`.
+//!   else*. No share materialization: a slot sits outside the code dir altogether, so
+//!   `env::materialize`'s sibling-of-the-trunk depth invariant doesn't hold there
+//!   (links would resolve against the pool, not the trunk), and the promote move would
+//!   invalidate them regardless. Slots stay out of the declared set because nothing
+//!   under `roots/` strips under the code dir `worktrees::actual` reads.
 //! - [`promote`] attaches the branch IN the slot (DWIM, like `worktree_add`), then
-//!   claims it via `git worktree move` (not a bare rename — that strips git's gitdir
-//!   pointers), declares it, and materializes shares (now at canonical depth).
+//!   claims it into the code dir via `git worktree move` (not a bare rename — that
+//!   strips git's gitdir pointers), declares it, and materializes shares (now at
+//!   canonical depth).
 //!
 //! **Crash-safety.** Attaching the branch *before* the move is what makes promote
 //! convergent under interruption. Any worktree that ever reaches `<root>/<name>`
@@ -21,13 +22,13 @@
 //! window where a *detached* orphan is stranded at the user path (which reconcile
 //! could neither adopt nor recreate). An attach failure (e.g. the branch is checked
 //! out in another worktree) leaves the slot cleanly detached and reusable. Promote
-//! never clobbers an existing `<root>/<name>`.
+//! never clobbers an existing `<code>/<name>`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::roots::{self, bare_dir, manifest_path, root_dir};
+use crate::roots::{self, bare_dir, code_dir, manifest_path, root_dir};
 use crate::{Error, git, manifest, worktrees};
 
 /// The outcome of a [`promote`]. `Cold` is **not** an error — the caller (the
@@ -48,7 +49,7 @@ pub enum Promotion {
 pub enum ColdReason {
     /// The pool had no free slot to claim.
     Empty,
-    /// `<root>/<name>` already exists — a user worktree we must never overwrite.
+    /// `<code>/<name>` already exists — a user worktree we must never overwrite.
     Conflict,
 }
 
@@ -171,7 +172,7 @@ pub fn promote(
     manifest::validate_slug(slug).map_err(Error::invalid_input)?;
     manifest::validate_name(name).map_err(Error::invalid_input)?;
 
-    let dest = root_dir(home, slug).join(name);
+    let dest = code_dir(home, slug).join(name);
     if dest.exists() {
         return Ok(Promotion::Cold(ColdReason::Conflict)); // never clobber a user worktree
     }
@@ -180,7 +181,7 @@ pub fn promote(
     };
 
     // Attach the branch IN the slot, BEFORE the move. An interrupted promote (attach
-    // fails, or a crash) must never leave a *detached* tree at `<root>/<name>` —
+    // fails, or a crash) must never leave a *detached* tree at `<code>/<name>` —
     // reconcile drops detached worktrees, so such an orphan is neither adopted nor
     // recreatable and would wedge the name. Attaching first guarantees any tree that
     // reaches the user path carries a branch (⇒ adoptable); a failed attach leaves the
@@ -203,7 +204,7 @@ pub fn promote(
     Ok(Promotion::Promoted)
 }
 
-/// The registered slot worktrees under `<root>/.pool/`, sorted by path. `pub(crate)`
+/// The registered slot worktrees under [`pool_dir`], sorted by path. `pub(crate)`
 /// for `roots::sync`, which prunes slots stranded at a pre-sync tip.
 pub(crate) fn slots(home: &Path, slug: &str) -> Result<Vec<PathBuf>> {
     let bare = bare_dir(home, slug);
@@ -224,10 +225,18 @@ fn next_slot(home: &Path, slug: &str) -> Result<Option<PathBuf>> {
     Ok(slots(home, slug)?.into_iter().next())
 }
 
-/// The lowest-index free `<root>/.pool/slot-<n>` path — collision-free and stable,
-/// so a crashed-then-retried fill reuses the same name rather than racing ahead.
+/// The root's warm pool — `roots/<slug>/pool`. Grove's own, beside the bare and
+/// outside the code dir: a slot is a disposable detached checkout, not one of the
+/// root's checkouts, and the code dir holds nothing but the latter.
+#[must_use]
+pub(crate) fn pool_dir(home: &Path, slug: &str) -> PathBuf {
+    root_dir(home, slug).join("pool")
+}
+
+/// The lowest-index free `<pool>/slot-<n>` path — collision-free and stable, so a
+/// crashed-then-retried fill reuses the same name rather than racing ahead.
 fn free_slot(home: &Path, slug: &str) -> Result<PathBuf> {
-    let pool = root_dir(home, slug).join(".pool");
+    let pool = pool_dir(home, slug);
     for n in 0.. {
         let cand = pool.join(format!("slot-{n}"));
         if !cand.exists() {
@@ -248,8 +257,14 @@ mod tests {
         crate::testfix::home_with_root(tmp)
     }
 
-    fn root(home: &Path) -> PathBuf {
-        home.join("code/o/r")
+    /// The root's checkouts — where a promote lands one.
+    fn code(home: &Path) -> PathBuf {
+        code_dir(home, "o/r")
+    }
+
+    /// The root's warm pool — where a fill lays a slot.
+    fn pool(home: &Path) -> PathBuf {
+        pool_dir(home, "o/r")
     }
 
     #[test]
@@ -265,13 +280,18 @@ mod tests {
         );
 
         // Slots exist, are checked out at the tip, and are DETACHED (no branch).
-        assert!(root(&home).join(".pool/slot-0/README.md").exists());
-        assert!(root(&home).join(".pool/slot-1/README.md").exists());
+        assert_eq!(pool(&home), home.join("roots/o/r/pool"));
+        assert!(pool(&home).join("slot-0/README.md").exists());
+        assert!(pool(&home).join("slot-1/README.md").exists());
+        assert!(
+            !code(&home).join("pool").exists(),
+            "the pool is grove's own, never an entry of the code dir"
+        );
         let bare = bare_dir(&home, "o/r");
         let detached = crate::git::worktree_list(&bare)
             .unwrap()
             .into_iter()
-            .filter(|w| w.path.starts_with(root(&home).join(".pool")))
+            .filter(|w| w.path.starts_with(pool(&home)))
             .all(|w| w.branch.is_none());
         assert!(detached, "every slot is detached");
     }
@@ -287,8 +307,8 @@ mod tests {
         assert_eq!(fill(&home, "o/r").unwrap(), 2);
 
         assert_eq!(reclaim(&home, "o/r").unwrap(), 1, "the highest slot goes");
-        assert!(root(&home).join(".pool/slot-0").exists());
-        assert!(!root(&home).join(".pool/slot-1").exists());
+        assert!(pool(&home).join("slot-0").exists());
+        assert!(!pool(&home).join("slot-1").exists());
         assert_eq!(reclaim(&home, "o/r").unwrap(), 0);
         assert_eq!(reclaim(&home, "o/r").unwrap(), 0, "empty is a no-op");
     }
@@ -303,7 +323,7 @@ mod tests {
         fill(&home, "o/r").unwrap();
         // The depth invariant: NO share link in the slot (it would dangle).
         assert!(
-            !root(&home).join(".pool/slot-0/.env").exists(),
+            !pool(&home).join("slot-0/.env").exists(),
             "no share link warmed into a slot"
         );
     }
@@ -317,7 +337,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         fill(&home, "o/r").unwrap();
-        let slot = root(&home).join(".pool/slot-0");
+        let slot = pool(&home).join("slot-0");
         assert!(slot.exists());
 
         std::fs::remove_dir_all(&slot).unwrap(); // stray `rm -rf`, still registered
@@ -355,9 +375,9 @@ mod tests {
             Promotion::Promoted
         );
 
-        // Moved to <root>/feat, declared, slot consumed.
-        assert!(root(&home).join("feat/README.md").exists());
-        assert!(!root(&home).join(".pool/slot-0").exists(), "slot consumed");
+        // Moved into the code dir at <code>/feat, declared, slot consumed.
+        assert!(code(&home).join("feat/README.md").exists());
+        assert!(!pool(&home).join("slot-0").exists(), "slot consumed");
         assert_eq!(pool_count_(&home), 0);
         let declared = manifest::list_worktrees(&manifest_path(&home), "o/r").unwrap();
         assert!(
@@ -372,11 +392,11 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|w| {
-                w.path.canonicalize().unwrap() == root(&home).join("feat").canonicalize().unwrap()
+                w.path.canonicalize().unwrap() == code(&home).join("feat").canonicalize().unwrap()
             })
             .unwrap();
         assert_eq!(on.branch.as_deref(), Some("feature/x"));
-        let link = root(&home).join("feat/.env");
+        let link = code(&home).join("feat/.env");
         assert_eq!(
             std::fs::read_link(&link).unwrap(),
             Path::new("../main/.env")
@@ -393,38 +413,39 @@ mod tests {
         worktrees::pool_count(home, "o/r").unwrap()
     }
 
-    /// A worktree named `.pool` used to be declarable, and it destroyed the warm
-    /// pool: `under_pool` counted the pool DIRECTORY as a slot, `next_slot` sorted
-    /// it ahead of `.pool/slot-0`, and promote's `git worktree move` carried the
-    /// whole pool — every slot inside it — into the user's new worktree. Both gates
-    /// are pinned: the name is refused at the API *and* at the hand-edited-manifest
-    /// path (what the watcher exists to serve), and the pool dir is never a slot.
+    /// A dotted worktree name used to be declarable, and with the pool inside the code
+    /// dir it destroyed the warm pool: `under_pool` counted the pool DIRECTORY as a
+    /// slot, `next_slot` sorted it ahead of `slot-0`, and promote's `git worktree move`
+    /// carried the whole pool — every slot inside it — into the user's new worktree.
+    /// The pool has moved out of reach, and both gates still hold: the name is refused
+    /// at the API *and* at the hand-edited-manifest path (what the watcher exists to
+    /// serve), and the pool dir is never itself a slot.
     #[test]
-    fn a_reserved_pool_name_can_never_claim_the_warm_pool() {
+    fn a_dotted_name_is_refused_and_the_pool_dir_is_never_a_slot() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         let mpath = manifest_path(&home);
 
         // The API refuses it outright.
         assert!(
-            crate::worktrees::create(&home, "o/r", ".pool", "feature/x", Some("main")).is_err(),
-            "`.pool` is not a declarable worktree name"
+            crate::worktrees::create(&home, "o/r", ".hidden", "feature/x", Some("main")).is_err(),
+            "`.hidden` is not a declarable worktree name"
         );
 
         // A hand-edited declaration is skipped by the reader, so reconcile never
-        // realizes a worktree at `<root>/.pool`.
+        // realizes a worktree at `<code>/.hidden`.
         let doc = std::fs::read_to_string(&mpath).unwrap();
         std::fs::write(
             &mpath,
-            format!("{doc}\n[roots.\"o/r\".worktrees.\".pool\"]\nbranch = \"feature/x\"\n"),
+            format!("{doc}\n[roots.\"o/r\".worktrees.\".hidden\"]\nbranch = \"feature/x\"\n"),
         )
         .unwrap();
         assert!(
             manifest::list_worktrees(&mpath, "o/r")
                 .unwrap()
                 .iter()
-                .all(|w| w.name != ".pool"),
-            "a reserved name never reaches the reconciler"
+                .all(|w| w.name != ".hidden"),
+            "a dotted name never reaches the reconciler"
         );
         worktrees::reconcile(&home, "o/r").unwrap();
 
@@ -432,7 +453,7 @@ mod tests {
         fill(&home, "o/r").unwrap();
         assert_eq!(pool_count_(&home), 2, "two real slots, no phantom");
         assert!(
-            !worktrees::under_pool(&home, "o/r", &root(&home).join(".pool")),
+            !worktrees::under_pool(&home, "o/r", &pool(&home)),
             "the pool directory is not itself a slot"
         );
 
@@ -441,13 +462,13 @@ mod tests {
             Promotion::Promoted
         );
         assert!(
-            root(&home).join(".pool/slot-1").is_dir(),
+            pool(&home).join("slot-1").is_dir(),
             "the warm pool survives the promote"
         );
         assert_eq!(pool_count_(&home), 1, "exactly one slot was claimed");
-        assert!(root(&home).join("mine/README.md").exists());
+        assert!(code(&home).join("mine/README.md").exists());
         assert!(
-            !root(&home).join("mine/slot-1").exists(),
+            !code(&home).join("mine/slot-1").exists(),
             "no slot was carried inside the user worktree"
         );
     }
@@ -478,7 +499,7 @@ mod tests {
         let upstream = String::from_utf8(
             crate::git::git_command()
                 .arg("-C")
-                .arg(root(&home).join("ro"))
+                .arg(code(&home).join("ro"))
                 .args(["rev-parse", "--abbrev-ref", "remote-only@{upstream}"])
                 .output()
                 .unwrap()
@@ -496,7 +517,7 @@ mod tests {
             promote(&home, "o/r", "feat", "feature/x", Some("main")).unwrap(),
             Promotion::Cold(ColdReason::Empty)
         );
-        assert!(!root(&home).join("feat").exists(), "no worktree created");
+        assert!(!code(&home).join("feat").exists(), "no worktree created");
     }
 
     #[test]
@@ -513,21 +534,21 @@ mod tests {
         assert!(err.is_err(), "attach of an in-use branch fails");
 
         // No orphan at the user path, and the warm slot survives intact + detached.
-        assert!(!root(&home).join("feat").exists(), "no stranded worktree");
+        assert!(!code(&home).join("feat").exists(), "no stranded worktree");
         assert_eq!(pool_count_(&home), 1, "slot not consumed on attach failure");
         let bare = bare_dir(&home, "o/r");
         assert!(
             crate::git::worktree_list(&bare)
                 .unwrap()
                 .into_iter()
-                .filter(|w| w.path.starts_with(root(&home).join(".pool")))
+                .filter(|w| w.path.starts_with(pool(&home)))
                 .all(|w| w.branch.is_none()),
             "the slot is still detached and reusable"
         );
 
         // The name is NOT wedged: a fresh cold create of <feat> still works.
         crate::worktrees::create(&home, "o/r", "feat", "feature/y", Some("main")).unwrap();
-        assert!(root(&home).join("feat/README.md").exists());
+        assert!(code(&home).join("feat/README.md").exists());
     }
 
     #[test]
@@ -555,7 +576,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         crate::worktrees::create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
-        std::fs::write(root(&home).join("feat/UNCOMMITTED"), "work").unwrap();
+        std::fs::write(code(&home).join("feat/UNCOMMITTED"), "work").unwrap();
         fill(&home, "o/r").unwrap();
 
         assert_eq!(
@@ -564,7 +585,7 @@ mod tests {
         );
         // The existing worktree and its uncommitted work are untouched; the slot stays.
         assert_eq!(
-            std::fs::read_to_string(root(&home).join("feat/UNCOMMITTED")).unwrap(),
+            std::fs::read_to_string(code(&home).join("feat/UNCOMMITTED")).unwrap(),
             "work"
         );
         assert_eq!(pool_count_(&home), 1, "slot not consumed on conflict");
@@ -621,7 +642,7 @@ mod tests {
 
         assert_eq!(fill(&home, "o/r").unwrap(), 1);
         assert!(
-            root(&home).join(".pool/slot-0/AHEAD").exists(),
+            pool(&home).join("slot-0/AHEAD").exists(),
             "slot seeded at the declared trunk's tip, not the bare's HEAD"
         );
     }
@@ -642,7 +663,7 @@ mod tests {
             Promotion::Promoted
         );
         assert!(
-            root(&home).join("feat/AHEAD").exists(),
+            code(&home).join("feat/AHEAD").exists(),
             "new branch started at the trunk, not at the slot's stale tip"
         );
     }

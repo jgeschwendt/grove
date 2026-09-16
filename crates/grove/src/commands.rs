@@ -149,6 +149,7 @@ pub fn tree_add(
             println!("created worktree {name} ({branch}){from}");
         }
     }
+    note_stale_workspace(home);
     Ok(())
 }
 
@@ -158,6 +159,7 @@ pub fn tree_remove(home: &Path, api: &ApiClient, slug: &str, name: &str) -> Resu
         Reachability::Up => {
             api.remove_tree(slug, name)?;
             println!("removing worktree {name}; grove server is deleting it");
+            note_stale_workspace(home);
             Ok(())
         }
         Reachability::Busy => Err(CliError::Daemon(
@@ -166,6 +168,7 @@ pub fn tree_remove(home: &Path, api: &ApiClient, slug: &str, name: &str) -> Resu
         Reachability::Offline => {
             grove_ops::worktrees::remove(home, slug, name)?;
             println!("removed worktree {name}");
+            note_stale_workspace(home);
             Ok(())
         }
     }
@@ -195,8 +198,13 @@ pub fn tree_remove(home: &Path, api: &ApiClient, slug: &str, name: &str) -> Resu
 /// The failure mode being closed is the quiet one: rendering an `unavailable` row's
 /// empty list printed `no worktrees for <slug>` at exit 0 over a root whose worktrees
 /// were sitting on disk the whole time.
-pub fn tree_list(home: &Path, api: &ApiClient, slug: &str) -> Result<(), CliError> {
-    for line in listing(home, api, slug)? {
+///
+/// `--verbose` adds the root's own directory — `roots/<slug>`, where the bare and the
+/// warm pool live — under the trunk row. Off by default because it is grove's
+/// directory rather than the operator's: nothing is checked out there and nothing in
+/// it is edited, so it belongs to the reading where something has gone wrong.
+pub fn tree_list(home: &Path, api: &ApiClient, slug: &str, verbose: bool) -> Result<(), CliError> {
+    for line in listing(home, api, slug, verbose)? {
         println!("{line}");
     }
     Ok(())
@@ -206,7 +214,12 @@ pub fn tree_list(home: &Path, api: &ApiClient, slug: &str) -> Result<(), CliErro
 /// is assertable: which rows an operator sees is the whole behaviour here, and a
 /// regression that silently renders the daemon's empty list is invisible to a test
 /// that only checks the call returned `Ok`.
-fn listing(home: &Path, api: &ApiClient, slug: &str) -> Result<Vec<String>, CliError> {
+fn listing(
+    home: &Path,
+    api: &ApiClient,
+    slug: &str,
+    verbose: bool,
+) -> Result<Vec<String>, CliError> {
     let mut lines = Vec::new();
     if let Some(root) = snapshot_row(api, slug) {
         lines.push(format!(
@@ -229,6 +242,10 @@ fn listing(home: &Path, api: &ApiClient, slug: &str) -> Result<Vec<String>, CliE
             let name = grove_ops::worktrees::name_for(&root.trunk_branch);
             lines.extend(checkouts(
                 (!name.is_empty()).then_some((name.as_str(), root.trunk_branch.as_str())),
+                // The daemon's answer, not a join of our own: it resolved this row's
+                // home, and a CLI pointed at a different `GROVE_HOME` would otherwise
+                // print a path the listing above does not describe.
+                verbose.then_some(root.root.as_str()),
                 root.worktrees.iter().map(|w| Checkout {
                     name: &w.name,
                     branch: &w.branch,
@@ -252,8 +269,11 @@ fn listing(home: &Path, api: &ApiClient, slug: &str) -> Result<Vec<String>, CliE
         .is_dir()
         .then(|| grove_ops::roots::trunk(home, slug).ok())
         .flatten();
+    let root_dir = grove_ops::roots::root_dir(home, slug);
+    let root_dir = root_dir.display().to_string();
     lines.extend(checkouts(
         trunk.as_ref().map(|t| (t.name.as_str(), t.branch.as_str())),
+        verbose.then_some(root_dir.as_str()),
         worktrees.iter().map(|w| Checkout {
             name: &w.name,
             branch: &w.branch,
@@ -321,15 +341,24 @@ struct Checkout<'a> {
 /// that *is* in the list anyway (a root mid-migration, whose manifest still declares
 /// a worktree on the branch grove integrates on) is marked in place, never printed a
 /// second time.
+///
+/// `root` is the root's own directory under `--verbose`, indented under the trunk row
+/// like a degraded root's reason is indented under its header: it explains the
+/// checkout above it rather than standing beside the checkouts as a peer. It follows
+/// the trunk wherever the trunk lands — first, or marked in place — because the two
+/// are the root's own pair and a line about the root sitting under someone's feature
+/// branch would read as that branch's.
 fn checkouts<'a>(
     trunk: Option<(&str, &str)>,
+    root: Option<&str>,
     worktrees: impl Iterator<Item = Checkout<'a>>,
 ) -> Vec<String> {
-    let mut listed = false;
+    let mut at = None;
     let mut rows: Vec<String> = worktrees
-        .map(|w| {
+        .enumerate()
+        .map(|(i, w)| {
             let marker = if trunk.is_some_and(|(name, _)| name == w.name) {
-                listed = true;
+                at = Some(i);
                 " (trunk)"
             } else {
                 ""
@@ -342,8 +371,15 @@ fn checkouts<'a>(
             )
         })
         .collect();
-    if let Some((name, branch)) = trunk.filter(|_| !listed) {
+    if let Some((name, branch)) = trunk.filter(|_| at.is_none()) {
         rows.insert(0, format!("{name}  {branch} (trunk)"));
+        at = Some(0);
+    }
+    if let Some(root) = root {
+        // No trunk row to hang it under — a root with nothing on disk yet — so it
+        // leads instead of vanishing: `--verbose` was asked for, and the directory
+        // that has not been created is exactly what is being looked for.
+        rows.insert(at.map_or(0, |at| at + 1), format!("  root {root}"));
     }
     rows
 }
@@ -354,6 +390,115 @@ const fn note(present: bool, declared: bool) -> &'static str {
         (true, false) => " (undeclared)",
         (false, true) => " (missing)",
         _ => "",
+    }
+}
+
+/// `grove workspace [--out <path>]` — a VS Code `.code-workspace` over every checkout
+/// grove holds.
+///
+/// Offline by construction, alone among the commands here: the answer is the manifest
+/// joined with the disk, and no part of it lives in the daemon. There is nothing to
+/// declare and nothing to realize, so there is no realizer to gate on — a running
+/// daemon and a cold home produce the same file.
+///
+/// Written on demand rather than kept converged, because the file is the operator's
+/// once it exists: an editor rewrites it when folders are dragged, and a grove that
+/// silently overwrote that would be a second writer in someone else's document.
+/// [`tree_add`] and [`tree_remove`] only say the file has gone stale.
+pub fn workspace(home: &Path, out: Option<&Path>) -> Result<(), CliError> {
+    let path = out.map_or_else(|| workspace_path(home), Path::to_path_buf);
+    let doc = serde_json::json!({
+        "folders": folders(home)?
+            .into_iter()
+            .map(|f| serde_json::json!({"name": f.name, "path": f.path}))
+            .collect::<Vec<_>>(),
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io)?;
+    }
+    // Trailing newline: this is a text file an editor and a `git diff` both read.
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&doc).map_err(io)? + "\n",
+    )
+    .map_err(io)?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// The workspace file `grove workspace` writes without `--out`, and the one whose
+/// presence makes [`tree_add`] and [`tree_remove`] say it went stale. Beside the
+/// manifest it is derived from, so the home carries its own editor view.
+fn workspace_path(home: &Path) -> std::path::PathBuf {
+    home.join("grove.code-workspace")
+}
+
+/// One entry of the workspace's `folders` array.
+struct Folder {
+    name: String,
+    path: String,
+}
+
+/// Every checkout of every declared root, as folders — the manifest joined with the
+/// disk, which is the only join that answers the question an editor is asking.
+///
+/// A declared-but-unrealized checkout is left out: a workspace folder pointing at a
+/// directory that is not there is an error row in the explorer, and the manifest alone
+/// cannot tell a root mid-clone from one that is ready. The trunk is added separately
+/// because [`grove_ops::worktrees::list`] deliberately excludes it — it is the root's
+/// own checkout rather than a declared worktree.
+///
+/// Sorted by name, so the file is stable across runs: the folder order is what an
+/// editor draws the sidebar in, and a `HashMap`-shaped shuffle would be a diff every
+/// time.
+fn folders(home: &Path) -> Result<Vec<Folder>, CliError> {
+    let mut folders = Vec::new();
+    for root in grove_ops::roots::list(home)? {
+        let code = grove_ops::roots::code_dir(home, &root.slug);
+        if let Ok(trunk) = grove_ops::roots::trunk(home, &root.slug)
+            && trunk.dir.is_dir()
+        {
+            folders.push(folder(&root.slug, &trunk.branch, &trunk.dir));
+        }
+        for worktree in grove_ops::worktrees::list(home, &root.slug)? {
+            if worktree.present {
+                folders.push(folder(
+                    &root.slug,
+                    &worktree.branch,
+                    &code.join(&worktree.name),
+                ));
+            }
+        }
+    }
+    folders.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(folders)
+}
+
+/// `<owner>/<repo> · <branch>` over the checkout's absolute path.
+///
+/// The branch rather than the directory name, which is [`grove_ops::worktrees::name_for`]
+/// of it: `feature/x` checks out under `feature-x`, and a sidebar labelled with the
+/// folded name would be the one place an operator reads a branch that does not exist.
+/// The slug leads because a workspace spans roots, and two roots' `main` are otherwise
+/// the same row twice.
+fn folder(slug: &str, branch: &str, path: &Path) -> Folder {
+    Folder {
+        name: format!("{slug} · {branch}"),
+        path: path.display().to_string(),
+    }
+}
+
+/// The one line [`tree_add`] and [`tree_remove`] say about the workspace file: it
+/// exists, the checkouts it lists just changed, and regenerating it is one command.
+///
+/// Said rather than done. Rewriting the file from under an editor that has it open —
+/// and that the operator may have rearranged — is a mutation neither command was asked
+/// for, and a `tree add` that silently reordered someone's sidebar is a worse surprise
+/// than a stale file. Nothing is printed when the file does not exist: an operator who
+/// has never run `grove workspace` is not being told about a feature mid-task.
+fn note_stale_workspace(home: &Path) {
+    if workspace_path(home).exists() {
+        println!("workspace file is stale: run grove workspace");
     }
 }
 
@@ -881,7 +1026,7 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"cloning",
             "pool":{"observed":0,"target":2},"syncing":false,
-            "trunk":"/h/code/o/r/release-2","trunk_branch":"release/2","worktrees":[
+            "root":"/h/roots/o/r","trunk":"/h/code/o/r/release-2","trunk_branch":"release/2","worktrees":[
               {"name":"feat","branch":"feature/x","declared":true,"present":false,
                "path":"/h/code/o/r/feat"}]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
@@ -889,7 +1034,7 @@ mod tests {
 
         // The home is empty — a local read would error `not declared`, so reaching
         // these lines at all proves the snapshot arm ran.
-        let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
+        let lines = super::listing(tmp.path(), &api, SLUG, false).unwrap();
         assert_eq!(lines[0], "root o/r: cloning — pool 0/2");
         assert_eq!(lines[1], "release-2  release/2 (trunk)", "{lines:?}");
         assert!(lines[2].starts_with("feat  feature/x"), "{lines:?}");
@@ -904,11 +1049,11 @@ mod tests {
             "slug":"o/r","url":"file:///src","status":"degraded",
             "error":"root is in the legacy layout (.git is a bare repo): run `grove doctor --fix` to migrate it in place",
             "pool":{"observed":0,"target":0},"syncing":false,
-            "trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[]}],"logs":[]}}"#;
+            "root":"/h/roots/o/r","trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
         let tmp = TempDir::new().unwrap();
 
-        let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
+        let lines = super::listing(tmp.path(), &api, SLUG, false).unwrap();
 
         assert_eq!(lines[0], "root o/r: degraded — pool 0/0", "{lines:?}");
         assert!(lines[1].contains("grove doctor --fix"), "{lines:?}");
@@ -924,7 +1069,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = testfix::home_with_root_and_worktree(&tmp);
 
-        let lines = super::listing(&home, &offline(), SLUG).unwrap();
+        let lines = super::listing(&home, &offline(), SLUG, false).unwrap();
 
         assert_eq!(lines[0], "main  main (trunk)", "{lines:?}");
         assert!(lines[1].starts_with("feat  feature/x"), "{lines:?}");
@@ -938,7 +1083,7 @@ mod tests {
     fn a_root_with_no_bare_on_disk_gets_no_trunk_row() {
         let tmp = TempDir::new().unwrap();
 
-        let lines = super::listing(tmp.path(), &offline(), SLUG).unwrap();
+        let lines = super::listing(tmp.path(), &offline(), SLUG, false).unwrap();
 
         assert_eq!(lines, vec![format!("no worktrees for {SLUG}")], "{lines:?}");
     }
@@ -951,13 +1096,13 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"ready",
             "pool":{"observed":1,"target":1},"syncing":false,
-            "trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[
+            "root":"/h/roots/o/r","trunk":"/h/code/o/r/main","trunk_branch":"main","worktrees":[
               {"name":"main","branch":"main","declared":true,"present":true,
                "path":"/h/code/o/r/main"}]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
         let tmp = TempDir::new().unwrap();
 
-        let lines = super::listing(tmp.path(), &api, SLUG).unwrap();
+        let lines = super::listing(tmp.path(), &api, SLUG, false).unwrap();
 
         assert_eq!(lines[1], "main  main (trunk)", "{lines:?}");
         assert_eq!(
@@ -976,10 +1121,10 @@ mod tests {
 
         // The public entry point over the same path, so the printing wrapper is not
         // the one thing no test walks.
-        tree_list(&home, &offline(), SLUG).unwrap();
+        tree_list(&home, &offline(), SLUG, false).unwrap();
 
         for api in [offline(), busy()] {
-            let lines = super::listing(&home, &api, SLUG).unwrap();
+            let lines = super::listing(&home, &api, SLUG, false).unwrap();
             assert!(
                 lines.iter().any(|l| l.starts_with("feat ")),
                 "the on-disk worktree is the answer: {lines:?}"
@@ -1000,10 +1145,10 @@ mod tests {
         let body = r#"{"ok":true,"data":{"roots":[{
             "slug":"o/r","url":"file:///src","status":"unavailable",
             "pool":{"observed":0,"target":0},"syncing":false,
-            "trunk":"/h/code/o/r/main","worktrees":[]}],"logs":[]}}"#;
+            "root":"/h/roots/o/r","trunk":"/h/code/o/r/main","worktrees":[]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
 
-        let lines = super::listing(&home, &api, SLUG).unwrap();
+        let lines = super::listing(&home, &api, SLUG, false).unwrap();
 
         assert_eq!(
             lines[0], "root o/r: unavailable — pool 0/0",
@@ -1041,7 +1186,7 @@ mod tests {
         );
 
         for api in [stranger, draining] {
-            let lines = super::listing(&home, &api, SLUG).unwrap();
+            let lines = super::listing(&home, &api, SLUG, false).unwrap();
             assert!(
                 lines.iter().any(|l| l.starts_with("feat ")),
                 "a read answers from the disk rather than failing: {lines:?}"
@@ -1054,5 +1199,123 @@ mod tests {
         assert_eq!(grove_ops::worktrees::name_for("feature/x"), "feature-x");
         assert_eq!(grove_ops::worktrees::name_for("a/b/c"), "a-b-c");
         assert_eq!(grove_ops::worktrees::name_for("main"), "main");
+    }
+
+    /// The root's own directory is a `--verbose` line and nothing else: the default
+    /// listing is the operator's checkouts, and `roots/<slug>` is grove's.
+    #[test]
+    fn verbose_prints_the_root_directory_under_the_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root_and_worktree(&tmp);
+        let root = testfix::root_dir(&home, SLUG).display().to_string();
+
+        let quiet = super::listing(&home, &offline(), SLUG, false).unwrap();
+        assert!(!quiet.iter().any(|l| l.contains(&root)), "{quiet:?}");
+
+        let loud = super::listing(&home, &offline(), SLUG, true).unwrap();
+        assert!(loud[0].ends_with("(trunk)"), "{loud:?}");
+        assert_eq!(loud[1], format!("  root {root}"), "{loud:?}");
+    }
+
+    /// With a daemon up the path comes off the wire rather than from a join of our
+    /// own — the daemon resolved the home this row describes.
+    #[test]
+    fn verbose_prints_the_root_the_daemon_named() {
+        let body = r#"{"ok":true,"data":{"roots":[{
+            "slug":"o/r","url":"file:///src","status":"ready",
+            "pool":{"observed":1,"target":1},"syncing":false,
+            "root":"/h/roots/o/r","trunk":"/h/code/o/r/main","trunk_branch":"main",
+            "worktrees":[{"name":"feat","branch":"feature/x","declared":true,
+              "present":true,"path":"/h/code/o/r/feat"}]}],"logs":[]}}"#;
+        let api = ApiClient::at(envelope_server(body), BUDGET);
+        let tmp = TempDir::new().unwrap();
+
+        let lines = super::listing(tmp.path(), &api, SLUG, true).unwrap();
+
+        assert_eq!(lines[1], "main  main (trunk)", "{lines:?}");
+        assert_eq!(lines[2], "  root /h/roots/o/r", "{lines:?}");
+    }
+
+    // ─── workspace ───────────────────────────────────────────────────────────
+
+    /// A second declared root over the same fixture source, so the workspace spans
+    /// more than one repo — which is the whole reason the folder name carries a slug.
+    fn second_root(tmp: &TempDir, home: &std::path::Path, slug: &str) {
+        let src = tmp.path().join("src");
+        grove_ops::roots::add(home, slug, src.to_str().unwrap()).unwrap();
+    }
+
+    /// Every checkout of every declared root, once, named `<slug> · <branch>` and
+    /// pointed at by absolute path — the file an editor opens.
+    #[test]
+    fn workspace_writes_a_folder_per_checkout_across_roots() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root_and_worktree(&tmp);
+        second_root(&tmp, &home, "o2/r2");
+        let out = tmp.path().join("nested/w.code-workspace");
+
+        super::workspace(&home, Some(&out)).unwrap();
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let folders = doc["folders"].as_array().unwrap();
+        let code = testfix::code_dir(&home, SLUG);
+        let code2 = testfix::code_dir(&home, "o2/r2");
+        assert_eq!(
+            folders
+                .iter()
+                .map(|f| (
+                    f["name"].as_str().unwrap(),
+                    std::path::Path::new(f["path"].as_str().unwrap())
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("o/r · feature/x", code.join("feat").as_path()),
+                ("o/r · main", testfix::trunk_dir(&home, SLUG).as_path()),
+                ("o2/r2 · main", code2.join("main").as_path()),
+            ],
+            "sorted by name, branch-named rather than directory-named: {doc:#}"
+        );
+    }
+
+    /// No `--out`: the file lands beside the manifest it is derived from, which is the
+    /// path `tree add` and `tree remove` watch for to call it stale.
+    #[test]
+    fn workspace_defaults_beside_the_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root(&tmp);
+
+        super::workspace(&home, None).unwrap();
+
+        assert!(super::workspace_path(&home).exists());
+        assert_eq!(
+            home.join("grove.code-workspace"),
+            super::workspace_path(&home)
+        );
+    }
+
+    /// A declared-but-unrealized checkout is not a folder: an explorer row pointing at
+    /// a directory that is not there is an error the operator cannot act on, and a
+    /// root mid-clone declares plenty of them.
+    #[test]
+    fn workspace_lists_only_what_is_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root(&tmp);
+        grove_ops::manifest::add_worktree(
+            &grove_ops::roots::manifest_path(&home),
+            SLUG,
+            "ghost",
+            "ghost/x",
+            Some("main"),
+        )
+        .unwrap();
+
+        let names: Vec<String> = super::folders(&home)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+
+        assert_eq!(names, vec!["o/r · main".to_owned()], "{names:?}");
     }
 }

@@ -55,7 +55,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::LEGACY_TRUNK;
 use crate::manifest::{self, Share, ShareMode};
-use crate::roots::{self, list as list_roots, manifest_path, root_dir};
+use crate::roots::{self, code_dir, list as list_roots, manifest_path};
 use crate::{Error, worktrees};
 
 /// How aggressively `materialize` resolves a real-file conflict at a share
@@ -164,7 +164,7 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
         out.push(err(slug, None, "", "invalid slug"));
         return;
     }
-    let root = root_dir(home, slug);
+    let root = code_dir(home, slug);
     // Which directory is the trunk is a manifest question, so it is asked once per
     // root and carried through every row below — never re-derived per share.
     let trunk = match roots::trunk(home, slug) {
@@ -636,15 +636,15 @@ fn free_backup_name<Fd: AsFd>(dirfd: Fd, leaf: &OsStr) -> Result<OsString> {
 
 /// Grove-controlled relative symlink target from a worktree-rooted share path: one
 /// `..` per directory level above the leaf, then `<trunk>/<p>`. Both `<wt>` and the
-/// trunk are siblings under the root, so the answer is purely a function of
+/// trunk are siblings in the code dir, so the answer is purely a function of
 /// `<p>`'s depth. e.g. `.env` → `../main/.env`; `config/db.toml` →
 /// `../../main/config/db.toml`. Pure — no I/O.
 ///
-/// CONSTRAINT: the sibling assumption is load-bearing. A worktree at any other
-/// depth (e.g. a `.pool/<slot>` nursery slot, one level deeper) gets targets that
-/// resolve one level off and dangle — materialize into such a tree only after it
-/// moves to canonical sibling depth, or teach this function a worktree-depth axis
-/// first. See `docs/worktrees.md` (On-disk layout).
+/// CONSTRAINT: the sibling assumption is load-bearing. A worktree anywhere else (a
+/// warm-pool slot, which lives under the root dir rather than beside the trunk) gets
+/// targets that resolve somewhere else entirely and dangle — materialize into such a
+/// tree only after it moves to canonical sibling depth, or teach this function a
+/// worktree-address axis first. See `docs/worktrees.md` (On-disk layout).
 fn trunk_relative_target(trunk: &str, p: &Path) -> PathBuf {
     let mut target = PathBuf::new();
     for _ in 0..p.components().count() {

@@ -78,21 +78,36 @@ pub fn home_with_root(tmp: &TempDir) -> PathBuf {
 #[must_use]
 pub fn home_with_root_and_worktree(tmp: &TempDir) -> PathBuf {
     let home = home_with_root(tmp);
-    if !crate::roots::root_dir(&home, SLUG).join("feat").exists() {
+    if !crate::roots::code_dir(&home, SLUG).join("feat").exists() {
         crate::worktrees::create(&home, SLUG, "feat", "feature/x", Some("main")).unwrap();
     }
     home
 }
 
-/// The on-disk root directory for `slug` under `home`. Re-exported for consumers'
-/// tests: the layout helper itself is crate-private, and a test that hand-built
-/// `home/code/<slug>` would be a second copy of the layout.
+/// The directory holding everything grove owns for `slug` under `home` — the bare and
+/// the warm pool. Re-exported for consumers' tests beside [`code_dir`], so a test that
+/// asserts on grove's own state spells the layout once, here.
 #[must_use]
 pub fn root_dir(home: &Path, slug: &str) -> PathBuf {
     crate::roots::root_dir(home, slug)
 }
 
-/// The on-disk trunk checkout for `slug` under `home` — `<root>/main` for every
+/// The directory holding `slug`'s checkouts under `home`. Re-exported for consumers'
+/// tests: a test that hand-built `home/code/<slug>` would be a second copy of the
+/// layout.
+#[must_use]
+pub fn code_dir(home: &Path, slug: &str) -> PathBuf {
+    crate::roots::code_dir(home, slug)
+}
+
+/// The root's warm pool under `home` — where a `fill` lays `slot-N`. Re-exported so a
+/// consumer's test can mark a slot without spelling the pool's address itself.
+#[must_use]
+pub fn pool_dir(home: &Path, slug: &str) -> PathBuf {
+    crate::pool::pool_dir(home, slug)
+}
+
+/// The on-disk trunk checkout for `slug` under `home` — `<code>/main` for every
 /// fixture, whose source repo is on `main`. Re-exported beside [`root_dir`] for the
 /// same reason: a consumer's test that spelled the trunk directory by hand would be a
 /// second copy of the layout rule, and would go stale the moment a root declares a
@@ -143,7 +158,7 @@ mod tests {
             // git still works here: a new worktree lands under this home.
             crate::worktrees::create(&home, super::SLUG, "probe", "probe/x", Some("main")).unwrap();
             assert!(
-                crate::roots::root_dir(&home, super::SLUG)
+                crate::roots::code_dir(&home, super::SLUG)
                     .join("probe/README.md")
                     .exists()
             );
@@ -169,7 +184,7 @@ mod tests {
         assert!(trunk.join("README.md").exists());
         assert_eq!(super::home_with_root_and_worktree(&tmp), first);
         assert!(
-            crate::roots::root_dir(&first, super::SLUG)
+            crate::roots::code_dir(&first, super::SLUG)
                 .join("feat")
                 .exists(),
             "the second call layered onto the first rather than rebuilding it"

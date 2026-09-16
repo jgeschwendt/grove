@@ -48,10 +48,12 @@ driver owns, or trust disk?* Getting it wrong in either direction is a real defe
 disk too eagerly and a root mid-clone reads `missing`, so the next event dispatches a
 second clone; preserve too eagerly and a finished clone stays `cloning` forever.
 
-`disk_status(home, slug)` is the engine's one filesystem read: `Ready` when `<root>/.bare`
-**and** the trunk checkout (`roots::trunk_dir`, so whichever directory this root's trunk
-branch names) are both directories, else `Missing`. Both, not either — a bare with no trunk
-checkout is exactly the half-realized state reconcile exists to finish.
+`disk_status(home, slug)` is the engine's one filesystem read: `Ready` when the root's
+bare (`roots::bare_dir`, `roots/<slug>/bare`) **and** the trunk checkout
+(`roots::trunk_dir`, so whichever directory under `code/<slug>` this root's trunk branch
+names) are both directories, else `Missing`. It reads one directory from each of the root's
+two trees, which is the whole of what "realized" means — and both, not either: a bare with
+no trunk checkout is exactly the half-realized state reconcile exists to finish.
 
 | current ↓ / transition → | `ReconcileDispatched` | `Derive(Ready)` | `Derive(Missing)` | `ReconcileError(Ready)` | `ReconcileError(Missing)` |
 |---|---|---|---|---|---|

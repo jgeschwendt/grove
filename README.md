@@ -17,27 +17,56 @@ host must provide).
 grove clone add <url>          # declare a repo, and clone it
 grove clone remove <slug> [--force]   # delete it from disk, then undeclare it
 grove tree add <slug> <branch> [--base <ref>]   # a checkout, named branch-with-/-as-
-grove tree list <slug>         # declared ⋈ actual worktrees
+grove tree list <slug> [--verbose]   # declared ⋈ actual worktrees
 grove tree remove <slug> <name>
 grove sync <slug>              # fetch the trunk branch, fast-forward its checkout — never forced
 grove apply                    # realize the whole manifest, locally
 grove doctor [slug] [--dry-run] [--fix]   # converge shares; report conflicts + plumbing
+grove workspace [--out <path>] # a VS Code workspace over every checkout, on demand
 grove ok                       # is the server healthy?
 grove up [--version <v>] [--channel <c>] [--rollback]   # self-update; see below
 grove version                  # what this binary is
 ```
 
-Every checkout under a root is a directory named by its branch, `/` folded to `-`; grove's
-own entries beside them are the dotted ones. One of those checkouts is the **trunk** — the
-branch the root integrates on, what `tree add` forks from and `sync` fast-forwards, and the
-source every share links through. A root names it in the manifest, and defaults to the
-remote's `HEAD` when it does not:
+Grove keeps two trees under `$GROVE_HOME`, one entry per root in each:
+
+```
+$GROVE_HOME/
+├── code/owner/name/       # the code dir — checkouts, and only checkouts
+│   ├── canary/            #   the trunk, named by its branch
+│   └── feature-x/         #   a worktree, a direct sibling of the trunk
+├── roots/owner/name/      # the root — everything grove owns for it
+│   ├── bare/              #   the bare clone
+│   ├── pool/slot-0/       #   warm slots, detached at the trunk tip
+│   └── cloning            #   the marker, only while a clone is in flight
+└── manifest.toml · grove.{lock,pid,log}
+```
+
+A **root** is a declared repository: `[roots."owner/name"]` in the manifest,
+`roots/owner/name/` on disk. Its **code dir** is `code/owner/name/`, and every entry there
+is a checkout named by its branch with `/` folded to `-` — so an editor, a `find`, or your
+own eye reads that directory without an "except grove's own" clause. One of those checkouts
+is the **trunk** — the branch the root integrates on, what `tree add` forks from and `sync`
+fast-forwards, and the source every share links through. A root names it in the manifest,
+and defaults to the remote's `HEAD` when it does not:
 
 ```toml
 [roots."o/r"]
 url   = "git@github.com:o/r.git"
 trunk = "canary"     # absent → whatever the remote's HEAD points at
 ```
+
+`grove workspace` writes a VS Code workspace over the manifest joined with the disk: one
+folder per checkout that is actually there, named `<owner>/<repo> · <branch>` (the branch,
+not the folded directory name), sorted so the file is stable across runs. It lands at
+`$GROVE_HOME/grove.code-workspace` unless `--out` names somewhere else, and it is offline
+by construction — a running server and a cold home produce the same file.
+
+It is written on demand and never regenerated behind you: once the file exists it is
+yours, an editor rewrites it whenever folders are dragged, and a grove that silently
+overwrote that would be a second writer in someone else's document. `tree add` and `tree
+remove` print `workspace file is stale: run grove workspace` when the default file exists,
+and leave it exactly where it is.
 
 **One realizer, ever.** Declaring is universal — the manifest is written by whoever
 runs the command — but *realizing* belongs to a running server whenever one answers,
@@ -80,7 +109,11 @@ that root's engine may be doing the same. On a box with a server running, `clone
 `tree list` is the row that never fails on the server's account: a read has no realizer
 to race, so a snapshot that does not arrive — or one whose row the server marks
 `unavailable`, its word for "this root's reads missed their budget" — falls back to the
-disk rather than erroring or reporting the server's empty list as an answer.
+disk rather than erroring or reporting the server's empty list as an answer. `--verbose`
+adds one line under the trunk row: the root's own directory, `roots/<slug>`, where its bare
+and warm pool live. Off by default because that directory is grove's rather than yours —
+nothing is checked out there and nothing in it is edited, so it belongs to the reading
+where something has gone wrong.
 
 `clone remove` is guarded: it surveys every worktree under the root for uncommitted
 tracked changes and unpushed commits, and refuses — naming them — unless you pass
@@ -109,7 +142,7 @@ grove reboot   # off, then on
 ```
 
 A UI reads the same state two ways: `GET /api/roots` answers a snapshot of every
-declared root — status, pool, sync note, trunk, worktrees — and `GET /api/events` is
+declared root — status, pool, sync note, root, trunk, worktrees — and `GET /api/events` is
 that same snapshot followed by a live SSE stream of what changes, plus a tail of the
 server's own log. Both surfaces are pinned in `contracts/wire-vocab.json`: every
 vocabulary (statuses, error codes, event names) plus the field names of every payload
@@ -134,10 +167,12 @@ grove up --version 0.2.0               # pin a version
 grove up --rollback                    # back to the previous one
 ```
 
-An install is a directory and two symlinks, never an in-place overwrite:
+An install is a directory and two symlinks, never an in-place overwrite, and it lives in
+its own tree (`$GROVE_INSTALL`, default `~/.local/share/grove`) so that deleting it takes
+no repository with it:
 
 ```
-$GROVE_HOME/
+$GROVE_INSTALL/
 ├── versions/<v>/bin/grove   # immutable once written; one binary per release
 ├── current  → versions/<v>  # the only thing that moves, by rename(2)
 ├── previous → versions/<v>  # the rollback target

@@ -48,7 +48,7 @@ precondition: a daemon killed mid-clone converges on the next boot.
 |---|---|
 | a Unix host — Linux or macOS | `grove-ops` uses `openat`/`renameat`/`symlinkat` through `rustix`; there is no Windows path |
 | `git` on `PATH` | worktree, status, prune, fetch and remote reads shell out to git (`grove_ops::git::git_command`, which pins `LC_ALL=C` and scrubs git's local-repo environment). The bare *clone* itself goes through `gix` in-process |
-| a writable `$GROVE_HOME` — the workspace | default `~/.grove`; holds `manifest.toml` and its advisory `manifest.toml.lock` (manifest read-modify-write), every checkout under `code/`, and the daemon's `grove.lock`, `grove.pid` and `grove.log`. The valuable half: nothing here is regenerable from a release |
+| a writable `$GROVE_HOME` — the workspace | default `~/.grove`; holds `manifest.toml` and its advisory `manifest.toml.lock` (manifest read-modify-write), every checkout under `code/<slug>/`, everything grove owns for each root under `roots/<slug>/` (the bare, the warm pool, the in-flight-clone marker), and the daemon's `grove.lock`, `grove.pid` and `grove.log`. The valuable half: nothing here is regenerable from a release |
 | a writable `$GROVE_INSTALL` — the install | default `~/.local/share/grove`; holds `versions/`, the `current` and `previous` symlinks, `channel`, `pending`, and the advisory `update.lock` (concurrent `grove up`). Disposable: delete it and re-install, and no repo notices |
 | a filesystem with symlinks | shares in the workspace, and the whole `current`/`previous` install layout |
 | outbound HTTPS/SSH to the git remotes | clone and fetch |
@@ -64,7 +64,7 @@ up front with that reason rather than 404ing on an asset URL that was never publ
 
 | variable | default | effect |
 |---|---|---|
-| `GROVE_HOME` | `~/.grove` | the workspace grove realizes — `manifest.toml`, `code/`, `grove.{lock,pid,log}` — resolved once, in `grove_ops::home`, for the CLI, the launcher and the daemon alike |
+| `GROVE_HOME` | `~/.grove` | the workspace grove realizes — `manifest.toml`, `code/` (checkouts), `roots/` (bares, pools, clone markers), `grove.{lock,pid,log}` — resolved once, in `grove_ops::home`, for the CLI, the launcher and the daemon alike |
 | `GROVE_INSTALL` | `$XDG_DATA_HOME/grove` when that is set, else `~/.local/share/grove` | the install root `grove up` flips and the launcher runs out of — `versions/`, `current`, `previous`, `channel`, `pending`, `update.lock` — resolved once, in `grove_ops::install_home` |
 | `GROVE_BIND` | `127.0.0.1:7777` | where the daemon listens (daemon: literal loopback only) |
 | `GROVE_LOG` | `info` | `EnvFilter` directive for what the process writes to stderr (ANSI colour only when stderr is a terminal, so `grove.log` stays greppable) |

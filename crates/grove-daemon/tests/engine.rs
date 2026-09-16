@@ -338,7 +338,8 @@ async fn a_terminal_fault_degrades_where_a_transient_one_re_derives() {
 }
 
 /// A root still on the layout grove laid down before the trunk was named by its
-/// branch — the bare at `.git`, the checkout at `.trunk` — degrades, and the degrade
+/// branch — the bare at `.git`, the checkout at `.trunk`, both inside the code dir —
+/// degrades, and the degrade
 /// is **readable**: the engine carries the refusal's own sentence beside the status,
 /// so an operator reads which command clears it rather than a bare `degraded`.
 ///
@@ -354,10 +355,10 @@ async fn a_legacy_root_degrades_with_its_reason_and_clears_after_doctor_fix() {
 
     // Laid out by hand: grove's own writers only produce the layout that exists now,
     // so a fixture built through them could not regress with them.
-    let dir = grove_ops::roots::root_dir(&home, SLUG);
-    let legacy_bare = dir.join(grove_ops::layout::LEGACY_BARE);
-    let legacy_trunk = dir.join(grove_ops::layout::LEGACY_TRUNK);
-    std::fs::create_dir_all(&dir).unwrap();
+    let code = grove_ops::roots::code_dir(&home, SLUG);
+    let legacy_bare = code.join(grove_ops::layout::LEGACY_BARE);
+    let legacy_trunk = code.join(grove_ops::layout::LEGACY_TRUNK);
+    std::fs::create_dir_all(&code).unwrap();
     let path = |p: &Path| p.to_str().expect("fixture paths are utf-8").to_owned();
     testfix::git(
         &home,
@@ -415,7 +416,7 @@ async fn a_legacy_root_degrades_with_its_reason_and_clears_after_doctor_fix() {
         "the reason outlived the degrade it explained"
     );
     assert!(grove_ops::roots::bare_dir(&home, SLUG).is_dir());
-    assert!(dir.join("main").is_dir());
+    assert!(code.join("main").is_dir());
 }
 
 // ── sync ────────────────────────────────────────────────────────────────────────
@@ -592,7 +593,7 @@ async fn slow_the_pool_fills_to_target_and_a_declared_worktree_claims_a_warm_slo
     .await;
     // A mark inside the slot: the worktree carrying it afterwards is proof the slot
     // was MOVED, not that a cold checkout happened to land at the same path.
-    let slot_mark = grove_ops::roots::root_dir(&home, SLUG).join(".pool/slot-0/CLAIMED");
+    let slot_mark = testfix::pool_dir(&home, SLUG).join("slot-0/CLAIMED");
     std::fs::write(&slot_mark, "warm").unwrap();
 
     // What `grove tree add` writes when a daemon is up: a declaration, then a nudge.
@@ -601,7 +602,7 @@ async fn slow_the_pool_fills_to_target_and_a_declared_worktree_claims_a_warm_slo
 
     // The share is the LAST step of a claim (attach → move → declare →
     // materialize), so waiting on it is waiting for the whole thing to land.
-    let worktree = grove_ops::roots::root_dir(&home, SLUG).join("feat");
+    let worktree = grove_ops::roots::code_dir(&home, SLUG).join("feat");
     until(
         "the declared worktree to be realized with its share",
         async || {
@@ -638,7 +639,7 @@ async fn slow_a_declared_worktree_is_cold_created_when_the_pool_is_empty() {
     grove_ops::manifest::add_worktree(&manifest, SLUG, "feat", "feature/x", Some("main")).unwrap();
     engine.roots_changed();
 
-    let worktree = grove_ops::roots::root_dir(&home, SLUG).join("feat");
+    let worktree = grove_ops::roots::code_dir(&home, SLUG).join("feat");
     until("the declared worktree to be realized", async || {
         worktree.join("README.md").is_file().then_some(())
     })

@@ -19,24 +19,37 @@ pub fn manifest_path(home: &Path) -> PathBuf {
     home.join("manifest.toml")
 }
 
-/// The on-disk layout, published rather than crate-private: the daemon's engine
-/// derives a root's status by asking whether the bare and the trunk are both there,
-/// and v1 duplicated exactly these three joins on the far side of its process
-/// boundary (`paths.ex`) — a second copy of the layout that a rename would have
-/// split silently. One process now, so one definition.
+/// Everything grove owns for a root — `roots/<slug>`: the bare (`bare/`), the warm
+/// pool (`pool/`), and the in-flight-clone marker. Nothing a human writes belongs
+/// here, and nothing of a root lives anywhere else but here and its [`code_dir`].
+///
+/// Published rather than crate-private: the daemon's engine derives a root's status
+/// by asking whether the bare and the trunk are both there, and v1 duplicated exactly
+/// these joins on the far side of its process boundary (`paths.ex`) — a second copy of
+/// the layout that a rename would have split silently. One process now, so one
+/// definition.
 #[must_use]
 pub fn root_dir(home: &Path, slug: &str) -> PathBuf {
+    home.join("roots").join(slug)
+}
+
+/// A root's checkouts, and only checkouts — `code/<slug>`. Every entry is a git
+/// worktree of the root's bare, which is what lets an editor, a `find`, or an
+/// operator's eye read the directory without an "except grove's own" clause. The one
+/// tolerated stranger is `.DS_Store`; see [`foreign_entries`].
+#[must_use]
+pub fn code_dir(home: &Path, slug: &str) -> PathBuf {
     home.join("code").join(slug)
 }
 
-/// The root's bare clone — `<root>/.bare`.
+/// The root's bare clone — `<root>/bare`.
 ///
-/// Not `<root>/.git`: a bare repo there makes the *root* look like a repository to
-/// every tool that walks upward, so `git status` in it errors and an editor opened
-/// there sees no working tree. `.bare` is inert to that search.
+/// A subdirectory, never the root directory itself: a bare repo at `roots/<slug>`
+/// would make that directory look like a repository to every tool that walks upward,
+/// so `git status` under it errors and an editor opened there sees no working tree.
 #[must_use]
 pub fn bare_dir(home: &Path, slug: &str) -> PathBuf {
-    root_dir(home, slug).join(".bare")
+    root_dir(home, slug).join("bare")
 }
 
 /// The root's trunk: the branch grove integrates on, the directory that branch
@@ -71,7 +84,7 @@ pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
     };
     let name = crate::worktrees::name_for(&branch);
     Ok(Trunk {
-        dir: root_dir(home, slug).join(&name),
+        dir: code_dir(home, slug).join(&name),
         branch,
         name,
     })
@@ -79,14 +92,14 @@ pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
 
 /// The trunk checkout's path, best-effort — for callers that only want a path and
 /// have nowhere to put a failure (a presence probe, a doctor row). A root whose bare
-/// cannot be read falls back to `<root>/main`, the overwhelmingly common trunk name,
+/// cannot be read falls back to `<code>/main`, the overwhelmingly common trunk name,
 /// so the probe reports "missing" rather than blanking.
 ///
 /// **Anything that can report an error should call [`trunk`] instead** — it is the
 /// same lookup without the guess.
 #[must_use]
 pub fn trunk_dir(home: &Path, slug: &str) -> PathBuf {
-    trunk(home, slug).map_or_else(|_| root_dir(home, slug).join("main"), |t| t.dir)
+    trunk(home, slug).map_or_else(|_| code_dir(home, slug).join("main"), |t| t.dir)
 }
 
 /// Per-root outcome of a `reconcile_one` or an `adopt`. The two halves report
@@ -158,6 +171,12 @@ pub enum Removal {
 /// `remove_dir_all` failure propagates *before* `remove_root`, so the slug stays
 /// declared: doctor/reconcile report a broken root rather than adopt bringing it back.
 ///
+/// **Both trees, and nothing of the root survives either.** `roots/<slug>` carries the
+/// bare and the pool, `code/<slug>` the checkouts; a remove that took only one would
+/// leave a root half on disk for `adopt` or `doctor` to find. Either being absent is
+/// ordinary (a declared-but-unrealized root has neither), so each is deleted only if
+/// it is there.
+///
 /// **Declared first, deleted second.** The slug is looked up in the manifest before
 /// any path is handed to `remove_dir_all`: `<home>/code/<slug>` is a real directory
 /// whether or not grove put it there, and an offline `grove clone remove` used to
@@ -182,11 +201,12 @@ pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
             )));
         }
     }
-    let dir = root_dir(home, slug);
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("remove {}", dir.display()))
-            .map_err(Error::io)?;
+    for dir in [code_dir(home, slug), root_dir(home, slug)] {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .with_context(|| format!("remove {}", dir.display()))
+                .map_err(Error::io)?;
+        }
     }
     manifest::remove_root(&manifest_path(home), slug).map_err(Error::io)
 }
@@ -394,9 +414,10 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
     //    nothing else under the root.
     // 3. Only when the bare cannot produce a worktree at all (it is itself broken)
     //    is a re-clone the answer, and a re-clone means deleting the root directory.
-    //    That is done ONLY if the directory holds nothing but grove's own entries:
-    //    `remove_dir_all` on a path a human also writes into is how carried law 5
-    //    fails on the one code path that names it.
+    //    That is done ONLY if the code dir holds nothing at all: `remove_dir_all` on a
+    //    path a human also writes into is how carried law 5 fails on the one code path
+    //    that names it. The root dir goes with it — it is grove's alone, and the bare
+    //    inside it is the thing being replaced.
     if bare.exists() {
         if has_live_worktrees(home, &root.slug, &bare) {
             return Applied {
@@ -420,7 +441,7 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
                 };
             }
             Err(e) => {
-                let foreign = foreign_entries(&root_dir(home, &root.slug));
+                let foreign = foreign_entries(&code_dir(home, &root.slug));
                 if !foreign.is_empty() {
                     return Applied {
                         slug: root.slug.clone(),
@@ -428,33 +449,35 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
                         default_branch: None,
                         error: Some(format!(
                             "could not recreate the trunk ({e:#}), and re-cloning would \
-                             delete {} under the root; move it aside, or \
+                             delete {} under the code dir; move it aside, or \
                              `grove clone remove` the root",
                             foreign.join(", ")
                         )),
                     };
                 }
+                let _ = std::fs::remove_dir_all(code_dir(home, &root.slug));
                 let _ = std::fs::remove_dir_all(root_dir(home, &root.slug));
             }
         }
     }
 
-    // The clone arm below is the only path here that writes into a root directory
-    // grove has never realized, and it reads the absence of `.bare` as "nothing is
-    // here" — which is false in two shapes, each guarded once, in this order:
+    // The clone arm below is the only path here that writes into a root grove has
+    // never realized, and it reads the absence of the bare as "nothing is here" —
+    // which is false in two shapes, each guarded once, in this order:
     //
-    // 1. **A legacy root.** Its bare is at `.git` and its checkout at `.trunk`, so
-    //    every probe the arm makes says missing and it would clone a whole second
+    // 1. **A legacy root.** Its bare and its trunk checkout sit *inside* the code dir,
+    //    so every probe the arm makes says missing and it would clone a whole second
     //    root beside the first, leaving both to be untangled by hand. The order is
-    //    load-bearing: both legacy names are dotted, so the occupancy check below
-    //    reads them as grove's own and would not fire.
-    // 2. **An occupied root.** Anything under the root that is not grove's own is a
-    //    human's, and cloning into it interleaves grove's layout with theirs.
+    //    load-bearing: the occupancy check below would fire on a legacy root too, and
+    //    "holds .git" is the less useful of the two answers.
+    // 2. **An occupied code dir.** A code dir holds checkouts and only checkouts, so
+    //    anything already there is a human's, and cloning into it interleaves grove's
+    //    layout with theirs.
     //
     // Both refuse rather than migrate or move: reconcile adds, never deletes, and the
     // migration is `grove doctor --fix`'s, where the operator asked for it.
-    let dir = root_dir(home, &root.slug);
-    if let Some(legacy) = crate::layout::legacy(&dir) {
+    let dir = code_dir(home, &root.slug);
+    if let Some(legacy) = crate::layout::legacy(home, &root.slug) {
         return Applied {
             slug: root.slug.clone(),
             status: ReconcileStatus::Failed,
@@ -472,7 +495,7 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
             status: ReconcileStatus::Failed,
             default_branch: None,
             error: Some(format!(
-                "root directory holds {}; refusing to clone into it (remove them, or \
+                "code directory holds {}; refusing to clone into it (remove them, or \
                  `grove clone remove` the root)",
                 foreign.join(", ")
             )),
@@ -495,16 +518,23 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
     }
 }
 
+/// Lay both halves of a root down: the bare under `roots/<slug>`, the trunk checkout
+/// under `code/<slug>`. Both directories are created here, because a root that exists
+/// at all exists in both trees.
 fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<String> {
     let dir = root_dir(home, &root.slug);
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let code = code_dir(home, &root.slug);
+    for d in [&dir, &code] {
+        std::fs::create_dir_all(d).with_context(|| format!("create {}", d.display()))?;
+    }
 
     // A marker for the whole of the network clone, so `adopt` does not declare the
-    // half-materialized bare a clone in flight has already written (gix creates
-    // `<root>/.bare` with its `origin` before a byte of the transfer lands). Removed
-    // on both exits: a *crashed* clone leaves it behind on purpose — the leftover is
-    // then visibly grove's, and undeclaring the root keeps it undeclared instead of
-    // adopt resurrecting it on the next manifest event.
+    // half-materialized bare a clone in flight has already written (gix creates the
+    // bare with its `origin` before a byte of the transfer lands). Removed on both
+    // exits: a *crashed* clone leaves it behind on purpose — the leftover is then
+    // visibly grove's, and undeclaring the root keeps it undeclared instead of adopt
+    // resurrecting it on the next manifest event. It lives beside the bare rather than
+    // in the code dir, which holds checkouts and nothing else.
     let marker = dir.join(CLONING_MARKER);
     let _ = std::fs::write(&marker, "");
     let cloned = git::clone_bare(&root.url, bare).and_then(|cloned_onto| {
@@ -515,25 +545,15 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
         // and a declared one never spends a moment on the wrong branch.
         let branch = root.trunk.clone().unwrap_or(cloned_onto);
         git::set_head(bare, &branch)?;
-        let trunk = dir.join(crate::worktrees::name_for(&branch));
+        let trunk = code.join(crate::worktrees::name_for(&branch));
         git::worktree_add(bare, &trunk, &branch, None).map(|()| branch)
     });
     let _ = std::fs::remove_file(&marker);
     cloned
 }
 
-/// Is this entry under a root directory grove's own? Everything else there was put
-/// there by a human or another tool, and nothing grove does deletes it.
-///
-/// The dot rule ([`crate::worktrees::is_reserved`]) plus the clone marker, which is
-/// itself dotted — named here anyway, because it is the one grove-owned entry that is
-/// a *file* rather than part of the layout.
-fn is_owned(name: &str) -> bool {
-    crate::worktrees::is_reserved(name) || name == CLONING_MARKER
-}
-
-/// Written for the length of a clone; see [`clone_and_trunk`].
-const CLONING_MARKER: &str = ".grove-cloning";
+/// Written under `roots/<slug>` for the length of a clone; see [`clone_and_trunk`].
+const CLONING_MARKER: &str = "cloning";
 
 /// Re-add the missing trunk checkout from the bare that is already on disk — the
 /// whole of the repair when a checkout, not a repository, is what went missing.
@@ -548,17 +568,24 @@ fn recover_trunk(home: &Path, slug: &str, bare: &Path) -> Result<String> {
     Ok(trunk.branch)
 }
 
-/// Names under `dir` that are not grove's own, sorted — what a re-clone's
-/// `remove_dir_all` would destroy. An unreadable directory reports none: it is about
-/// to be re-created anyway, and a read error is not evidence of a human's files.
-fn foreign_entries(dir: &Path) -> Vec<String> {
+/// Names under a **code dir** that are not checkouts grove laid down, sorted — what a
+/// clone or a re-clone would have to write over. A code dir holds checkouts and only
+/// checkouts, so this is every entry in it bar one: `.DS_Store`, a Finder artefact
+/// that appears in any directory a Mac has looked at and that no operator chose to put
+/// there. An unreadable directory reports none: it is about to be created or
+/// re-created anyway, and a read error is not evidence of a human's files.
+///
+/// `pub(crate)` for [`crate::doctor`]'s orphan-code walk, which asks the same question
+/// of the same directory — "is anything in there?" — and must get the realizer's
+/// answer, `.DS_Store` tolerance included.
+pub(crate) fn foreign_entries(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut names: Vec<String> = entries
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| !is_owned(name))
+        .filter(|name| name != ".DS_Store")
         .collect();
     names.sort();
     names
@@ -568,18 +595,15 @@ fn foreign_entries(dir: &Path) -> Vec<String> {
 /// grove's own disposable checkouts? Guards the destructive partial-clone
 /// recovery: a user's checkout must never be wiped to recover a missing trunk.
 ///
-/// Three exclusions, and they need different tests. Grove's own entries are the
-/// dotted *basenames* one level under the root, so a basename match is exact
-/// for them — and so is the trunk's, which is grove's checkout of the branch this
-/// root integrates on and is exactly the thing being recovered here. A warm-pool
-/// slot is registered at `<root>/.pool/slot-N`, whose
-/// basename is `slot-N` — matching `.pool` by basename never fires, so slots
-/// would read as user checkouts and wedge every pooled root's recovery forever.
-/// They are excluded by path, through the same `worktrees::under_pool` prefix
-/// test `pool::slots` counts with. Wiping them is correct: a slot is a detached
-/// checkout at the trunk tip carrying no user data, the bare is re-cloned from
-/// scratch so its registrations go with it, and `pool::fill` restores the
-/// declared target at the new tip.
+/// Two exclusions, and they need different tests. The trunk is grove's checkout of the
+/// branch this root integrates on and is exactly the thing being recovered here, so it
+/// is matched by *basename* — which is what names a checkout in the code dir. A
+/// warm-pool slot is registered at `roots/<slug>/pool/slot-N`, outside the code tree
+/// entirely and carrying a basename (`slot-N`) that names nothing here; it is excluded
+/// by path, through the same `worktrees::under_pool` prefix test `pool::slots` counts
+/// with. Wiping slots is correct: a slot is a detached checkout at the trunk tip
+/// carrying no user data, the bare is re-cloned from scratch so its registrations go
+/// with it, and `pool::fill` restores the declared target at the new tip.
 ///
 /// **Fail safe** — if `git worktree list` errors (a corrupt/unreadable bare, which
 /// can still own live checkouts), assume worktrees may exist and refuse the wipe. A
@@ -590,12 +614,12 @@ fn has_live_worktrees(home: &Path, slug: &str, bare: &Path) -> bool {
     let trunk = trunk.as_ref().map(|t| t.name.as_str());
     match git::worktree_list(bare) {
         Ok(wts) => wts.iter().any(|wt| {
-            let groves_own = wt
+            let is_trunk = wt
                 .path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| crate::worktrees::is_reserved(n) || trunk == Some(n));
-            !groves_own && !crate::worktrees::under_pool(home, slug, &wt.path)
+                .is_some_and(|n| trunk == Some(n));
+            !is_trunk && !crate::worktrees::under_pool(home, slug, &wt.path)
         }),
         Err(_) => true,
     }
@@ -704,15 +728,22 @@ pub fn slug_from_url(url: &str) -> Result<String> {
 
 /// Global discovery pass: adopt undeclared on-disk bare repos into the manifest,
 /// **no cloning, no worktree/share work** (that's `reconcile_one`'s job). Walks
-/// `code/<org>/<name>/` (depth-2, dotfile dirs like `.trash` skipped at both
-/// levels), reads each bare's origin URL, and declares any slug not already in
-/// the manifest. Idempotent and additive — never auto-deletes a declared root,
+/// `roots/<org>/<name>/` (depth-2, dotfile dirs like `.trash` skipped at both levels)
+/// for the slugs, reads the origin URL of each slug's bare under [`bare_dir`], and
+/// declares any slug not already in the manifest. Idempotent and additive — never
+/// auto-deletes a declared root,
 /// never overwrites a declared URL. Repos without an `origin` remote are skipped
 /// (no URL to record). Returns one `Applied{status: Adopted}` per newly-declared
 /// slug.
+///
+/// The `roots/` tree and never the code tree: a root *is* its root directory, so the
+/// bare is what proves one exists. A code dir proves nothing — it holds checkouts, and
+/// checkouts of what is exactly the question — so a code dir with no root behind it is
+/// a doctor finding ([`crate::doctor::orphan_code_checks`]) rather than something to
+/// declare a root from.
 pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
-    let code = home.join("code");
-    if !code.is_dir() {
+    let tree = home.join("roots");
+    if !tree.is_dir() {
         return Ok(vec![]);
     }
 
@@ -721,8 +752,8 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
     let manifest = manifest_path(home);
     let mut adopted = Vec::new();
 
-    for org_entry in std::fs::read_dir(&code)
-        .with_context(|| format!("read {}", code.display()))
+    for org_entry in std::fs::read_dir(&tree)
+        .with_context(|| format!("read {}", tree.display()))
         .map_err(Error::io)?
     {
         let Ok(org_entry) = org_entry else { continue };
@@ -768,7 +799,7 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
             // may have just undeclared, and the engine then re-clones what they
             // asked to be rid of — so the marker `clone_and_trunk` writes is a
             // "not mine to discover" sign, not a lock.
-            if repo_entry.path().join(CLONING_MARKER).exists() {
+            if root_dir(home, &slug).join(CLONING_MARKER).exists() {
                 continue;
             }
             // Skip silently if origin isn't configured — the bare exists but we
@@ -880,8 +911,14 @@ mod tests {
         assert_eq!(applied[0].slug, "o/r");
         assert_eq!(applied[0].status, ReconcileStatus::Cloned);
         assert_eq!(applied[0].default_branch.as_deref(), Some("main"));
+        assert_eq!(bare_dir(&home, "o/r"), home.join("roots/o/r/bare"));
         assert!(bare_dir(&home, "o/r").join("HEAD").exists());
+        assert_eq!(trunk_dir(&home, "o/r"), home.join("code/o/r/main"));
         assert!(trunk_dir(&home, "o/r").join("README.md").exists());
+        assert!(
+            !home.join("code/o/r/bare").exists(),
+            "the bare is the root dir's, never the code dir's"
+        );
 
         // Declaring a second root realizes only it — the first is untouched.
         let other = tmp.path().join("src2");
@@ -910,25 +947,25 @@ mod tests {
     fn trunk_reads_the_declaration_and_falls_back_to_the_bares_head() {
         let tmp = TempDir::new().unwrap();
         let home = crate::testfix::home_with_root(&tmp);
-        let root = root_dir(&home, "o/r");
+        let code = code_dir(&home, "o/r");
         crate::testfix::git(&bare_dir(&home, "o/r"), &["branch", "canary", "main"]);
 
         let fallback = trunk(&home, "o/r").unwrap();
         assert_eq!(fallback.branch, "main");
         assert_eq!(fallback.name, "main");
-        assert_eq!(fallback.dir, root.join("main"));
+        assert_eq!(fallback.dir, code.join("main"));
 
         declare_trunk(&home, "o/r", "canary");
         let declared = trunk(&home, "o/r").unwrap();
         assert_eq!(declared.branch, "canary");
         assert_eq!(declared.name, "canary");
-        assert_eq!(declared.dir, root.join("canary"));
+        assert_eq!(declared.dir, code.join("canary"));
 
         // The directory is `name_for` of the branch, never the branch verbatim.
         declare_trunk(&home, "o/r", "release/2.0");
         let slashed = trunk(&home, "o/r").unwrap();
         assert_eq!(slashed.branch, "release/2.0");
-        assert_eq!(slashed.dir, root.join("release-2.0"));
+        assert_eq!(slashed.dir, code.join("release-2.0"));
     }
 
     /// A declared trunk is where the clone checks out and what the bare's HEAD is set
@@ -948,9 +985,9 @@ mod tests {
         let applied = reconcile_one(&home, "o/r").unwrap();
         assert_eq!(applied.status, ReconcileStatus::Cloned);
         assert_eq!(applied.default_branch.as_deref(), Some("canary"));
-        assert!(root_dir(&home, "o/r").join("canary/README.md").is_file());
+        assert!(code_dir(&home, "o/r").join("canary/README.md").is_file());
         assert!(
-            !root_dir(&home, "o/r").join("main").exists(),
+            !code_dir(&home, "o/r").join("main").exists(),
             "the trunk is the declared branch's checkout, and the only one"
         );
         assert_eq!(
@@ -982,9 +1019,9 @@ mod tests {
         let src = tmp.path().join("src");
         fixture_repo_with_canary(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
-        let root = root_dir(&home, "o/r");
+        let code = code_dir(&home, "o/r");
         assert!(
-            root.join("main/README.md").is_file(),
+            code.join("main/README.md").is_file(),
             "trunk starts at main"
         );
 
@@ -993,7 +1030,7 @@ mod tests {
         assert_eq!(applied.status, ReconcileStatus::Present, "{applied:?}");
 
         assert!(
-            root.join("canary/README.md").is_file(),
+            code.join("canary/README.md").is_file(),
             "the declared trunk is checked out under its own branch name"
         );
         assert_eq!(
@@ -1002,7 +1039,7 @@ mod tests {
             "HEAD carries the declaration for every reader of it"
         );
         assert!(
-            root.join("main/README.md").is_file(),
+            code.join("main/README.md").is_file(),
             "the ex-trunk is left on disk"
         );
         let declared = declared_worktrees(&home, "o/r");
@@ -1031,8 +1068,8 @@ mod tests {
         fixture_repo_with_canary(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
         crate::worktrees::create(&home, "o/r", "canary", "canary", None).unwrap();
-        let root = root_dir(&home, "o/r");
-        std::fs::write(root.join("canary/IN-FLIGHT.txt"), "not grove's").unwrap();
+        let code = code_dir(&home, "o/r");
+        std::fs::write(code.join("canary/IN-FLIGHT.txt"), "not grove's").unwrap();
         assert!(
             declared_worktrees(&home, "o/r")
                 .iter()
@@ -1052,7 +1089,7 @@ mod tests {
             "the entry is dropped — that checkout is the trunk now: {declared:?}"
         );
         assert!(
-            root.join("canary/IN-FLIGHT.txt").exists(),
+            code.join("canary/IN-FLIGHT.txt").exists(),
             "the same checkout, not a fresh one beside it"
         );
         assert_eq!(
@@ -1087,14 +1124,14 @@ mod tests {
             "the failure names the branch: {applied:?}"
         );
 
-        let root = root_dir(&home, "o/r");
-        assert!(!root.join("canry").exists(), "no checkout, no branch");
+        let code = code_dir(&home, "o/r");
+        assert!(!code.join("canry").exists(), "no checkout, no branch");
         assert_eq!(
             git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
             "main",
             "HEAD is left where it was"
         );
-        assert!(root.join("main/README.md").is_file(), "so is the trunk");
+        assert!(code.join("main/README.md").is_file(), "so is the trunk");
     }
 
     /// Two checkouts asking for one directory — a declared worktree named exactly for
@@ -1175,6 +1212,7 @@ mod tests {
 
         remove(&home, "o/r", Removal::Forced).unwrap();
         assert!(!home.join("code/o/r").exists(), "--force still deletes");
+        assert!(!home.join("roots/o/r").exists());
     }
 
     /// An untracked file is NOT the dirty signal: grove materializes declared shares
@@ -1191,13 +1229,49 @@ mod tests {
 
         remove(&home, "o/r", Removal::Guarded).unwrap();
         assert!(!home.join("code/o/r").exists());
+        assert!(!home.join("roots/o/r").exists());
+    }
+
+    /// Discovery reads the root directory and nothing else: a bare under `roots/` is a
+    /// root whether or not anything has been checked out of it, and a code dir is not
+    /// one however full it is — its entries are checkouts, and checkouts *of what* is
+    /// exactly the question adoption has to answer from the bare's `origin`.
+    #[test]
+    fn adopt_reads_the_roots_tree_and_never_the_code_tree() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+
+        // A bare with no code dir at all…
+        let bare = bare_dir(&home, "o/r");
+        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        git::clone_bare(src.to_str().unwrap(), &bare).unwrap();
+        // …and a code dir with no root behind it, which doctor reports as orphan code.
+        std::fs::create_dir_all(code_dir(&home, "x/y").join("main")).unwrap();
+
+        let adopted = adopt(&home).unwrap();
+        assert_eq!(adopted.len(), 1, "{adopted:?}");
+        assert_eq!(adopted[0].slug, "o/r");
+        assert_eq!(adopted[0].status, AdoptStatus::Adopted);
+        assert_eq!(
+            list(&home)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.slug)
+                .collect::<Vec<_>>(),
+            vec!["o/r"],
+            "the code dir declared nothing"
+        );
     }
 
     /// Plant a fully-formed grove root on disk *without* touching the manifest —
-    /// the shape `adopt` expects to find (bare at `<root>/.bare`, trunk checkout).
+    /// the shape `adopt` expects to find (bare under the root dir, trunk checkout
+    /// under the code dir).
     fn plant_bare(home: &Path, slug: &str, src: &Path) {
         let bare = bare_dir(home, slug);
         std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(code_dir(home, slug)).unwrap();
         git::clone_bare(src.to_str().unwrap(), &bare).unwrap();
         git::worktree_add(&bare, &trunk_dir(home, slug), "main", None).unwrap();
     }
@@ -1276,9 +1350,11 @@ mod tests {
         let src = tmp.path().join("src");
         fixture_repo(&src);
 
-        // A bare repo under `.trash/old/r/` — must not be adopted.
+        // A bare repo under `.trash/old/r/` — must not be adopted, and the code dir
+        // beside it is what the walk would have to refuse.
         let trash_bare = bare_dir(&home, ".trash/old/r");
         std::fs::create_dir_all(trash_bare.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(code_dir(&home, ".trash/old/r")).unwrap();
         git::clone_bare(src.to_str().unwrap(), &trash_bare).unwrap();
 
         adopt(&home).unwrap();
@@ -1360,9 +1436,9 @@ mod tests {
     fn reconcile_one_refuses_a_root_in_the_legacy_layout() {
         let tmp = TempDir::new().unwrap();
         let home = declared_unrealized(&tmp);
-        let root = root_dir(&home, "o/r");
-        let legacy_bare = root.join(crate::layout::LEGACY_BARE);
-        let legacy_trunk = root.join(crate::layout::LEGACY_TRUNK);
+        let code = code_dir(&home, "o/r");
+        let legacy_bare = code.join(crate::layout::LEGACY_BARE);
+        let legacy_trunk = code.join(crate::layout::LEGACY_TRUNK);
         std::fs::create_dir_all(&legacy_bare).unwrap();
         std::fs::write(legacy_bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         std::fs::create_dir_all(&legacy_trunk).unwrap();
@@ -1391,9 +1467,9 @@ mod tests {
     fn reconcile_one_refuses_to_clone_into_an_occupied_root() {
         let tmp = TempDir::new().unwrap();
         let home = declared_unrealized(&tmp);
-        let root = root_dir(&home, "o/r");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("notes.txt"), "mine").unwrap();
+        let code = code_dir(&home, "o/r");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::write(code.join("notes.txt"), "mine").unwrap();
 
         let applied = reconcile_one(&home, "o/r").unwrap();
 
@@ -1403,18 +1479,19 @@ mod tests {
             "the refusal names what it found: {applied:?}"
         );
         assert!(!bare_dir(&home, "o/r").exists(), "nothing was cloned");
-        assert!(root.join("notes.txt").exists());
+        assert!(code.join("notes.txt").exists());
     }
 
-    /// And grove's own entries are not occupancy: a `.pool` left behind by a removed
-    /// root — or by a crashed clone — still clones, because the fill pass prunes stale
-    /// slots and the alternative is a root nothing but a hand-delete can realize.
+    /// The one entry a code dir tolerates. `.DS_Store` appears in any directory a Mac
+    /// has looked at, nobody chose to put it there, and reading it as occupancy would
+    /// leave a root nothing but a hand-delete could realize.
     #[test]
-    fn reconcile_one_clones_into_a_root_holding_only_groves_own() {
+    fn reconcile_one_clones_into_a_code_dir_holding_only_a_ds_store() {
         let tmp = TempDir::new().unwrap();
         let home = declared_unrealized(&tmp);
-        let root = root_dir(&home, "o/r");
-        std::fs::create_dir_all(root.join(".pool")).unwrap();
+        let code = code_dir(&home, "o/r");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::write(code.join(".DS_Store"), "finder").unwrap();
 
         let applied = reconcile_one(&home, "o/r").unwrap();
 
@@ -1478,12 +1555,12 @@ mod tests {
         fixture_repo(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
 
-        // A warm slot registers at `<root>/.pool/slot-0`, whose BASENAME is `slot-0`.
-        // Matching the reserved `.pool` by basename never fires on it, so grove's own
-        // disposable checkout used to read as a user checkout and wedge recovery for
+        // A warm slot registers outside the code dir entirely, under `roots/o/r/pool`,
+        // and its basename (`slot-0`) names no checkout. A basename-only exclusion read
+        // grove's own disposable checkout as a user checkout and wedged recovery for
         // good — every pooled root permanently unrecoverable through grove's commands.
         crate::pool::fill(&home, "o/r").unwrap();
-        assert!(home.join("code/o/r/.pool/slot-0/README.md").exists());
+        assert!(home.join("roots/o/r/pool/slot-0/README.md").exists());
         std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
 
         assert_eq!(
@@ -1507,10 +1584,10 @@ mod tests {
         fixture_repo(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
 
-        let root = home.join("code/o/r");
-        std::fs::write(root.join("NOTES.md"), "my notes").unwrap();
-        std::fs::create_dir_all(root.join("sideproject")).unwrap();
-        std::fs::write(root.join("sideproject/only-copy.txt"), "irreplaceable").unwrap();
+        let code = home.join("code/o/r");
+        std::fs::write(code.join("NOTES.md"), "my notes").unwrap();
+        std::fs::create_dir_all(code.join("sideproject")).unwrap();
+        std::fs::write(code.join("sideproject/only-copy.txt"), "irreplaceable").unwrap();
         std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
 
         assert_eq!(
@@ -1522,8 +1599,8 @@ mod tests {
             trunk_dir(&home, "o/r").join("README.md").exists(),
             "the trunk checkout is back"
         );
-        assert!(root.join("NOTES.md").exists(), "a human's file survives");
-        assert!(root.join("sideproject/only-copy.txt").exists());
+        assert!(code.join("NOTES.md").exists(), "a human's file survives");
+        assert!(code.join("sideproject/only-copy.txt").exists());
     }
 
     /// And when the bare is too broken to produce a worktree, a re-clone — which
@@ -1536,7 +1613,7 @@ mod tests {
         fixture_repo(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
 
-        let root = home.join("code/o/r");
+        let code = home.join("code/o/r");
         std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
         // A bare git still answers `worktree list` from, but carrying no refs at all —
         // so no branch resolves and the trunk cannot be re-added from it.
@@ -1547,7 +1624,7 @@ mod tests {
         {
             let _ = std::fs::remove_file(entry.path());
         }
-        std::fs::write(root.join("scratch-notes.md"), "unsaved thinking").unwrap();
+        std::fs::write(code.join("scratch-notes.md"), "unsaved thinking").unwrap();
 
         let applied = reconcile_one(&home, "o/r").unwrap();
         assert_eq!(applied.status, ReconcileStatus::Failed);
@@ -1559,10 +1636,10 @@ mod tests {
                 .contains("scratch-notes.md"),
             "the refusal names what it would have destroyed: {applied:?}"
         );
-        assert!(root.join("scratch-notes.md").exists());
+        assert!(code.join("scratch-notes.md").exists());
 
-        // Grove's own entries alone: the re-clone proceeds.
-        std::fs::remove_file(root.join("scratch-notes.md")).unwrap();
+        // An empty code dir: the re-clone proceeds.
+        std::fs::remove_file(code.join("scratch-notes.md")).unwrap();
         assert_eq!(
             reconcile_one(&home, "o/r").unwrap().status,
             ReconcileStatus::Cloned
@@ -1570,7 +1647,7 @@ mod tests {
         assert!(trunk_dir(&home, "o/r").join("README.md").exists());
     }
 
-    /// A clone in flight (or one that died mid-transfer) writes `<root>/.bare` with an
+    /// A clone in flight (or one that died mid-transfer) writes the bare with an
     /// `origin` before a byte lands. Adopting that is how an operator's undeclare gets
     /// silently undone and the root re-cloned; the marker is what keeps discovery off
     /// it.
@@ -1581,13 +1658,13 @@ mod tests {
         let src = tmp.path().join("src");
         fixture_repo(&src);
         plant_bare(&home, "o/r", &src);
-        std::fs::write(home.join("code/o/r").join(CLONING_MARKER), "").unwrap();
+        std::fs::write(root_dir(&home, "o/r").join(CLONING_MARKER), "").unwrap();
 
         assert!(
             adopt(&home).unwrap().is_empty(),
             "a clone in flight is not a discovery"
         );
-        std::fs::remove_file(home.join("code/o/r").join(CLONING_MARKER)).unwrap();
+        std::fs::remove_file(root_dir(&home, "o/r").join(CLONING_MARKER)).unwrap();
         assert_eq!(
             adopt(&home).unwrap().len(),
             1,
@@ -1756,10 +1833,10 @@ mod tests {
             git::rev_parse(&src, "canary").unwrap(),
             "the trunk sits at the remote's canary tip"
         );
-        let root = root_dir(&home, "o/r");
-        assert!(root.join("canary/AHEAD.md").exists());
+        let code = code_dir(&home, "o/r");
+        assert!(code.join("canary/AHEAD.md").exists());
         assert!(
-            !root.join("main/AHEAD.md").exists(),
+            !code.join("main/AHEAD.md").exists(),
             "sync moves the trunk and nothing else"
         );
     }
@@ -1786,7 +1863,8 @@ mod tests {
         remove(&home, "o/r", Removal::Guarded).unwrap();
 
         assert_eq!(list(&home).unwrap(), vec![]);
-        assert!(!home.join("code/o/r").exists());
+        assert!(!home.join("code/o/r").exists(), "no checkouts left behind");
+        assert!(!home.join("roots/o/r").exists(), "and none of grove's own");
     }
 
     /// D4: after `remove` (delete-then-undeclare), the on-disk bare is gone, so a

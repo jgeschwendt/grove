@@ -443,14 +443,13 @@ async fn root_pass(
             // reads sit inside this job, so they bracket the migration on the same
             // lane the migration ran on and no other writer can move the root between
             // them.
-            let root = grove_ops::roots::root_dir(&home, &slug);
-            let was_legacy = grove_ops::layout::legacy(&root).is_some();
+            let was_legacy = grove_ops::layout::legacy(&home, &slug).is_some();
             let (report, pools) = grove_ops::doctor::run(&home, Some(&slug), dry_run, fix)?;
             Ok::<_, grove_ops::Error>(RootPass {
                 report,
                 pools,
                 checks: grove_ops::doctor::root_checks(&home, &slug),
-                migrated: was_legacy && grove_ops::layout::legacy(&root).is_none(),
+                migrated: was_legacy && grove_ops::layout::legacy(&home, &slug).is_none(),
             })
         }
     });

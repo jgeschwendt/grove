@@ -45,10 +45,13 @@ no second source of truth. Everything the daemon holds in memory is a cache:
 A daemon may be killed and restarted with only the filesystem intact. Nothing depends on
 process continuity, and an abandoned clone is re-derived from disk on the next boot.
 
-Reading actual state means reading the whole root directory, not the one entry the realizer
-came for. A root carrying the legacy layout — a bare at `.git`, a checkout at `.trunk` —
-and a root holding anything that is not grove's own both read as *missing* to the clone
-arm's probes, and cloning either would lay a second root down beside what is there.
+Reading actual state means reading both of a root's directories, not the one entry the
+realizer came for. Grove keeps them apart on purpose: `roots/<slug>/` holds everything
+grove owns — the bare, the warm pool, the in-flight-clone marker — and `code/<slug>/`, the
+root's *code dir*, holds checkouts and only checkouts. A root carrying a superseded layout
+(its bare inside the code dir) and a root whose code dir already holds somebody's files
+both read as *missing* to the clone arm's probes, and cloning either would lay a second
+root down beside what is there.
 Realization refuses both instead, naming what it found: reconcile adds and never deletes,
 so the four answers a declared-but-absent root can get are two refusals, a trunk recovery
 and a clone (`docs/worktrees.md` § Root realization). A refusal is a `failed` outcome, so

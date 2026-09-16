@@ -307,7 +307,12 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
         wait::within(deadline, &*state.clock, job).await
     };
 
-    let root_dir = grove_ops::roots::root_dir(&state.config.home, &slug);
+    let code_dir = grove_ops::roots::code_dir(&state.config.home, &slug);
+    // Off the lane like the join above it: a path join reads nothing git owns, and a
+    // row must name the root's own directory even while an engine is mid-clone in it.
+    let root_dir = grove_ops::roots::root_dir(&state.config.home, &slug)
+        .display()
+        .to_string();
     let (trunk, trunk_branch) = trunk_view(&state.config.home, &slug);
     match reads {
         Some(Ok(reads)) => RootView {
@@ -318,13 +323,14 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
             pool: reads.pool,
             syncing: state_of.syncing,
             sync_note: state_of.sync_note,
+            root: root_dir,
             trunk,
             trunk_branch,
             trunk_status: reads.trunk_status,
             worktrees: reads
                 .worktrees
                 .into_iter()
-                .map(|wt| worktree_view(&root_dir, wt))
+                .map(|wt| worktree_view(&code_dir, wt))
                 .collect(),
         },
         // The row stands — a UI must still see the root — but it reports
@@ -348,6 +354,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
                 pool: PoolView::default(),
                 syncing: state_of.syncing,
                 sync_note: state_of.sync_note,
+                root: root_dir,
                 trunk,
                 trunk_branch,
                 trunk_status: None,
@@ -360,7 +367,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
 /// The trunk a row draws: its absolute path and the branch it checks out, resolved
 /// together so the two halves cannot disagree.
 ///
-/// Off the lane, like the [`grove_ops::roots::root_dir`] join beside it: the manifest
+/// Off the lane, like the [`grove_ops::roots::code_dir`] join beside it: the manifest
 /// read is the same one `roots::list` already did to produce this row, and the bare's
 /// `HEAD` is a ref file rather than a working tree the engine could be mid-clone in.
 ///
@@ -418,9 +425,9 @@ async fn engine_state(engine: Option<&Engine>) -> EngineState {
     }
 }
 
-fn worktree_view(root_dir: &std::path::Path, wt: WorktreeStatus) -> WorktreeView {
+fn worktree_view(code_dir: &std::path::Path, wt: WorktreeStatus) -> WorktreeView {
     WorktreeView {
-        path: root_dir.join(&wt.name).display().to_string(),
+        path: code_dir.join(&wt.name).display().to_string(),
         name: wt.name,
         branch: wt.branch,
         base: wt.base,

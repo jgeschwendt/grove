@@ -241,7 +241,7 @@ async fn slow_the_stream_opens_with_a_snapshot_and_follows_the_mutations() {
     assert_eq!(worktree.branch, "feature/x");
     assert_eq!(
         worktree.path,
-        testfix::root_dir(&home, testfix::SLUG)
+        testfix::code_dir(&home, testfix::SLUG)
             .join("feat")
             .display()
             .to_string(),
@@ -282,6 +282,7 @@ async fn slow_the_stream_opens_with_a_snapshot_and_follows_the_mutations() {
         })
         .await;
     assert!(!grove_ops::roots::root_dir(&daemon.home, testfix::SLUG).exists());
+    assert!(!grove_ops::roots::code_dir(&daemon.home, testfix::SLUG).exists());
 
     daemon.state.shutdown.fire();
 }
@@ -529,14 +530,15 @@ async fn slow_doctor_fix_migrates_a_legacy_root_and_leaves_it_ready() {
     assert_eq!(ready, None, "a ready root carries no failure text");
     assert!(grove_ops::roots::bare_dir(&home, testfix::SLUG).is_dir());
     assert!(
-        grove_ops::roots::root_dir(&home, testfix::SLUG)
+        grove_ops::roots::code_dir(&home, testfix::SLUG)
             .join("main")
             .is_dir()
     );
 }
 
 /// A home declaring `o/r` over the layout grove laid down before the trunk was named
-/// by its branch: the bare at `.git`, the trunk checkout at `.trunk`.
+/// by its branch: inside the code dir, the bare at `.git` and the trunk checkout at
+/// `.trunk`.
 ///
 /// Built by hand rather than through `testfix`, whose fixtures build the layout that
 /// exists *now* — one produced by grove's own writers would be a fixture that cannot
@@ -554,10 +556,10 @@ fn legacy_home(tmp: &TempDir) -> PathBuf {
     )
     .unwrap();
 
-    let root = grove_ops::roots::root_dir(&home, testfix::SLUG);
-    std::fs::create_dir_all(&root).unwrap();
-    let bare = root.join(grove_ops::layout::LEGACY_BARE);
-    let trunk = root.join(grove_ops::layout::LEGACY_TRUNK);
+    let code = grove_ops::roots::code_dir(&home, testfix::SLUG);
+    std::fs::create_dir_all(&code).unwrap();
+    let bare = code.join(grove_ops::layout::LEGACY_BARE);
+    let trunk = code.join(grove_ops::layout::LEGACY_TRUNK);
     let path = |p: &Path| p.to_str().expect("fixture paths are utf-8").to_owned();
     testfix::git(&home, &["clone", "-q", "--bare", &path(&src), &path(&bare)]);
     testfix::git(&bare, &["worktree", "add", "-q", &path(&trunk), "main"]);

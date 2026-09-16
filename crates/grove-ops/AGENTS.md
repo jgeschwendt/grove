@@ -21,9 +21,9 @@ invariants:
     anchor: lm:never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: lm:sync-never-forces
-  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the root directory; a re-clone is the last resort, refused when any other live worktree hangs off the bare (grove's own pool slots excluded by path) and refused again when the root directory holds anything that is not grove's own; and a root carrying the legacy layout, or any entry that is not grove's own, is refused outright — reconcile never clones into an occupied directory"
+  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory"
     anchor: lm:trunk-recovery-guard
-  - claim: "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout and shares materialize only at that depth, so pool.fill adds a slot one level deeper and materializes nothing"
+  - claim: "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout inside the code dir and shares materialize only there, so pool.fill adds a slot under roots/<slug>/pool, outside the code tree, and materializes nothing"
     anchor: lm:worktree-depth
   - claim: "the warm pool is claimed by the realizer, not by a caller: worktrees::create and worktrees::reconcile both promote a slot before cold-checking-out, so every path that realizes a declared worktree redeems the pool; and convergence runs both ways, fill adding a slot below target and reclaim giving the highest one back above it"
     anchor: crates/grove-ops/src/worktrees.rs#create
@@ -42,16 +42,16 @@ hazards:
 ## Anchors in this territory
 
 - lm:clock-seam → tests/harness_meta.rs:354
-- lm:delete-before-undeclare → src/roots.rs:167
-- lm:files-authoritative → src/manifest.rs:298
+- lm:delete-before-undeclare → src/roots.rs:186
+- lm:files-authoritative → src/manifest.rs:296
 - lm:lane-is-callers → src/env.rs:123
 - lm:never-clobber → src/env.rs:274
-- lm:promote-attach-before-move → src/pool.rs:163
-- lm:reconcile-additive → src/worktrees.rs:251
-- lm:sync-never-forces → src/roots.rs:634
+- lm:promote-attach-before-move → src/pool.rs:164
+- lm:reconcile-additive → src/worktrees.rs:252
+- lm:sync-never-forces → src/roots.rs:658
 - lm:test-reachability → tests/harness_meta.rs:152
-- lm:trunk-recovery-guard → src/roots.rs:587
+- lm:trunk-recovery-guard → src/roots.rs:611
 - lm:wire-error-codes → src/error.rs:48
-- lm:worktree-depth → src/pool.rs:59
+- lm:worktree-depth → src/pool.rs:60
 
 <!-- stele:end -->

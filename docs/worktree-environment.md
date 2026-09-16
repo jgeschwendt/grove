@@ -37,7 +37,7 @@ A path declared in both lists is materialized as a symlink: `manifest::list_shar
 ## The source is the trunk
 
 Every share's source is `<trunk>/<p>` — the trunk checkout, resolved once per pass through
-`roots::trunk` and named by its branch like every other checkout under the root (see
+`roots::trunk` and named by its branch like every other checkout in the code dir (see
 `docs/worktrees.md` § The trunk). That is what makes a symlink share *live*: the worktree
 link and the operator's own trunk copy are the same file.
 
@@ -105,7 +105,7 @@ Only a symlink that is grove's *own* is ever touched. "Grove's own" is a purely 
 test on the link target — after any leading `..` components, the first segment names the
 trunk — with no I/O and no canonicalization, so it cannot be steered by what is on disk.
 
-The test accepts one further name: `.trunk`, the fixed directory a root still on the legacy
+The test accepts one further name: `.trunk`, the fixed directory a root still on the v1
 layout carries its trunk in. A link through it is grove's own, so the next materialize
 repoints it onto the branch-named trunk rather than reading it as a stranger's and leaving
 it (`materialize_repoints_a_legacy_trunk_link`). That is the share half of what
@@ -132,7 +132,7 @@ Two independent gates, string and filesystem.
 canonical, traversal-free paths reach the materializer: relative, `Normal` components only,
 no segment beginning with `-`, no `.`/empty/trailing-`/` segments, and no dotted first
 segment once the path nests — the dot rule (`docs/worktrees.md` § Validation), which keeps
-a share from reaching down into grove's own entries while leaving `.env` a share like any
+a share from reaching down into a dotted directory while leaving `.env` a share like any
 other. Canonicality matters beyond traversal: the link pass and the GC pass derive paths
 differently, so a non-canonical stored string would let them disagree about the same share.
 
@@ -157,12 +157,14 @@ No `unsafe`, no `libc` — the syscalls come from `rustix`, and the workspace fo
 
 Shares materialize **only at canonical depth** — a worktree that is a direct sibling of
 the trunk. The link target is built as one `..` per path component plus `<trunk>/<p>`,
-which is correct exactly one level under the root.
+which is correct exactly one level under the code dir.
 
-Warm-pool slots therefore get no shares while they are slots: `<root>/.pool/slot-N` is one
-level deeper, the link would dangle at `.pool/<trunk>/…`, and the promote move would
-invalidate it anyway. `pool::promote` materializes *after* the move, when the worktree has
-reached canonical depth. `fill_materializes_no_shares_in_slots` pins the negative half.
+Warm-pool slots therefore get no shares while they are slots: a slot lives at
+`roots/<slug>/pool/slot-N`, outside the code tree altogether, so `../<trunk>/<p>` resolves
+inside the pool rather than against the trunk — and the promote move would invalidate the
+link anyway. `pool::promote` materializes *after* the move into the code dir, when the
+worktree has reached canonical depth, and the same relative target is then correct.
+`fill_materializes_no_shares_in_slots` pins the negative half.
 
 ## Where materialization is wired
 
@@ -177,10 +179,10 @@ The first three are best-effort: a share hiccup must never fail a checkout or a 
 reconcile, because doctor and the next reconcile retry it. Doctor is the pass whose result
 an operator reads, so its report is the answer.
 
-Only **present** worktrees are visited (`worktrees::list`, filtered on `present`), and
-neither the trunk nor grove's own dotted entries are ever treated as worktrees. A root
-whose trunk is missing contributes a single `error` row — "trunk missing — clone/realize the root
-first" — rather than a per-share pile.
+Only **present** worktrees are visited (`worktrees::list`, filtered on `present`), and the
+trunk — the share *source* — is never treated as one of them. A root whose trunk is missing
+contributes a single `error` row — "trunk missing — clone/realize the root first" — rather
+than a per-share pile.
 
 ## The report
 

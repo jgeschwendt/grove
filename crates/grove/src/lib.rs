@@ -95,6 +95,12 @@ enum Command {
     },
     /// Print the grove version.
     Version,
+    /// Write a VS Code workspace over every checkout grove holds.
+    Workspace {
+        /// Where to write it. Default: `$GROVE_HOME/grove.code-workspace`.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 /// `grove clone <action>`.
@@ -132,6 +138,9 @@ enum TreeAction {
     List {
         /// Repository slug (`owner/name`).
         repo: String,
+        /// Also print the root's own directory (`roots/<slug>`) under the trunk.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Remove a worktree.
     Remove {
@@ -179,7 +188,9 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             TreeAction::Add { repo, branch, base } => {
                 commands::tree_add(&home(), &api(), repo, branch, base.as_deref())
             }
-            TreeAction::List { repo } => commands::tree_list(&home(), &api(), repo),
+            TreeAction::List { repo, verbose } => {
+                commands::tree_list(&home(), &api(), repo, *verbose)
+            }
             TreeAction::Remove { repo, name } => commands::tree_remove(&home(), &api(), repo, name),
         },
         // `--rollback` ignores `--version`/`--channel` by construction: it flips to
@@ -200,6 +211,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             println!("grove {VERSION}");
             Ok(())
         }
+        Some(Command::Workspace { out }) => commands::workspace(&home(), out.as_deref()),
         None => {
             println!("grove {VERSION} — run `grove --help` for commands.");
             Ok(())
@@ -404,7 +416,19 @@ mod tests {
         assert_eq!(
             parse(&["tree", "list", "o/r"]),
             Some(Command::Tree {
-                action: TreeAction::List { repo: "o/r".into() }
+                action: TreeAction::List {
+                    repo: "o/r".into(),
+                    verbose: false
+                }
+            })
+        );
+        assert_eq!(
+            parse(&["tree", "list", "o/r", "--verbose"]),
+            Some(Command::Tree {
+                action: TreeAction::List {
+                    repo: "o/r".into(),
+                    verbose: true
+                }
             })
         );
         assert_eq!(
@@ -414,6 +438,22 @@ mod tests {
                     repo: "o/r".into(),
                     name: "feat".into()
                 }
+            })
+        );
+    }
+
+    /// `--out` is optional and the default is the home's own file, so the command an
+    /// operator actually types is the bare one.
+    #[test]
+    fn parses_workspace_with_an_optional_out() {
+        assert_eq!(
+            parse(&["workspace"]),
+            Some(Command::Workspace { out: None })
+        );
+        assert_eq!(
+            parse(&["workspace", "--out", "/tmp/w.code-workspace"]),
+            Some(Command::Workspace {
+                out: Some("/tmp/w.code-workspace".into())
             })
         );
     }

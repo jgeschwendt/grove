@@ -58,8 +58,9 @@ pub enum ShareMode {
     Symlink,
 }
 
-/// A slug becomes a directory under `GROVE_HOME/code/` and a TOML key, so it must
-/// be a safe relative path: non-empty, only `Normal` components (no `..`, no
+/// A slug becomes a directory under `GROVE_HOME/code/` (the root's checkouts) and
+/// another under `GROVE_HOME/roots/` (everything grove owns for it), plus a TOML key,
+/// so it must be a safe relative path: non-empty, only `Normal` components (no `..`, no
 /// absolute/root/`.`/prefix part), no backslash or control chars. This is the
 /// chokepoint against path traversal from a crafted clone URL or a hand-edited /
 /// git-synced manifest (e.g. `../../etc`).
@@ -77,22 +78,19 @@ pub fn validate_slug(slug: &str) -> Result<()> {
     }
 }
 
-/// A worktree `name` is one directory level under the root + a TOML key, so it
-/// must be a single safe path segment — exactly one `Normal` component (stricter
+/// A worktree `name` is one directory level under the root's code dir + a TOML key, so
+/// it must be a single safe path segment — exactly one `Normal` component (stricter
 /// than a slug: no `/`), no `..`/absolute/control/backslash — and never a dotted
 /// name ([`crate::worktrees::is_reserved`]), the same rejection
 /// [`validate_share_path`] makes on a share's first path segment.
 ///
-/// The reserved gate is load-bearing, not tidiness. A worktree declared at
-/// `<root>/.pool` is a *sibling of the slots and their parent*: `promote` sorts
-/// slots by path, picks `<root>/.pool` ahead of `<root>/.pool/slot-0`, and
-/// `git worktree move`s the entire warm pool into the user's new worktree —
-/// warm-pool state destroyed, two registered worktrees nested inside a third.
-/// `.bare` is milder but also real: the declaration persists while the git-side
-/// `worktree add` fails on the existing dir, leaving a permanent `failed` row on
-/// every reconcile. Nothing is lost by the breadth of the rule — git refuses a ref
-/// component beginning with a dot, so no branch a worktree could hold is spelled
-/// this way. Rejecting here covers both entrances at once — the API
+/// The dotted gate is load-bearing, not tidiness. A code dir holds checkouts and only
+/// checkouts, and a dotted name is one no checkout can ever carry — git refuses a ref
+/// component beginning with a dot, so no branch [`crate::worktrees::name_for`] folds
+/// could produce one. A declaration that spells one therefore names something that is
+/// not a checkout: it persists in the manifest while the git-side `worktree add` fails
+/// on whatever is actually at that path, leaving a permanent `failed` row on every
+/// reconcile. Rejecting here covers both entrances at once — the API
 /// (`add_worktree`) and a hand-edited/git-synced manifest (`list_worktrees`, which
 /// skips names that fail this).
 pub fn validate_name(name: &str) -> Result<()> {
@@ -109,7 +107,7 @@ pub fn validate_name(name: &str) -> Result<()> {
     } else {
         bail!(
             "invalid worktree name {name:?}: must be a single path segment with no '/' or '..', \
-             and must not begin with '.' (grove's own entries under a root)"
+             and must not begin with '.' (no checkout can be named that)"
         );
     }
 }
@@ -966,12 +964,12 @@ mod tests {
         for ok in ["my-feature", "wt1", "release-1.2"] {
             assert!(validate_name(ok).is_ok(), "{ok:?} should be ok");
         }
-        // A dotted name is grove's own: a worktree declared at one either wedges
-        // reconcile (`.bare`) or lets `promote` move the whole warm pool into a user
-        // worktree (`.pool`). `..foo` is rejected by the same rule, and loses nothing
-        // — git will not carry a ref component that begins with a dot either.
+        // A dotted name names nothing a checkout can be: git will not carry a ref
+        // component that begins with a dot, so a declaration spelling one wedges every
+        // reconcile on a `worktree add` that cannot succeed. `..foo` is rejected by the
+        // same rule, and loses nothing.
         for bad in [
-            "", "a/b", "..", ".", "/abs", "a\\b", ".bare", ".pool", "..foo",
+            "", "a/b", "..", ".", "/abs", "a\\b", ".git", ".hidden", "..foo",
         ] {
             assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
         }
@@ -1611,7 +1609,7 @@ mod tests {
 
     #[test]
     fn validate_share_path_rejects_reserved_dir_first_segment() {
-        for bad in [".bare/config", ".pool/y", ".grove-cloning/z"] {
+        for bad in [".git/config", ".hidden/y", ".cache/z"] {
             assert!(
                 validate_share_path(bad).is_err(),
                 "{bad:?} should be rejected"
@@ -1620,7 +1618,7 @@ mod tests {
         // The reserved check is on the first SEGMENT as a dir, not dotfile leaves.
         assert!(validate_share_path(".env").is_ok());
         assert!(
-            validate_share_path("sub/.bare").is_ok(),
+            validate_share_path("sub/.hidden").is_ok(),
             "a dotted name below the first segment is a leaf, not grove's dir"
         );
     }

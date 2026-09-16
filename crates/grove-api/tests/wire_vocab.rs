@@ -145,6 +145,7 @@ fn root_view() -> RootView {
         },
         syncing: true,
         sync_note: Some(SyncNote::Diverged),
+        root: "/home/roots/o/r".into(),
         trunk: "/home/code/o/r/main".into(),
         trunk_branch: "main".into(),
         trunk_status: Some(git_status()),

@@ -200,6 +200,7 @@ const fn label(kind: CheckKind) -> &'static str {
         CheckKind::Manifest => "manifest",
         CheckKind::InstallUnderHome => "install-under-home",
         CheckKind::LegacyLayout => "legacy-layout",
+        CheckKind::OrphanCode => "orphan-code",
         CheckKind::Root => "root",
         CheckKind::Bare => "bare",
         CheckKind::Trunk => "trunk",

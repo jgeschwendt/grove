@@ -268,6 +268,16 @@ pub struct RootView {
     /// What the last sync left behind, if anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_note: Option<SyncNote>,
+    /// The absolute path of `roots/<slug>` — everything grove owns for this root:
+    /// the bare, the warm pool, and the in-flight-clone marker.
+    ///
+    /// Beside [`Self::trunk`] because the two are the root's whole address and a
+    /// consumer that has one still cannot derive the other: the code dir and the root
+    /// dir are siblings under the home, and nothing in a trunk path says where the
+    /// home is. It is grove's own directory rather than the operator's, so a UI shows
+    /// it where a diagnosis is being read — `grove tree list --verbose` prints it
+    /// under the trunk line — and not where a checkout is being opened.
+    pub root: String,
     /// The absolute path of the trunk checkout — what a UI opens a terminal or an
     /// editor at.
     pub trunk: String,
@@ -349,6 +359,7 @@ mod tests {
                 },
                 syncing: true,
                 sync_note: Some(SyncNote::Diverged),
+                root: "/home/roots/o/r".into(),
                 trunk: "/home/code/o/r/main".into(),
                 trunk_branch: "main".into(),
                 trunk_status: None,
@@ -375,6 +386,7 @@ mod tests {
                     "pool": {"observed": 1, "target": 2},
                     "syncing": true,
                     "sync_note": "diverged",
+                    "root": "/home/roots/o/r",
                     "trunk": "/home/code/o/r/main",
                     "trunk_branch": "main",
                     "worktrees": [{

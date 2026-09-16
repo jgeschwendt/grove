@@ -1608,7 +1608,7 @@ mod tests {
     fn parse_worktree_list_skips_a_non_utf8_path() {
         let mut bytes = Vec::new();
         // The bare entry (excluded), a valid worktree, and a non-UTF-8-path one.
-        bytes.extend_from_slice(b"worktree /home/u/code/o/r/.bare\nbare\n\n");
+        bytes.extend_from_slice(b"worktree /home/u/roots/o/r/bare\nbare\n\n");
         bytes.extend_from_slice(b"worktree /home/u/code/o/r/feat\nbranch refs/heads/feature/x\n\n");
         bytes.extend_from_slice(b"worktree /home/u/code/o/r/bad\xff\nbranch refs/heads/bad\n\n");
 

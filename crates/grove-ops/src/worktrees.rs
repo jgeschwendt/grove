@@ -8,16 +8,16 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::roots::{bare_dir, manifest_path, root_dir};
+use crate::roots::{bare_dir, code_dir, manifest_path};
 use crate::wire::WorktreeOutcomeStatus;
 use crate::{Error, git, manifest};
 
-/// Grove's own entries under a root are exactly the dotted ones, and every undotted
-/// child is a checkout. Git refuses a ref component that begins with a dot, so no
-/// branch — and therefore no directory named after one — can ever collide with the
-/// bare, the warm pool or the in-flight-clone marker. That is why this is a predicate
-/// and not a list: a new grove-owned entry needs no edit here, and a user worktree can
-/// never be mistaken for one.
+/// A dotted name can never be a checkout: git refuses a ref component that begins
+/// with a dot, so no branch — and therefore no directory [`name_for`] derives from one
+/// — is ever spelled this way. A code dir holds checkouts and only checkouts, so a
+/// dotted entry there is somebody else's artefact and grove neither declares nor
+/// adopts it. A predicate rather than a list, because the rule is about what git
+/// permits, not about an enumerable set of names.
 pub(crate) fn is_reserved(name: &str) -> bool {
     name.starts_with('.')
 }
@@ -69,7 +69,7 @@ pub struct WorktreeOutcome {
 }
 
 fn worktree_dir(home: &Path, slug: &str, name: &str) -> PathBuf {
-    root_dir(home, slug).join(name)
+    code_dir(home, slug).join(name)
 }
 
 /// Declare a worktree, then realize it — **claiming a warm pool slot when one is
@@ -153,7 +153,7 @@ pub fn list(home: &Path, slug: &str) -> Result<Vec<WorktreeStatus>, Error> {
     let declared = manifest::list_worktrees(&manifest_path(home), slug).map_err(Error::io)?;
     let actual = actual(home, slug).map_err(Error::git)?;
 
-    let root = root_dir(home, slug);
+    let code = code_dir(home, slug);
 
     let mut out: Vec<WorktreeStatus> = declared
         .iter()
@@ -165,7 +165,7 @@ pub fn list(home: &Path, slug: &str) -> Result<Vec<WorktreeStatus>, Error> {
                 base: d.base.clone(),
                 present,
                 declared: true,
-                status: present.then(|| checkout_status(&root, &d.name)).flatten(),
+                status: present.then(|| checkout_status(&code, &d.name)).flatten(),
             }
         })
         .collect();
@@ -184,7 +184,7 @@ pub fn list(home: &Path, slug: &str) -> Result<Vec<WorktreeStatus>, Error> {
                 base: None,
                 present: true,
                 declared: false,
-                status: checkout_status(&root, name),
+                status: checkout_status(&code, name),
             });
         }
     }
@@ -200,14 +200,14 @@ pub fn list(home: &Path, slug: &str) -> Result<Vec<WorktreeStatus>, Error> {
 /// counts, and it has to run inside each checkout. A read that fails is swallowed
 /// to `None` (the row simply draws no pills) so one wedged worktree can't fail the
 /// whole list and blank the dashboard.
-fn checkout_status(root: &Path, name: &str) -> Option<git::Status> {
-    git::status(&root.join(name)).ok()
+fn checkout_status(code: &Path, name: &str) -> Option<git::Status> {
+    git::status(&code.join(name)).ok()
 }
 
-/// The number of warm pool slots under `<root>/.pool/` git knows about. The engine
-/// reads the observed count from here to converge toward the declared `pool.size`;
-/// doctor/list surface it. Counts registered worktrees whose path passes under
-/// `.pool` (so a stray non-worktree dir doesn't inflate it).
+/// The number of warm pool slots under [`crate::pool::pool_dir`] git knows about. The
+/// engine reads the observed count from here to converge toward the declared
+/// `pool.size`; doctor/list surface it. Counts registered worktrees whose path passes
+/// under the pool (so a stray non-worktree dir doesn't inflate it).
 pub fn pool_count(home: &Path, slug: &str) -> Result<usize, Error> {
     let bare = bare_dir(home, slug);
     if !bare.exists() {
@@ -220,18 +220,19 @@ pub fn pool_count(home: &Path, slug: &str) -> Result<usize, Error> {
         .count())
 }
 
-/// Does a git-reported worktree path sit *strictly* under `<root>/.pool/`?
+/// Does a git-reported worktree path sit *strictly* under the root's pool?
 /// Canonicalizes both sides — git returns `/private/var/…` on macOS while the
 /// composed pool path is the as-declared `home/…`, so a raw `starts_with` would miss
 /// every slot.
 ///
 /// Strict is load-bearing: `starts_with` is true for the pool DIRECTORY itself, so a
-/// worktree registered at `<root>/.pool` would count as a warm slot — and being the
-/// lowest path, `pool::next_slot` would hand `promote` the pool's own parent to move.
-/// `manifest::validate_name` is the primary gate (nothing can declare `.pool`); this
-/// is the independent backstop, since the count and the promote pick both key off it.
+/// worktree registered at the pool would count as a warm slot — and being the lowest
+/// path, `pool::next_slot` would hand `promote` the pool's own parent to move. Nothing
+/// grove writes can land there (a declared worktree is a single segment under the code
+/// dir), which is exactly why the backstop is worth keeping: the count and the promote
+/// pick both key off it.
 pub(crate) fn under_pool(home: &Path, slug: &str, wt: &Path) -> bool {
-    let pool = root_dir(home, slug).join(".pool");
+    let pool = crate::pool::pool_dir(home, slug);
     let pool = pool.canonicalize().unwrap_or(pool);
     wt.canonicalize()
         .is_ok_and(|p| p != pool && p.starts_with(&pool))
@@ -324,8 +325,8 @@ pub fn reconcile(home: &Path, slug: &str) -> Result<Vec<WorktreeOutcome>> {
 }
 
 /// git's worktrees as `(name, branch?)` — name from the dir, restricted to checkouts
-/// that sit *directly* under this root (`<root>/<name>`), excluding grove's own dotted
-/// entries, the trunk, and nested paths. **A detached checkout is
+/// that sit *directly* under this root's code dir (`<code>/<name>`), excluding the
+/// trunk, dotted entries, and nested paths. **A detached checkout is
 /// retained** (`branch: None`): presence is independent of the branch, so a managed
 /// worktree the user has detached (`git bisect`, `git switch --detach`) still reads as
 /// present — callers that *adopt* (which needs a branch to record) filter `None` out
@@ -336,10 +337,10 @@ fn actual(home: &Path, slug: &str) -> Result<Vec<(String, Option<String>)>> {
         return Ok(Vec::new());
     }
     // git canonicalizes worktree paths (`/private/var/…` on macOS), so compare
-    // against the canonical root too — else the prefix strip misses. Fall back to
-    // the as-declared root when it isn't on disk.
-    let root = root_dir(home, slug);
-    let root = root.canonicalize().unwrap_or(root);
+    // against the canonical code dir too — else the prefix strip misses. Fall back to
+    // the as-declared one when it isn't on disk.
+    let code = code_dir(home, slug);
+    let code = code.canonicalize().unwrap_or(code);
     // The trunk is a git worktree like any other, and since it is named by its branch
     // there is no longer anything in its *name* to tell it apart. Which one it is is a
     // manifest question, asked once per pass. Unresolvable (a root with no bare yet)
@@ -348,7 +349,7 @@ fn actual(home: &Path, slug: &str) -> Result<Vec<(String, Option<String>)>> {
     let trunk = trunk.as_ref().map(|t| t.name.as_str());
     let mut out = Vec::new();
     for wt in git::worktree_list(&bare)? {
-        let Some(name) = adoptable_name(&root, trunk, &wt.path) else {
+        let Some(name) = adoptable_name(&code, trunk, &wt.path) else {
             continue;
         };
         out.push((name, wt.branch));
@@ -357,27 +358,27 @@ fn actual(home: &Path, slug: &str) -> Result<Vec<(String, Option<String>)>> {
 }
 
 /// The adoptable name of a git worktree: its basename, IFF it sits *directly* under
-/// `root` (`<root>/<name>`) and is neither reserved nor the trunk. Returns `None` for:
-/// - an **out-of-tree** worktree (`git worktree add ~/elsewhere/x`) — its path
-///   doesn't strip under `root`, so it's never adopted by basename as if it lived here;
-/// - a **nested** path (`<root>/.pool/slot-1`, `<root>/a/b`) — more than one segment
-///   below root, so a warm-pool slot (or any sub-path) never enters the declared set
-///   *regardless of branch or detachment*;
-/// - a **reserved** direct child — any dotted one (`.bare`/`.pool`/the clone marker);
+/// `code` (`<code>/<name>`) and is neither dotted nor the trunk. Returns `None` for:
+/// - an **out-of-tree** worktree (`git worktree add ~/elsewhere/x`, and every warm-pool
+///   slot, which lives under `roots/<slug>/pool`) — its path doesn't strip under the
+///   code dir, so it's never adopted by basename as if it were a checkout here;
+/// - a **nested** path (`<code>/a/b`) — more than one segment below the code dir, so it
+///   never enters the declared set *regardless of branch or detachment*;
+/// - a **dotted** direct child, which no branch name can produce ([`is_reserved`]);
 /// - the **trunk**, which is a checkout the root owns rather than a worktree the
 ///   manifest declares: adopting it would put grove's own integration checkout in
 ///   `worktrees.<name>`, where a `tree remove` could delete it.
-fn adoptable_name(root: &Path, trunk: Option<&str>, wt: &Path) -> Option<String> {
-    // git reports canonical paths; canonicalize again to match the canonical `root`,
+fn adoptable_name(code: &Path, trunk: Option<&str>, wt: &Path) -> Option<String> {
+    // git reports canonical paths; canonicalize again to match the canonical `code`,
     // falling back to the reported path if the dir was removed out-of-band.
     let canonical = wt.canonicalize();
     let wt = canonical.as_deref().unwrap_or(wt);
-    let mut segs = wt.strip_prefix(root).ok()?.components();
+    let mut segs = wt.strip_prefix(code).ok()?.components();
     let Component::Normal(first) = segs.next()? else {
         return None; // not a plain child (e.g. `..`)
     };
     if segs.next().is_some() {
-        return None; // nested below root — not a direct child
+        return None; // nested below the code dir — not a direct child
     }
     let name = first.to_str()?;
     (!is_reserved(name) && trunk != Some(name)).then(|| name.to_string())
@@ -483,12 +484,12 @@ mod tests {
     fn create_without_a_base_forks_the_new_branch_from_the_trunk() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        let root = root_dir(&home, "o/r");
+        let code = code_dir(&home, "o/r");
 
         // A `canary` one commit ahead of `main`, declared as the trunk by a hand-edit
         // so the bare's HEAD still names `main`.
         let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
-        let trunk = root.join("main");
+        let trunk = code.join("main");
         git(&trunk, &["checkout", "-q", "-b", "canary"]);
         std::fs::write(trunk.join("AHEAD.md"), "canary only").unwrap();
         git(&trunk, &[&id[..], &["add", "."]].concat());
@@ -506,7 +507,7 @@ mod tests {
         create(&home, "o/r", "feat", "feature/x", None).unwrap();
 
         assert!(
-            root.join("feat/AHEAD.md").exists(),
+            code.join("feat/AHEAD.md").exists(),
             "the new branch forked from the trunk, not from HEAD"
         );
         let declared = manifest::list_worktrees(&mpath, "o/r").unwrap();
@@ -582,9 +583,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         let bare = bare_dir(&home, "o/r");
-        // A slot under `.pool/` that carries a BRANCH (not detached) — basename-only
+        // A slot in the root's pool carrying a BRANCH (not detached) — a basename-only
         // exclusion would have listed/adopted it; the path-based rule must not.
-        let slot = home.join("code/o/r/.pool/slot-1");
+        let slot = crate::pool::pool_dir(&home, "o/r").join("slot-1");
         std::fs::create_dir_all(slot.parent().unwrap()).unwrap();
         git(
             &bare,
@@ -804,8 +805,8 @@ mod tests {
     /// is what lets grove drop the hand-maintained list the layout used to carry.
     #[test]
     fn reserved_is_exactly_the_dotted_names() {
-        for owned in [".bare", ".pool", ".grove-cloning", ".anything-later"] {
-            assert!(is_reserved(owned), "{owned:?} is grove's");
+        for dotted in [".git", ".DS_Store", ".hidden", ".anything-later"] {
+            assert!(is_reserved(dotted), "{dotted:?} is no checkout");
         }
         for checkout in ["main", "canary", "feature-x", "release-1.2"] {
             assert!(!is_reserved(checkout), "{checkout:?} is a checkout");

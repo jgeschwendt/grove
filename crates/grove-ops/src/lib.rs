@@ -234,6 +234,7 @@ mod tests {
         crate::roots::remove(&home, SLUG, crate::roots::Removal::Guarded).unwrap();
         assert!(crate::roots::list(&home).unwrap().is_empty());
         assert!(!crate::roots::root_dir(&home, SLUG).exists());
+        assert!(!crate::roots::code_dir(&home, SLUG).exists());
     }
 
     /// `roots.adopt` + `root.reconcile` composed: an on-disk bare nobody declared is
@@ -307,7 +308,7 @@ mod tests {
             report.iter().any(|o| o.path == ".env"),
             "the declared share is reported"
         );
-        let link = crate::roots::root_dir(&home, SLUG).join("feat/.env");
+        let link = crate::roots::code_dir(&home, SLUG).join("feat/.env");
         assert!(
             std::fs::symlink_metadata(&link).unwrap().is_symlink(),
             "materialized as a link, not a copy"
