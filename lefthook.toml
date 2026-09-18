@@ -63,7 +63,7 @@ run = """
 unset $(git rev-parse --local-env-vars)
 command -v stele >/dev/null 2>&1 || {
   echo "stele is not on PATH — install it (pinned, as CI does):" >&2
-  echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0" >&2
   exit 1
 }
 stele check && stele emit --check

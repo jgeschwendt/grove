@@ -115,6 +115,6 @@ jobs:
       # an unpinned installer would let a stele release fail this repo's CI without a
       # commit here. Installs one static binary to ~/.local/bin, which is not on the
       # runner's PATH by default — hence the absolute path below.
-      - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+      - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
       - run: ~/.local/bin/stele check
       - run: ~/.local/bin/stele emit --check
