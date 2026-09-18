@@ -120,7 +120,7 @@ pub fn diagnose(home: &Path, slug: Option<&str>) -> Result<Vec<ShareOutcome>, Er
 /// trunk source if missing, link/repoint it into every present worktree, GC
 /// orphaned grove links. Best-effort — one bad share/worktree pushes an `Error`
 /// row and never aborts the batch.
-// stele:landmark lane-is-callers
+// ※ lane-is-callers
 pub fn materialize(home: &Path, slug: Option<&str>, fix: Fix) -> Result<Vec<ShareOutcome>, Error> {
     run(home, slug, Action::Materialize(fix)).map_err(Error::io)
 }
@@ -271,7 +271,7 @@ fn source_outcome<Fd: AsFd>(
 }
 
 /// Link row: classify `<wt>/<p>`, link/repoint to `../…/<trunk>/<p>`, never clobber.
-// stele:landmark never-clobber
+// ※ never-clobber
 fn link_outcome<Fd: AsFd>(
     pass: Pass,
     wt: &str,

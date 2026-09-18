@@ -13,5 +13,5 @@ invariants:
     enforced_by: crates/grove-ops/tests/harness_meta.rs
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->

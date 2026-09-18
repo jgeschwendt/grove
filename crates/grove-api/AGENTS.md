@@ -10,17 +10,17 @@ commands:
   bless-wire: BLESS_WIRE=1 mise exec -- cargo test -p grove-api
 invariants:
   - claim: "the envelope is tagged on its `ok` boolean, never on which of data/error is present, and error.data survives the round trip typed — a body that disagrees with its own tag is a decode error"
-    anchor: lm:api-envelope
+    anchor: ※ api-envelope
   - claim: "the terminal/transient partition over grove_ops::Error is a total match with no catch-all, so a new error category stops the build until it is classified"
     anchor: crates/grove-api/src/policy.rs#classify_error
 edges:
   depends: [crates/grove-ops]
 ```
 
-<!-- stele:begin router -->
+<!-- @stele -->
 
 ## Anchors in this territory
 
-- lm:api-envelope → src/envelope.rs:30
+- ※ api-envelope → src/envelope.rs:30
 
-<!-- stele:end -->
+<!-- @end -->

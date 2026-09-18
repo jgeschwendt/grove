@@ -352,7 +352,7 @@ impl Driver {
     // ── the driver ──────────────────────────────────────────────────────────────
 
     /// Pick the next background op, or leave the slot alone.
-    // stele:landmark push-only
+    // ※ push-only
     fn drive(&mut self) {
         if self.bg.is_some() {
             return;

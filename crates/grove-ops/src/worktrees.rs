@@ -249,7 +249,7 @@ pub(crate) fn under_pool(home: &Path, slug: &str, wt: &Path) -> bool {
 /// before we read actual state clears both: the checkout re-realizes cleanly, and a
 /// deleted-then-still-registered worktree is never mistaken for live. This deletes
 /// nothing real — the working tree is already gone.
-// stele:landmark reconcile-additive
+// ※ reconcile-additive
 pub fn reconcile(home: &Path, slug: &str) -> Result<Vec<WorktreeOutcome>> {
     let mpath = manifest_path(home);
     let bare = bare_dir(home, slug);

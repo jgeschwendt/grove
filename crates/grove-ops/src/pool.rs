@@ -57,7 +57,7 @@ pub enum ColdReason {
 /// target: each call adds exactly one slot, so N calls converge to N slots. Returns
 /// the resulting slot count. Errors if the bare repo is missing — the engine only
 /// fills a `:ready` root, so a missing bare is a real fault, not a steady state.
-// stele:landmark worktree-depth
+// ※ worktree-depth
 pub fn fill(home: &Path, slug: &str) -> Result<usize, Error> {
     manifest::validate_slug(slug).map_err(Error::invalid_input)?;
     let bare = bare_dir(home, slug);
@@ -161,7 +161,7 @@ pub fn status(home: &Path, slug: Option<&str>) -> Result<Vec<PoolStatus>, Error>
 /// Claim a warm slot for the user worktree `<name>` on `branch` (off `base`/HEAD if
 /// new), mirroring the cold `worktrees::create` contract. See the module doc for the
 /// attach→move→declare→materialize order and its crash-convergence.
-// stele:landmark promote-attach-before-move
+// ※ promote-attach-before-move
 pub fn promote(
     home: &Path,
     slug: &str,

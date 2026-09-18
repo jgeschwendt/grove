@@ -175,7 +175,7 @@ impl Layout {
     /// Marks the flip pending first: every mover of `current` in this file does, so
     /// "an unproven `current`" is a state the filesystem can report rather than one
     /// only a live updater knows about.
-    // stele:landmark pending-marker
+    // ※ pending-marker
     pub fn flip_to(&self, v: &str) -> Result<(), CliError> {
         if !self.version_path(v).is_dir() {
             return Err(CliError::Update(format!("version {v} is not installed")));

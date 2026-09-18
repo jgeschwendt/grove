@@ -49,7 +49,7 @@ pub enum Transition {
 /// - **`ReconcileError`** — the attempt is over, so trust disk *plainly*: preserving
 ///   `cloning` here would strand a transient that nothing is going to clear.
 #[must_use]
-// stele:landmark status-is-a-cache
+// ※ status-is-a-cache
 pub const fn next_status(current: RootStatus, transition: Transition) -> RootStatus {
     match transition {
         Transition::ReconcileDispatched => match current {

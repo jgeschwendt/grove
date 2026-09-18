@@ -126,7 +126,7 @@ impl ApiClient {
     /// *us*: there is no realizer for this home, so the CLI realizes in-process,
     /// against the home the operator actually named. The dual-clone risk the tri-state
     /// exists to prevent needs two realizers over ONE home, which this is not.
-    // stele:landmark reachability-tri-state
+    // ※ reachability-tri-state
     #[must_use]
     pub fn reachable(&self) -> Reachability {
         match self.get("/api/health", self.probe_timeout) {

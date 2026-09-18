@@ -183,7 +183,7 @@ pub enum Removal {
 /// obliterate a valid-shaped slug that named somebody else's checkout — the same
 /// typo the daemon-up path answers with a 404. Undeclared is [`Error::NotDeclared`]
 /// (exit 3), on both paths.
-// stele:landmark delete-before-undeclare
+// ※ delete-before-undeclare
 pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
     // Validate before building a path we `remove_dir_all` — a traversal slug
     // must never reach the filesystem here.
@@ -608,7 +608,7 @@ pub(crate) fn foreign_entries(dir: &Path) -> Vec<String> {
 /// **Fail safe** — if `git worktree list` errors (a corrupt/unreadable bare, which
 /// can still own live checkouts), assume worktrees may exist and refuse the wipe. A
 /// genuinely partial clone has a valid bare, so this still re-clones cleanly.
-// stele:landmark trunk-recovery-guard
+// ※ trunk-recovery-guard
 fn has_live_worktrees(home: &Path, slug: &str, bare: &Path) -> bool {
     let trunk = trunk(home, slug).ok();
     let trunk = trunk.as_ref().map(|t| t.name.as_str());
@@ -655,7 +655,7 @@ pub struct SyncReport {
 /// Pruning compares each slot to the trunk's tip *after* the op — it recycles
 /// exactly the slots a fresh `pool.fill` would no longer produce, whichever way
 /// the trunk outcome went.
-// stele:landmark sync-never-forces
+// ※ sync-never-forces
 pub fn sync(home: &Path, slug: &str) -> Result<SyncReport, Error> {
     manifest::validate_slug(slug).map_err(Error::invalid_input)?;
     // Both halves of "not ready" name the path that is missing: the two are different

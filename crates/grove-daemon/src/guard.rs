@@ -18,7 +18,7 @@ use crate::reply::error_response;
 /// Health, so the state stays *observable* — it is what the self-update gate reads
 /// to decide a bundle went bad — and shutdown, so a late or repeated stop request
 /// (and stopping an already-degraded daemon) is not itself 503'd.
-// stele:landmark readiness-whitelist
+// ※ readiness-whitelist
 const READINESS_WHITELIST: [&str; 2] = ["/api/health", "/api/daemon/shutdown"];
 
 /// The **fixed** allowlist of `Origin` hosts a state-changing request may carry.
@@ -28,7 +28,7 @@ const READINESS_WHITELIST: [&str; 2] = ["/api/health", "/api/daemon/shutdown"];
 /// `Origin: https://evil.example` after its name has been rebound to 127.0.0.1, so
 /// the origin — which the attacker cannot forge from a browser — fails this list
 /// while a `Host` check would pass.
-// stele:landmark unauthenticated-api
+// ※ unauthenticated-api
 const LOOPBACK_ORIGINS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 /// 503 every non-whitelisted `/api` route while the daemon is draining or degraded.
@@ -63,7 +63,7 @@ pub async fn readiness(State(state): State<AppState>, request: Request, next: Ne
 /// Residual, accepted until auth lands: another app already on a loopback port can
 /// present a loopback origin. Closing that needs request authentication, which is
 /// the work this guard stands in for.
-// stele:landmark mutation-guard
+// ※ mutation-guard
 pub async fn mutation(request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let safe = matches!(

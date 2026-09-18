@@ -197,7 +197,7 @@ pub fn parse_bind(raw: &str) -> Result<SocketAddr, Error> {
 /// unauthenticated until served-mode auth lands, so a non-loopback bind would put it
 /// on the network. Carried law 10; retires only with the auth layer, together with
 /// the mutation guard.
-// stele:landmark loopback-bind-gate
+// ※ loopback-bind-gate
 pub fn guard_loopback(bind: SocketAddr) -> Result<(), Error> {
     if bind.ip().is_loopback() {
         return Ok(());

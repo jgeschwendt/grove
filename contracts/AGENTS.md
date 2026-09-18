@@ -12,5 +12,5 @@ invariants:
     enforced_by: crates/grove-api/tests/wire_vocab.rs
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->

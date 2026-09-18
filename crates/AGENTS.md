@@ -10,5 +10,5 @@ commands:
   test: mise run test
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->

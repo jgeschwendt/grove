@@ -486,7 +486,7 @@ impl ServerControl {
     /// the bind) must not read as success off that other server's 200. The child
     /// is checked first each round so a foreign 200 can't win a race against the
     /// death we're about to observe.
-    // stele:landmark cli-health-poll
+    // ※ cli-health-poll
     fn await_ready(&self, child: Pid) -> Result<(), CliError> {
         let deadline = self.clock.deadline(self.ready_timeout);
         loop {

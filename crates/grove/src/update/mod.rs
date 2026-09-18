@@ -242,7 +242,7 @@ impl Updater {
     /// `grove up [--version V]`. Resolves the target (flag or the channel), installs
     /// it beside `current`, flips, and bounces a running server. A new version that
     /// boots unhealthy — or whose restart errors outright — is rolled back.
-    // stele:landmark self-update-flip
+    // ※ self-update-flip
     pub fn up(&self, version: Option<&str>) -> Result<(), CliError> {
         let _lock = self.layout.lock()?; // serialize concurrent `grove up`
         // Before anything else, and inside the lock: an update that died between its

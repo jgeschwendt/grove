@@ -45,7 +45,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
     /// The stable `snake_case` wire code for this category — the error envelope's
     /// `code` field, read by the daemon's engine to tell terminal from transient.
-    // stele:landmark wire-error-codes
+    // ※ wire-error-codes
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {

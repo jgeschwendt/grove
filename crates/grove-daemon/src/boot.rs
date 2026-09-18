@@ -65,7 +65,7 @@ impl BootState {
     /// "the tree is started, we are ready" signal that follows it. Otherwise a
     /// daemon that came up unable to do its job would answer `/api/health` 200 and
     /// the self-update health gate would accept the bundle that broke it.
-    // stele:landmark boot-degrade-sticky
+    // ※ boot-degrade-sticky
     pub fn mark_ready(&self) {
         let mut status = self.write();
         if matches!(*status, BootStatus::Degraded { .. }) {

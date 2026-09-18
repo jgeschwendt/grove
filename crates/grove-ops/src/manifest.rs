@@ -293,7 +293,7 @@ fn shares_table(doc: &DocumentMut, slug: &str) -> Vec<(&'static str, Vec<String>
 
 /// All declared roots, sorted by slug. Entries with an unsafe slug are skipped —
 /// a hand-edited traversal key never reaches the reconciler as a filesystem path.
-// stele:landmark files-authoritative
+// ※ files-authoritative
 pub fn list(path: &Path) -> Result<Vec<Root>> {
     let doc = read_doc(path)?;
     let mut roots = Vec::new();

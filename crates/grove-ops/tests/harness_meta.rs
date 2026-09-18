@@ -149,7 +149,7 @@ fn integration_target(rel: &str) -> Option<&str> {
 }
 
 #[test]
-// stele:landmark test-reachability
+// ※ test-reachability
 fn every_test_file_is_reachable_from_mise_run_test() {
     let files = tracked_files();
 
@@ -351,7 +351,7 @@ fn slow_tier_is_selectable() {
 /// daemon lane, a drain ladder, or a retry loop reads the wall clock inline, this
 /// fails and names the file.
 #[test]
-// stele:landmark clock-seam
+// ※ clock-seam
 fn every_wall_clock_read_goes_through_the_clock_seam() {
     // Built at runtime, not written literally: a literal would match this file.
     let needle = format!("{}::now(", "Instant");

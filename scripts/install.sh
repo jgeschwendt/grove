@@ -41,7 +41,7 @@
 # helper — GitHub's anonymous API budget is per-IP and shared, which a busy CI runner
 # can exhaust. With one exported the script switches to the REST API's asset endpoint,
 # which spends the token's own budget instead. Same bundle, same checksums, either way.
-# stele:landmark install-hands-off-to-grove-up
+# ※ install-hands-off-to-grove-up
 set -euo pipefail
 
 repo="jgeschwendt/grove"

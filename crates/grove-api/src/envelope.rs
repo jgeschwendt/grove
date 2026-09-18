@@ -27,7 +27,7 @@ use crate::ErrorCode;
 
 /// A response body: either the route's payload, or the failure that replaced it.
 #[derive(Clone, Debug, PartialEq)]
-// stele:landmark api-envelope
+// ※ api-envelope
 pub enum Envelope<T> {
     Ok(T),
     Err(ApiError),

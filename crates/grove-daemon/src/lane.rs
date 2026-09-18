@@ -169,7 +169,7 @@ struct LaneEntry {
 type Registry = Arc<Mutex<HashMap<String, LaneEntry>>>;
 
 /// The lane registry: one per daemon, shared by the routes and every engine.
-// stele:landmark per-root-lane
+// ※ per-root-lane
 pub struct Lanes {
     registry: Registry,
     clock: Arc<dyn Clock>,

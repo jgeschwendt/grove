@@ -32,7 +32,7 @@ use crate::{CliError, render};
 
 /// `grove clone add <url>` — declare the repo, then realize it only if no daemon is
 /// reachable.
-// stele:landmark single-realizer
+// ※ single-realizer
 pub fn clone_add(home: &Path, api: &ApiClient, url: &str) -> Result<(), CliError> {
     let slug = grove_ops::roots::slug_from_url(url).map_err(io)?;
     let manifest = grove_ops::roots::manifest_path(home);
@@ -66,7 +66,7 @@ pub fn clone_add(home: &Path, api: &ApiClient, url: &str) -> Result<(), CliError
 /// unpushed commits across every worktree under it, and a find is a refusal naming
 /// them. `grove tree remove` already refuses a single dirty checkout (git's own
 /// guard), and the command whose blast radius is N of them must not protect less.
-// stele:landmark busy-refuses-destructive
+// ※ busy-refuses-destructive
 pub fn clone_remove(home: &Path, api: &ApiClient, slug: &str, force: bool) -> Result<(), CliError> {
     match api.reachable() {
         Reachability::Up => {
@@ -558,7 +558,7 @@ pub fn sync(home: &Path, api: &ApiClient, slug: &str) -> Result<(), CliError> {
 /// git's index and worktree locks. Carried as a hazard on this crate rather than
 /// papered over: on a box with a daemon, the gated path to the same convergence is
 /// `grove clone add` / `POST /api/roots/reconcile`.
-// stele:landmark apply-is-ungated
+// ※ apply-is-ungated
 pub fn apply(home: &Path) -> Result<(), CliError> {
     let applied = grove_ops::apply(home)?;
     render::applied(&applied);

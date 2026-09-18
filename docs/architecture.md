@@ -1,6 +1,6 @@
 # Architecture
 
-<!-- stele:landmark doc-gate -->
+<!-- ※ doc-gate -->
 
 Grove cultivates git worktrees. `manifest.toml` declares desired state, git on disk is
 actual state, and grove converges actual toward desired — additively, never destroying a
