@@ -213,8 +213,8 @@ install is regenerable by one `grove up`, the checkouts under `$GROVE_HOME` are 
 | path | what it does |
 |---|---|
 | `scripts/release.sh` | builds and packs **this box's** platform into `dist/<version>/`: `<target>.tar.gz`, its `.sha256`, the standalone bootstrap `grove-<target>` and *its* `.sha256`, with `dist/latest` naming the version. Fails if the version stamp did not reach the binary — a mislabelled bundle breaks the health gate on every box that pulls it. |
-| `.github/workflows/release.yml` | on a `v*` tag: open a **draft** release, build the bundle for every supported platform, upload, and publish only once the whole matrix has landed. |
-| `scripts/publish-canary.sh` | builds the current tree for this box only and uploads it as a `-canary.N` prerelease directly with `gh` — zero CI minutes, and `release.yml` never fires. Host-only: `grove up --channel canary` on another OS or arch will 404. |
+| `.github/workflows/release.yaml` | on a `v*` tag: open a **draft** release, build the bundle for every supported platform, upload, and publish only once the whole matrix has landed. |
+| `scripts/publish-canary.sh` | builds the current tree for this box only and uploads it as a `-canary.N` prerelease directly with `gh` — zero CI minutes, and `release.yaml` never fires. Host-only: `grove up --channel canary` on another OS or arch will 404. |
 
 The draft is the point. A published bare-semver tag becomes `releases/latest` the instant it
 exists, while the bundles are still compiling under `lto = true` / `codegen-units = 1` — and

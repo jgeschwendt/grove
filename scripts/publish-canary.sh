@@ -3,7 +3,7 @@
 #
 # Builds the current tree (this box's <arch>-<os> only) and uploads it as a
 # -canary.N *prerelease* on this repo's Releases. The release is created directly
-# with `gh`, so the all-platform release.yml never fires. Pull it back with
+# with `gh`, so the all-platform release.yaml never fires. Pull it back with
 #   grove up --channel canary      (or GROVE_CHANNEL=canary / a canary-installed box)
 #
 # Usage:
@@ -12,7 +12,7 @@
 #
 # Run from the repo root on `main` (NOT a .claude/worktrees checkout). Host-only:
 # `grove up --channel canary` on a different OS/arch will 404 — for a full
-# multi-platform release push a `v*` tag and let release.yml build the matrix.
+# multi-platform release push a `v*` tag and let release.yaml build the matrix.
 set -euo pipefail
 
 cd "$(CDPATH= cd "$(dirname "$0")/.." && pwd)" # repo root

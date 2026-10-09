@@ -46,7 +46,7 @@ jobs:
   # canonicalizing worktree paths through `/private/var`, the case-insensitive default
   # filesystem, `flock` semantics on the manifest and update locks, and the SIGTERM →
   # SIGKILL path `grove off` walks. `macos-latest` rather than a pinned `macos-14` on
-  # purpose — it is the runner `.github/workflows/release.yml` builds the
+  # purpose — it is the runner `.github/workflows/release.yaml` builds the
   # aarch64-darwin bundle on, so CI proves the toolchain that ships.
   check-and-test-macos:
     runs-on: macos-latest

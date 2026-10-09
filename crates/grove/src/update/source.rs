@@ -30,7 +30,7 @@ const RELEASES_PER_PAGE: usize = 100;
 const MAX_RELEASE_PAGES: usize = 20;
 
 /// GitHub repo the release channels resolve against — where `install.sh` and
-/// `release.yml` publish. Overridable for tests via `GROVE_INSTALL_BASE_URL` (an http
+/// `release.yaml` publish. Overridable for tests via `GROVE_INSTALL_BASE_URL` (an http
 /// base, or a local fixture dir the install smoke test points at).
 const RELEASE_REPO: &str = "jgeschwendt/grove";
 
@@ -250,7 +250,7 @@ fn channel_tag_matches(tag: &str, suffix: &str) -> bool {
 
 /// Platforms this box could ask for and the release line does not publish, with the
 /// reason an operator needs. Kept in step with two other lists by construction: the
-/// matrix in `.github/workflows/release.yml` (which builds the bundles) and the
+/// matrix in `.github/workflows/release.yaml` (which builds the bundles) and the
 /// refusal in `scripts/install.sh` (which says the same sentence at install time —
 /// pinned by [`tests::the_unbuilt_platforms_match_the_installers`]).
 const UNBUILT_TARGETS: &[(&str, &str)] = &[(
@@ -674,9 +674,9 @@ mod tests {
     fn the_release_line_publishes_nothing_a_resolver_cannot_fetch() {
         let workflow = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../.github/workflows/release.yml"
+            "/../../.github/workflows/release.yaml"
         ))
-        .expect(".github/workflows/release.yml is readable from the crate");
+        .expect(".github/workflows/release.yaml is readable from the crate");
 
         assert!(
             workflow.contains("gh release create") && workflow.contains("--draft "),
@@ -713,9 +713,9 @@ mod tests {
         .expect("scripts/install.sh is readable from the crate");
         let workflow = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../.github/workflows/release.yml"
+            "/../../.github/workflows/release.yaml"
         ))
-        .expect(".github/workflows/release.yml is readable from the crate");
+        .expect(".github/workflows/release.yaml is readable from the crate");
 
         for (target, _) in UNBUILT_TARGETS {
             assert!(

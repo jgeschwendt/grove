@@ -204,7 +204,7 @@ fn every_test_file_is_reachable_from_mise_run_test() {
 /// profile that selects the slow tier, and every test in the tree would still pass.
 #[test]
 fn ci_runs_the_same_gate_as_local() {
-    let ci = read(".github/workflows/ci.yml");
+    let ci = read(".github/workflows/ci.yaml");
 
     assert!(
         ci.contains("mise run check"),
@@ -253,7 +253,7 @@ fn the_install_smoke_is_reachable_from_a_gate() {
         "`mise run smoke` must run {script}, not a hand-rolled copy of it"
     );
 
-    let ci = read(".github/workflows/ci.yml");
+    let ci = read(".github/workflows/ci.yaml");
     assert!(
         ci.contains("mise run smoke"),
         "CI must run `mise run smoke` — a smoke no gate runs is the exact hole this \

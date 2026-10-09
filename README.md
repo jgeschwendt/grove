@@ -202,7 +202,7 @@ There is no update timer. `grove up` is the whole story — grove polls nothing.
 
 Publishing: `scripts/release.sh` builds and packs this box's platform (and fails if
 the version stamp didn't reach the binary — a mislabelled bundle breaks the health
-gate on every box that pulls it); a `v*` tag runs `.github/workflows/release.yml` for
+gate on every box that pulls it); a `v*` tag runs `.github/workflows/release.yaml` for
 all three platforms, holding the release as a **draft** until every platform's bundle
 is on it, so no channel can ever resolve a tag whose assets are still compiling;
 `scripts/publish-canary.sh` pushes a this-box-only `-canary.N` prerelease with no CI
