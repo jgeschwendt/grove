@@ -63,8 +63,9 @@ pub fn clone_add(home: &Path, api: &ApiClient, url: &str) -> Result<(), CliError
 /// `grove clone remove <slug> [--force]` — undeclare and delete the on-disk repo.
 ///
 /// Guarded unless `force`: the root is surveyed for uncommitted tracked changes and
-/// unpushed commits across every worktree under it, and a find is a refusal naming
-/// them. `grove tree remove` already refuses a single dirty checkout (git's own
+/// unpushed commits across every worktree under it, unpushed branches and a stash in
+/// its bare, and code-dir entries that are no worktree of it; a find is a refusal
+/// naming them. `grove tree remove` already refuses a single dirty checkout (git's own
 /// guard), and the command whose blast radius is N of them must not protect less.
 // ※ busy-refuses-destructive
 pub fn clone_remove(home: &Path, api: &ApiClient, slug: &str, force: bool) -> Result<(), CliError> {

@@ -116,7 +116,8 @@ nothing is checked out there and nothing in it is edited, so it belongs to the r
 where something has gone wrong.
 
 `clone remove` is guarded: it surveys every worktree under the root for uncommitted
-tracked changes and unpushed commits, and refuses — naming them — unless you pass
+tracked changes and unpushed commits, its bare for unpushed branches and a stash, and
+its code dir for anything that is not one of its worktrees, and refuses — naming them — unless you pass
 `--force`. `tree remove` already refuses a dirty checkout (git's own guard), and the
 command that deletes N of them at once must not protect less than the one that deletes
 one.

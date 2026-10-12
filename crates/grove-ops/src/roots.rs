@@ -165,7 +165,8 @@ pub fn add(home: &Path, slug: &str, url: &str) -> Result<Vec<Applied>, Error> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Removal {
     /// Refuse with a [`Error::Conflict`] naming every worktree that holds
-    /// uncommitted tracked changes or unpushed commits.
+    /// uncommitted tracked changes or unpushed commits, every unpushed branch, a
+    /// stash, and any code-dir entry that is not a worktree of the root.
     Guarded,
     /// Delete regardless — the operator said `--force`, which is the gesture that
     /// distinguishes "I know what is in there" from "I didn't".
@@ -228,30 +229,57 @@ pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
 /// [`git::fast_forward`]'s gate). Warm-pool slots are excluded: a slot is grove's own
 /// detached checkout at the trunk tip, carrying nothing a human wrote.
 ///
+/// The bare is surveyed too, since deleting it destroys what no checkout shows: a
+/// `branch` whose worktree was removed while its commits stayed unpushed (a bare keeps
+/// no reflog), and `refs/stash`, which every worktree shares. So is the code dir: an
+/// entry that is not a registered worktree of this bare is a human's — the same
+/// [`foreign_entries`] answer the realizer refuses to clone over — and is named
+/// `(not grove's)`. Unreadable registrations make every entry foreign: fail safe.
+///
 /// Best-effort by construction: a worktree git cannot read contributes nothing
 /// rather than blocking the remove — the guard exists to catch the ordinary "I
 /// forgot what was in there", not to be a lock.
 fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
     let bare = bare_dir(home, slug);
-    let Ok(worktrees) = git::worktree_list(&bare) else {
-        return Vec::new();
+    let name = |p: &Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_owned()
     };
-    worktrees
-        .into_iter()
+    let registered = git::worktree_list(&bare).unwrap_or_default();
+    let live: Vec<_> = registered
+        .iter()
         .filter(|wt| !crate::worktrees::under_pool(home, slug, &wt.path) && wt.path.is_dir())
+        .collect();
+    let mut unsaved: Vec<String> = live
+        .iter()
         .filter(|wt| {
             let dirty =
                 git::status(&wt.path).is_ok_and(|s| s.staged + s.unstaged + s.conflicted > 0);
             dirty || git::unpushed_count(&wt.path).is_ok_and(|n| n > 0)
         })
-        .map(|wt| {
-            wt.path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("?")
-                .to_owned()
-        })
-        .collect()
+        .map(|wt| name(&wt.path))
+        .collect();
+    // A branch a live worktree has checked out was answered above, by the tree's name.
+    let checked_out = |b: &str| live.iter().any(|wt| wt.branch.as_deref() == Some(b));
+    unsaved.extend(
+        git::unpushed_branches(&bare)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| !checked_out(b))
+            .map(|b| format!("branch {b}")),
+    );
+    if git::rev_parse(&bare, "refs/stash").is_ok() {
+        unsaved.push("refs/stash".into());
+    }
+    unsaved.extend(
+        foreign_entries(&code_dir(home, slug))
+            .into_iter()
+            .filter(|e| !registered.iter().any(|wt| name(&wt.path) == *e))
+            .map(|e| format!("{e} (not grove's)")),
+    );
+    unsaved
 }
 
 /// Per-root realize for one **declared** root: clone the declared-but-missing bare
@@ -1234,6 +1262,61 @@ mod tests {
         remove(&home, "o/r", Removal::Guarded).unwrap();
         assert!(!home.join("code/o/r").exists());
         assert!(!home.join("roots/o/r").exists());
+    }
+
+    /// Deleting the bare and the code dir destroys more than the live worktrees show:
+    /// a branch whose tree was removed with its commits unpushed (a bare keeps no
+    /// reflog), the shared `refs/stash`, and a human's clone or notes beside the
+    /// checkouts. The guard used to see none of them.
+    #[test]
+    fn remove_refuses_unpushed_branches_stashes_and_foreign_entries_until_forced() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        let (code, trunk) = (code_dir(&home, "o/r"), trunk_dir(&home, "o/r"));
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qam",
+            "w",
+        ];
+        crate::worktrees::create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
+        std::fs::write(code.join("feat/README.md"), "precious").unwrap();
+        crate::testfix::git(&code.join("feat"), &commit);
+        let refusal = || {
+            remove(&home, "o/r", Removal::Guarded)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(
+            refusal().contains("in feat;"),
+            "a checked-out branch is its tree's"
+        );
+
+        crate::worktrees::remove(&home, "o/r", "feat").unwrap();
+        std::fs::write(trunk.join("README.md"), "stashed").unwrap();
+        crate::testfix::git(
+            &trunk,
+            &["-c", "user.name=t", "-c", "user.email=t@t", "stash"],
+        );
+        fixture_repo(&code.join("myfork"));
+        std::fs::write(code.join("TODO.md"), "notes").unwrap();
+        assert!(
+            refusal().contains(
+                "in branch feature/x, refs/stash, TODO.md (not grove's), myfork (not grove's);"
+            ),
+            "{}",
+            refusal()
+        );
+        assert!(code.join("myfork/.git").exists());
+
+        remove(&home, "o/r", Removal::Forced).unwrap();
+        assert!(!code.exists() && !home.join("roots/o/r").exists());
     }
 
     /// Discovery reads the root directory and nothing else: a bare under `roots/` is a

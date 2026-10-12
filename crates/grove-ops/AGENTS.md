@@ -13,7 +13,7 @@ invariants:
     enforced_by: crates/grove-api/tests/wire_vocab.rs
   - claim: "an explicit root removal deletes on disk BEFORE it undeclares — undeclaring first lets the watcher's adopt re-find the still-present bare and resurrect the root; a partial delete propagates before the undeclare, so the slug stays declared and visibly broken"
     anchor: ※ delete-before-undeclare
-  - claim: "a root removal refuses an UNDECLARED slug before any path reaches remove_dir_all, and refuses a declared one holding uncommitted tracked changes or unpushed commits unless the caller forces — <home>/code/<slug> is a real directory whether or not grove put it there, and the command that deletes N worktrees at once must not protect less than the one that deletes one"
+  - claim: "a root removal refuses an UNDECLARED slug before any path reaches remove_dir_all, and refuses a declared one holding uncommitted tracked changes, unpushed commits on any local branch, a stash, or a code-dir entry that is no worktree of its bare unless the caller forces — <home>/code/<slug> is a real directory whether or not grove put it there, and the command that deletes N worktrees at once must not protect less than the one that deletes one"
     anchor: crates/grove-ops/src/roots.rs#unsaved_work
   - claim: "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone"
     anchor: ※ reconcile-additive
@@ -42,15 +42,15 @@ hazards:
 ## Anchors in this territory
 
 - ※ clock-seam → tests/harness_meta.rs:354
-- ※ delete-before-undeclare → src/roots.rs:197
+- ※ delete-before-undeclare → src/roots.rs:198
 - ※ files-authoritative → src/manifest.rs:301
 - ※ lane-is-callers → src/env.rs:123
 - ※ never-clobber → src/env.rs:309
 - ※ promote-attach-before-move → src/pool.rs:164
 - ※ reconcile-additive → src/worktrees.rs:259
-- ※ sync-never-forces → src/roots.rs:662
+- ※ sync-never-forces → src/roots.rs:690
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:615
+- ※ trunk-recovery-guard → src/roots.rs:643
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 

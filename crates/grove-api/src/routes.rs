@@ -147,7 +147,8 @@ wire_enum! {
 ///
 /// `force` defaults to false, which is the guarded remove: the root is surveyed for
 /// uncommitted tracked changes and unpushed commits across every worktree under it,
-/// and a find is a `conflict` rather than a deletion.
+/// unpushed branches and a stash in its bare, and code-dir entries that are no
+/// worktree of it; a find is a `conflict` rather than a deletion.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoveRootRequest {
     pub slug: String,

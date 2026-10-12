@@ -115,7 +115,7 @@ enum CloneAction {
     Remove {
         /// Repository slug (`owner/name`).
         repo: String,
-        /// Delete even when a worktree holds uncommitted or unpushed work.
+        /// Delete even when the root holds uncommitted, unpushed, stashed or foreign work.
         #[arg(long)]
         force: bool,
     },

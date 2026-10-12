@@ -370,6 +370,32 @@ pub fn unpushed_count(repo: &Path) -> Result<u32> {
     Ok(stdout_trimmed(&out).parse().unwrap_or(0))
 }
 
+/// The local branches of `repo` carrying commits on no remote-tracking ref —
+/// [`unpushed_count`]'s question asked of every `refs/heads` tip, checked out or not.
+/// A branch carries such a commit exactly when its tip is one, so two spawns answer it
+/// for any number of branches.
+pub fn unpushed_branches(repo: &Path) -> Result<Vec<String>> {
+    let read = |args: &[&str]| {
+        let mut cmd = git_command();
+        cmd.args(["--no-optional-locks", "-C"]).arg(repo).args(args);
+        let out = run_git(cmd, None, "git unpushed branches")?;
+        check_status(&out, "git unpushed branches")?;
+        Ok::<_, anyhow::Error>(stdout_trimmed(&out))
+    };
+    let unpushed = read(&["rev-list", "--branches", "--not", "--remotes"])?;
+    let heads = read(&[
+        "for-each-ref",
+        "--format=%(objectname) %(refname:short)",
+        "refs/heads",
+    ])?;
+    Ok(heads
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(tip, _)| unpushed.lines().any(|c| c == *tip))
+        .map(|(_, branch)| branch.to_owned())
+        .collect())
+}
+
 /// A checkout's drift, as the dashboard draws it: where `HEAD` sits, how far it
 /// has moved from its upstream, and how much is uncommitted.
 ///

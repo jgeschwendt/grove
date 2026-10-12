@@ -329,7 +329,11 @@ success — the same typo the daemon route answers with a 404. Undeclared is `no
 
 It then surveys the root for **unsaved work** — uncommitted tracked changes, or commits no
 remote has, in any worktree under it (warm-pool slots excluded; untracked files are not the
-signal, since grove materializes shares as untracked entries) — and refuses with a
+signal, since grove materializes shares as untracked entries); any local branch in the bare
+carrying unpushed commits, checked out or not (a bare keeps no reflog, so a removed tree's
+branch dies with it); a `refs/stash`; and any code-dir entry that is not a registered
+worktree of the bare (a human's clone or notes, what `foreign_entries` refuses to clone
+over) — and refuses with a
 `conflict` naming them unless the caller passed `--force` (`Removal::Forced`, `force: true`
 on the route). `grove tree remove` already refuses one dirty checkout because git does; the
 command that deletes N of them at once must not be the one that protects least.
