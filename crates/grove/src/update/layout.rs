@@ -207,6 +207,14 @@ impl Layout {
         Ok(prev)
     }
 
+    /// Drop `previous` — the rollback target must never be a version nothing proved.
+    /// Best-effort, like [`clear_pending`](Self::clear_pending): a link left behind is
+    /// no worse than not having tried.
+    pub fn forget_previous(&self) {
+        let _ = fs::remove_file(self.previous_link());
+        fsync_dir(&self.home);
+    }
+
     /// Remove old version dirs, retaining the `keep` newest plus whatever
     /// `current`/`previous` reference (never deleted). Returns removed versions.
     pub fn prune(&self, keep: usize) -> Result<Vec<String>, CliError> {

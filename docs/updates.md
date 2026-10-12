@@ -54,7 +54,7 @@ recover any unproven flip
   → flip current  (writes the pending marker first)
   → bounce the server
   → version-aware health gate
-  → clear pending; prune old versions, or roll back
+  → healthy: clear pending, prune old versions; else roll back
 ```
 
 Landmark: `stele:landmark self-update-flip` in `Updater::up`.
@@ -87,9 +87,12 @@ failure never fails a landed, healthy update.
 
 The flip lands before the gate answers, so the owed verdict is written to disk first.
 `Layout::flip_to` writes `pending` naming the version **and the direction** before `current`
-moves; the updater clears it the moment the gate answers, whatever it answers. A marker
-still naming `current` at the start of the next `grove up` is therefore proof that a
-previous updater died mid-update.
+moves. A healthy (or not-running) verdict clears it; a rejection leaves it standing until
+the rollback it owes overwrites it with its own, so no instant has `current` on a rejected
+version with no marker saying so. A rejection with nowhere to roll back keeps the forward
+marker, and the next `grove up` re-gates that version instead of reporting "already on" it.
+A marker still naming `current` at the start of the next `grove up` is therefore proof that
+the last verdict on it was never a healthy one.
 
 Gating *before* the flip is not an option: in served mode the bounce hands off to a
 supervisor that restarts whatever `current` points at, so a pre-flip gate cannot be
@@ -117,6 +120,11 @@ operator deliberately stopped is not recovery.
 The idempotence shortcut ("grove is already on `<v>`") is suppressed after a recovery that
 moved `current`, for the same reason: exiting 0 there would launder an interrupted update
 into a no-op whose reported version is the one nothing has proven.
+
+Undoing a forward flip also drops `previous`, which the swap left naming the undone version.
+`up` then re-gates whatever it targets, and when that is the restored version itself, a
+flaky second gate would otherwise roll back onto the release nothing proved and force-start
+it.
 
 `grove up --rollback` deliberately does **not** run the recovery first — after an
 interrupted update that command *is* the recovery, and rolling back twice would land on the

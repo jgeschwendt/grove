@@ -18,7 +18,7 @@ invariants:
     anchor: ※ cli-health-poll
   - claim: "exit codes 1/3/4/5/6/7 are a published contract, and the grove_ops::Error to CliError map is what makes the offline codes reachable; an error envelope from the server is exit 1 carrying its code, its message AND error.data's detail, since two of the codes say nothing else"
     anchor: crates/grove/src/error.rs#exit_code
-  - claim: "the pending marker names the version AND the direction, written before `current` moves and cleared when the gate answers — so the next `grove up` can tell an unproven forward flip (undo it) from an interrupted rollback (already on the proven version; re-run its gate)"
+  - claim: "the pending marker names the version AND the direction, written before `current` moves and cleared only by a verdict that vouches for `current` (a rejection leaves it for the rollback to overwrite) — so the next `grove up` can tell an unproven forward flip (undo it) from an interrupted rollback (already on the proven version; re-run its gate)"
     anchor: ※ pending-marker
     enforced_by: crates/grove/tests/update_e2e.rs
 hazards:

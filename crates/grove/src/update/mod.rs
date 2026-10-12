@@ -278,29 +278,29 @@ impl Updater {
         self.layout.install_bundle(&version, &bytes)?;
         self.layout.flip_to(&version)?; // marks the flip pending
 
-        let verdict = (self.bounce)(&version, false);
-        // The gate answered — healthy, unhealthy, or errored outright. `current` is
-        // no longer *unproven* whichever way it went, so the marker's job is done;
-        // only a crash before this line leaves one behind for the next `grove up`.
-        self.layout.clear_pending();
-
-        match verdict {
-            Ok(Bounce::NotRunning) => {
-                println!("grove updated to {version} (server not running; `grove on` to start it)");
-                self.prune_quietly();
-                Ok(())
-            }
-            Ok(Bounce::Healthy) => {
-                println!("grove updated to {version}");
+        // Only a verdict that vouches for `current` clears the marker here. A rejection
+        // leaves it standing until `Layout::rollback` overwrites it: clearing first
+        // would strand `current` on the rejected version with nothing on disk saying so,
+        // and the next `grove up` would take the "already on <v>" shortcut over it.
+        match (self.bounce)(&version, false) {
+            Ok(Bounce::Unhealthy) => self.roll_back(&version, None),
+            // The restart itself failed (e.g. the new version won't pass readiness):
+            // treat it like a bad boot and roll back rather than strand `current`.
+            Err(e) => self.roll_back(&version, Some(e)),
+            Ok(bounce) => {
+                self.layout.clear_pending();
+                if bounce == Bounce::NotRunning {
+                    println!(
+                        "grove updated to {version} (server not running; `grove on` to start it)"
+                    );
+                } else {
+                    println!("grove updated to {version}");
+                }
                 // Prune is housekeeping — a failure here must NOT fail a landed,
                 // healthy update (that would misreport success as exit 7).
                 self.prune_quietly();
                 Ok(())
             }
-            Ok(Bounce::Unhealthy) => self.roll_back(&version, None),
-            // The restart itself failed (e.g. the new version won't pass readiness):
-            // treat it like a bad boot and roll back rather than strand `current`.
-            Err(e) => self.roll_back(&version, Some(e)),
         }
     }
 
@@ -340,6 +340,10 @@ impl Updater {
         let (proven, outcome) = match pending.kind {
             Flip::Forward if self.layout.previous_version().is_some() => {
                 let restored = self.layout.rollback()?;
+                // The swap left the undone, unproven version as `previous`. `up` goes on
+                // to re-gate whatever it targets, and if that target is `restored`
+                // itself, a failed gate would roll back onto it and force-start it.
+                self.layout.forget_previous();
                 println!(
                     "grove: {} was flipped to but never health-gated {interrupted}; rolled back to {restored}",
                     pending.version
@@ -1211,5 +1215,55 @@ mod tests {
 
         assert_eq!(layout.current_version().as_deref(), Some("0.3.1"));
         assert!(layout.pending_version().is_none());
+    }
+
+    /// Recovery undoes an unproven 0.4.0, the operator re-targets the proven 0.3.1,
+    /// and that second gate flakes. The rollback it owes must not land on 0.4.0: the
+    /// undo is what left it as `previous`, and nothing ever proved it.
+    #[test]
+    fn a_flaky_regate_after_an_undo_never_rolls_onto_the_undone_version() {
+        let home = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (up, _p) = updater(&home, &src, Bounce::Healthy);
+        up.up(Some("0.3.1")).unwrap();
+        let layout = Layout::new(home.path());
+        layout
+            .install_bundle("0.4.0", &fake_bundle("0.4.0"))
+            .unwrap();
+        layout.flip_to("0.4.0").unwrap(); // died before the gate
+
+        let calls: Rc<RefCell<Vec<(String, bool)>>> = Rc::default();
+        let c = calls.clone();
+        let next = Updater::new(
+            Layout::new(home.path()),
+            "test-target",
+            fixture_source(src.path(), "test-target", &["0.3.1", "0.4.0"]),
+            move |v: &str, ensure_running| {
+                c.borrow_mut().push((v.to_string(), ensure_running));
+                // recovery healthy, then the re-gate of 0.3.1 flakes
+                Ok([Bounce::Healthy, Bounce::Unhealthy][c.borrow().len() - 1])
+            },
+        );
+        let err = next.up(Some("0.3.1")).unwrap_err();
+
+        assert!(err.to_string().contains("no previous version"), "{err}");
+        assert_eq!(layout.current_version().as_deref(), Some("0.3.1"));
+        assert_eq!(layout.previous_version(), None);
+        assert_eq!(calls.borrow().len(), 2, "nothing force-started: {calls:?}");
+    }
+
+    /// A rejection leaves the forward marker standing until a rollback re-marks it.
+    /// With no rollback to make (a first install), clearing it anyway let the next
+    /// `grove up` read "already on 0.4.0" and exit 0 with no bounce and no gate.
+    #[test]
+    fn a_rejected_version_is_re_gated_rather_than_laundered() {
+        let home = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (sick, _p) = updater(&home, &src, Bounce::Unhealthy);
+        assert!(sick.up(Some("0.4.0")).is_err());
+
+        let (next, probe) = updater(&home, &src, Bounce::Unhealthy);
+        assert_eq!(next.up(Some("0.4.0")).unwrap_err().exit_code(), 6);
+        assert_eq!(probe.bounces.get(), 1, "the owed gate ran again");
     }
 }
