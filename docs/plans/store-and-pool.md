@@ -1,6 +1,6 @@
 # Plan: a root holds checkouts and nothing else
 
-Status: active · branch `feat/store-and-pool` · authored 2026-09-16 · ships as v0.3.0 · plate: `docs/plates/store-and-pool.png` (`store-and-pool.py` regenerates it)
+Status: done · 99b7299 (v0.3.0) · plate: `docs/plates/store-and-pool.png` (`store-and-pool.py` regenerates it)
 
 ## Problem
 

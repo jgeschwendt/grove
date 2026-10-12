@@ -1,6 +1,6 @@
 # Plan: reconcile refuses a legacy or occupied root instead of cloning into it
 
-Status: active · branch `fix/legacy-reconcile-guard` · authored 2026-09-05 · ships as v0.2.2
+Status: done · b43745e (v0.2.2)
 
 ## Problem
 

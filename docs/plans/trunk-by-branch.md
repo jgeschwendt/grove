@@ -1,6 +1,6 @@
 # Plan: the trunk is a branch, named on disk by that branch
 
-Status: active · branch `feat/trunk-by-branch` · authored 2026-09-04
+Status: done · ea9629a (v0.2.0)
 
 ## Problem
 

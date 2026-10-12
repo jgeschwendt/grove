@@ -1,6 +1,6 @@
 # Plan: split the install from the workspace
 
-Status: active · branch `feat/install-home` · authored 2026-09-03
+Status: done · 0dd3281 (v0.2.0)
 
 ## Problem
 
