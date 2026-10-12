@@ -125,6 +125,41 @@ pub fn materialize(home: &Path, slug: Option<&str>, fix: Fix) -> Result<Vec<Shar
     run(home, slug, Action::Materialize(fix)).map_err(Error::io)
 }
 
+/// Take back what grove laid in worktree `name` ahead of its non-forced `git worktree
+/// remove`, which counts shares as untracked files and refuses over them. Only a
+/// declared share path is touched, and there only a grove-shaped link or a real file
+/// byte-identical to its trunk source — both data-free, re-laid by the next
+/// materialize. An edited copy is the user's and still blocks; so is everything else.
+/// Never the trunk itself, whose share paths ARE the sources. Best-effort per share.
+pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
+    let trunk = roots::trunk(home, slug)?;
+    if trunk.name == name {
+        return Ok(());
+    }
+    let root_fd = open_dir(&code_dir(home, slug))?;
+    let trunk_fd = open_dir_nofollow(&root_fd, OsStr::new(&trunk.name))?;
+    let wt_fd = open_dir_nofollow(&root_fd, OsStr::new(name))?;
+    for share in manifest::list_shares(&manifest_path(home), slug)? {
+        let rel = Path::new(&share.path);
+        let _ = (|| -> Result<()> {
+            let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, false)? else {
+                return Ok(());
+            };
+            let ours = match classify_leaf(&parent_fd, &leaf)? {
+                LeafState::Symlink { target } => is_under_trunk(&trunk.name, &target),
+                LeafState::RealFile => read_source(&trunk_fd, rel)
+                    .is_ok_and(|(src, _)| read_source(&wt_fd, rel).is_ok_and(|(b, _)| b == src)),
+                LeafState::Absent | LeafState::Dir | LeafState::Other => false,
+            };
+            if ours {
+                unlinkat(&parent_fd, &leaf, AtFlags::empty())?;
+            }
+            Ok(())
+        })();
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum Action {
     Diagnose,

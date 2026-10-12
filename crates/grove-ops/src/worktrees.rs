@@ -135,7 +135,14 @@ pub fn remove(home: &Path, slug: &str, name: &str) -> Result<(), Error> {
     let bare = bare_dir(home, slug);
     let dir = worktree_dir(home, slug, name);
     if dir.exists() {
-        git::worktree_remove(&bare, &dir).map_err(Error::git)?;
+        // Never `--force`: take back grove's own shares so they can't block the
+        // remove, and lay them again if git still refuses over a user's file.
+        let _ = crate::env::unlay(home, slug, name);
+        git::worktree_remove(&bare, &dir)
+            .inspect_err(|_| {
+                let _ = crate::env::materialize(home, Some(slug), crate::env::Fix::Safe);
+            })
+            .map_err(Error::git)?;
     } else if bare.exists() {
         // The directory was removed out-of-band (a stray `rm -rf`), but git still
         // holds a `prunable` registration under the bare's `worktrees/<name>`. Skipping
@@ -459,6 +466,58 @@ mod tests {
         let home = home_with_root(&tmp);
         let err = remove(&home, "o/r", "nope").unwrap_err();
         assert_eq!(err.code(), "not_declared", "{err}");
+    }
+
+    /// A root sharing `.envrc` (linked) and `local.json` (copied), neither ignored by
+    /// the repo — so git sees both as untracked in every worktree — plus `feat`.
+    fn home_with_shares(tmp: &TempDir) -> PathBuf {
+        let home = home_with_root(tmp);
+        let m = manifest_path(&home);
+        std::fs::write(home.join("code/o/r/main/.envrc"), "x").unwrap();
+        std::fs::write(home.join("code/o/r/main/local.json"), "{}").unwrap();
+        crate::manifest::add_share(&m, "o/r", "symlink", &[".envrc"]).unwrap();
+        crate::manifest::add_share(&m, "o/r", "copy", &["local.json"]).unwrap();
+        create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
+        home
+    }
+
+    /// Git counts grove's own share links and seeded copies as untracked files, so the
+    /// non-forced remove refused every worktree of a root sharing an unignored path.
+    #[test]
+    fn remove_takes_back_the_shares_grove_laid() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_shares(&tmp);
+        let feat = home.join("code/o/r/feat");
+        assert!(feat.join(".envrc").is_symlink() && feat.join("local.json").is_file());
+        remove(&home, "o/r", "feat").unwrap();
+        assert!(!feat.exists());
+    }
+
+    /// An edited copy is the user's file: git still refuses over it, it survives, and
+    /// the link taken back ahead of the attempt is laid again.
+    #[test]
+    fn remove_still_refuses_over_an_edited_copy() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_shares(&tmp);
+        let feat = home.join("code/o/r/feat");
+        std::fs::write(feat.join("local.json"), "edited").unwrap();
+        assert_eq!(remove(&home, "o/r", "feat").unwrap_err().code(), "git");
+        assert_eq!(
+            std::fs::read_to_string(feat.join("local.json")).unwrap(),
+            "edited"
+        );
+        assert!(feat.join(".envrc").is_symlink());
+    }
+
+    /// A worktree declared under the trunk's own name never has its share sources
+    /// taken: they are the trunk's real files, identical to themselves.
+    #[test]
+    fn remove_never_takes_the_trunks_sources() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_shares(&tmp);
+        crate::manifest::add_worktree(&manifest_path(&home), "o/r", "main", "main", None).unwrap();
+        assert_eq!(remove(&home, "o/r", "main").unwrap_err().code(), "git");
+        assert!(home.join("code/o/r/main/local.json").is_file());
     }
 
     /// Same guard as `roots::Applied`: the typed `status` leaves the wire shape

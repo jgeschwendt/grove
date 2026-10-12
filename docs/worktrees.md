@@ -352,6 +352,9 @@ declared and doctor/reconcile report a broken root rather than adopt bringing it
 **git first, then undeclare**. Removing the manifest entry first would let the next reconcile
 re-adopt the still-registered worktree. When the directory is already gone out of band,
 grove prunes the stale git registration so the removal is git-visible before the undeclare.
+The git remove is never forced, and git counts shares as untracked files, so `env::unlay`
+first takes back what grove laid there (`docs/worktree-environment.md` § Removal); a
+user's untracked file still refuses it, and the shares are laid again.
 
 Removing a root through the API pokes the watcher afterwards: a removed root's engine is
 torn down by the reconcile pass that follows, never by an explicit stop call. Removing a

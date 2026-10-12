@@ -88,6 +88,15 @@ declared is an orphan and is removed (`gc`). `unlinkat` removes the *link*, neve
 target. A real file — including a `_.copy`'s seeded file — or a symlink pointing anywhere
 else is left alone. GC is top-level only; nested-share GC is not implemented.
 
+### Removal
+
+`worktrees::remove` never forces `git worktree remove`, which refuses over untracked files —
+and a share the repo does not ignore is one. `env::unlay` first takes back, at each declared
+share path, a grove-shaped link or a real file byte-identical to its trunk source: both are
+data-free. An edited copy is the worktree's own and still blocks, as does any other
+untracked file; on that refusal the shares are materialized again. The trunk is never
+unlaid — its share paths are the sources.
+
 ### Statuses
 
 `ShareStatus` is `ok | created | linked | copied | repointed | conflict | gc | error`,
