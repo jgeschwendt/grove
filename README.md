@@ -155,7 +155,7 @@ those types in `grove-api`.
 `127.0.0.1:7777`) is where it listens. `GROVE_LOG` sets what the process writes to
 its log file, `GROVE_LOG_RING` (default `info`) what the event stream carries. The daemon accepts only a **literal loopback**
 address there and refuses anything else at startup: the API is unauthenticated until
-served-mode auth lands, so loopback-only plus the cross-origin mutation guard are the
+served-mode auth lands, so loopback-only plus the `Host` and cross-origin mutation guards are the
 compensating controls, and there is no override.
 
 ## Installing and updating

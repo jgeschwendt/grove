@@ -1,8 +1,10 @@
-//! The two guards every `/api` request passes: readiness, then mutation.
+//! The three guards every request passes: host, readiness, then mutation.
 //!
-//! Both are compensating controls for an unauthenticated API, and both retire only
+//! All are compensating controls for an unauthenticated API, and both retire only
 //! when served-mode auth lands — together with the loopback bind gate they are the
 //! whole of carried law 10.
+
+use std::net::{IpAddr, SocketAddr};
 
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode};
@@ -21,15 +23,40 @@ use crate::reply::error_response;
 // ※ readiness-whitelist
 const READINESS_WHITELIST: [&str; 2] = ["/api/health", "/api/daemon/shutdown"];
 
-/// The **fixed** allowlist of `Origin` hosts a state-changing request may carry.
+/// The **fixed** allowlist of hosts an `Origin` — and, with the bind address, a
+/// `Host` — may name.
 ///
 /// Fixed, never the request's own `Host` header, is what makes this a DNS-rebinding
 /// defense rather than a decoration: a page served from `evil.example` still sends
-/// `Origin: https://evil.example` after its name has been rebound to 127.0.0.1, so
-/// the origin — which the attacker cannot forge from a browser — fails this list
-/// while a `Host` check would pass.
+/// `Origin: https://evil.example` and `Host: evil.example` after its name has been
+/// rebound to 127.0.0.1, so both fail this list where an origin-matches-host check
+/// would pass.
 // ※ unauthenticated-api
 const LOOPBACK_ORIGINS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// Refuse any request whose `Host` is not a loopback name or the bind address.
+///
+/// The read half of the rebinding defense: a rebound page's GET is same-origin to
+/// its browser, so it carries no `Origin` for [`mutation`] to refuse, but its `Host`
+/// still names the attacker. Every route, reads and the event stream included. A
+/// missing or unparseable `Host` fails closed — no browser omits it, and every
+/// client grove ships addresses the daemon by the literal it bound.
+pub async fn host(State(bind): State<SocketAddr>, request: Request, next: Next) -> Response {
+    let allowed = request
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|host| authority_host(host.to_str().ok()?))
+        .is_some_and(|host| {
+            LOOPBACK_ORIGINS.contains(&host) || host.parse::<IpAddr>() == Ok(bind.ip())
+        });
+    if allowed {
+        return next.run(request).await;
+    }
+    error_response(
+        StatusCode::FORBIDDEN,
+        ApiError::new(ErrorCode::Forbidden, "request host refused"),
+    )
+}
 
 /// 503 every non-whitelisted `/api` route while the daemon is draining or degraded.
 ///
@@ -104,8 +131,12 @@ fn is_api(path: &str) -> bool {
 /// unparseable cases fail closed rather than matching an empty string against the
 /// allowlist.
 fn origin_host(origin: &str) -> Option<&str> {
-    let authority = origin.split_once("://")?.1;
-    let authority = authority.split(['/', '?', '#']).next()?;
+    authority_host(origin.split_once("://")?.1.split(['/', '?', '#']).next()?)
+}
+
+/// The host of an authority (`host[:port]`, an IPv6 literal bracketed) — the whole
+/// of a `Host` header, the tail of an `Origin`. Userinfo yields `None`.
+fn authority_host(authority: &str) -> Option<&str> {
     if authority.contains('@') {
         return None;
     }
@@ -121,6 +152,60 @@ fn origin_host(origin: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{LOOPBACK_ORIGINS, READINESS_WHITELIST, is_api, origin_host};
+    use crate::app::{AppState, router};
+    use crate::config::Config;
+    use crate::logs::LogRing;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header::HOST};
+    use grove_ops::clock::{Clock, SystemClock};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tower::ServiceExt as _;
+
+    /// A rebound page's same-origin GET carries no `Origin`, only its own name as
+    /// `Host`: it must read neither the snapshot nor the stream, while every name
+    /// grove's own clients address the daemon by — the bind literal included — passes.
+    #[tokio::test]
+    async fn the_host_guard_refuses_a_rebound_read() {
+        let home = tempfile::TempDir::new().unwrap();
+        let config = Config::new(home.path(), SocketAddr::from(([127, 9, 9, 9], 7777))).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let logs = Arc::new(LogRing::new(Arc::clone(&clock), config.log_level));
+        let app = router(AppState::new(config, clock, logs).0);
+        for (path, host, status) in [
+            (
+                "/api/roots",
+                Some("evil.example:7777"),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/api/events",
+                Some("evil.example:7777"),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/api/roots",
+                Some("localhost@evil.example"),
+                StatusCode::FORBIDDEN,
+            ),
+            ("/api/roots", Some("127.0.0.2:7777"), StatusCode::FORBIDDEN),
+            ("/api/roots", None, StatusCode::FORBIDDEN),
+            ("/api/roots", Some("localhost"), StatusCode::OK),
+            ("/api/roots", Some("127.0.0.1:7777"), StatusCode::OK),
+            ("/api/roots", Some("[::1]:7777"), StatusCode::OK),
+            ("/api/roots", Some("127.9.9.9:7777"), StatusCode::OK),
+        ] {
+            let request = host
+                .into_iter()
+                .fold(Request::get(path), |r, h| r.header(HOST, h));
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{path} with Host {host:?}");
+        }
+    }
 
     #[test]
     fn the_api_surface_is_matched_by_segment() {

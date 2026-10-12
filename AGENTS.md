@@ -31,7 +31,7 @@ invariants:
 - ⚠ `crates/grove-daemon`: a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or the self-update health gate would accept the bundle that broke it. (→ ※ boot-degrade-sticky)
 - ⚠ `crates/grove-ops`: this crate holds NO per-root mutex: its flock serializes the manifest, deliberately not git. Per-root git serialization is the caller's to supply, and a concurrent caller that does not supply it loses an invariant this crate was written against. (→ ※ lane-is-callers)
 - ⚠ `crates/grove`: `grove up` flips the `current` symlink BEFORE the health gate — unavoidable, since served mode restarts whatever `current` points at. A crash in between strands `current` on an unproven version; recovery is the pending marker, read by the next `grove up`. (→ ※ self-update-flip)
-- ⚠ `crates/grove-daemon`: the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed cross-origin allowlist are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin (→ ※ unauthenticated-api)
+- ⚠ `crates/grove-daemon`: the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed loopback allowlist — checked against every request's Host and every mutation's Origin — are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin (→ ※ unauthenticated-api)
 
 ## Map
 

@@ -72,7 +72,7 @@ handed a `roots/remove` it would execute against its own home.
 |---|---|---|---|
 | 503 | `degraded` | `GET /api/health` while boot state is degraded | `{status: "degraded", reason}` |
 | 503 | `unavailable` | health while booting or stopping; any non-whitelisted route behind the readiness gate; a root's lane at its queue bound; a sync for a declared root no engine is driving | `{status}` for health; `{slug}` for a saturated lane and for a sync with no engine |
-| 403 | `forbidden` | the mutation guard refused a cross-origin state-changing request | — |
+| 403 | `forbidden` | the host guard refused a non-loopback `Host`, or the mutation guard a cross-origin state-changing request | — |
 | 404 | `not_found` | the slug or worktree named is not declared | `{slug}` / `{slug, name}` |
 | 422 | `invalid_request` | a missing or malformed body parameter | — |
 | 422 | `sync_failed` | a sync request the daemon could not decide on — the manifest would not read | `{reason}` |
@@ -92,9 +92,17 @@ and neither is mapped onto the other: `remove_failed` carries the ops message in
 
 ## Guards
 
-Two middleware layers wrap every `/api` path, readiness applied outermost so it runs first
-— a draining daemon answers 503 rather than spending a cross-origin verdict on a request it
+Three middleware layers wrap every route, in this order: host, readiness, mutation. Host
+runs first, so a rebound page learns nothing — not even that the daemon is draining; then a
+draining daemon answers 503 rather than spending a cross-origin verdict on a request it
 would not serve either way.
+
+**Host** refuses, 403 `forbidden`, any request — GET and the event stream included — whose
+`Host` header names anything but `localhost`, `127.0.0.1`, `::1` (port optional, IPv6
+bracketed) or the daemon's own bind address. A missing or unparseable `Host` is refused
+too. This is the read half of the DNS-rebinding defense: after `evil.example` is rebound to
+127.0.0.1 a page's `fetch("/api/roots")` is same-origin to its browser and carries no
+`Origin`, but its `Host` is still `evil.example`.
 
 **Readiness** 503s every non-whitelisted `/api` path while the boot state is `stopping` or
 `degraded`. The whitelist is exactly two paths:
@@ -116,15 +124,15 @@ would not serve either way.
 Anything else is 403 `forbidden`. The list is **fixed**, never the request's own `Host`
 header — that is what makes it a DNS-rebinding defense: a page served from `evil.example`
 still sends `Origin: https://evil.example` after its name has been rebound to 127.0.0.1,
-so the origin, which a browser will not let the attacker forge, fails the list where a
-`Host` check would pass. An unparseable origin — `null` from a sandboxed frame, a bare
+so the origin, which a browser will not let the attacker forge, fails the list where an
+origin-matches-`Host` check would pass. An unparseable origin — `null` from a sandboxed frame, a bare
 host, an authority carrying userinfo — has no host and is refused: the parse fails closed.
 
 Residual and accepted until auth lands: another app already on a loopback port can present
 a loopback origin. Closing that needs request authentication, which is the work this guard
 stands in for.
 
-Both guards, and the loopback bind refusal, are compensating controls for an
+All three guards, and the loopback bind refusal, are compensating controls for an
 unauthenticated API. See `docs/deployment.md`.
 
 ## The snapshot

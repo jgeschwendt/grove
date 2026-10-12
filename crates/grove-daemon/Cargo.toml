@@ -8,11 +8,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
-# axum 0.8 over hyper 1: the whole HTTP surface is seven routes and two guards, so
-# the router, the two `from_fn` middlewares and `axum::serve`'s graceful shutdown are
+# axum 0.8 over hyper 1: the whole HTTP surface is seven routes and three guards, so
+# the router, the three `from_fn` middlewares and `axum::serve`'s graceful shutdown are
 # the entire framework budget — no tower-http, no extractors beyond `Json`/`State`,
 # and no direct `tower` (axum's own `from_fn`/`Router::layer` name every bound they
-# need; a direct dependency here would be inert).
+# need; a direct dependency here would be inert) — save the dev-only one below.
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 grove-api = { path = "../grove-api" }
@@ -44,6 +44,9 @@ grove-ops = { path = "../grove-ops", features = ["test-util"] }
 # Loopback HTTP only — no TLS backend, which is also why `default-features = false`.
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
+# `ServiceExt::oneshot`: drive the router with a hand-built request, no socket — the
+# only way to send a `Host` a real client would not. axum already links it.
+tower = { version = "0.5", default-features = false, features = ["util"] }
 # `test-util` is what unlocks `start_paused`: a paused clock auto-advances only
 # while the runtime is idle, which is how the watcher's busy-wait is asserted as a
 # property rather than counted in iterations. Dev-only, so the shipped binary never

@@ -70,6 +70,29 @@ pub struct AppState {
     pub shutdown: ShutdownTrigger,
 }
 
+impl AppState {
+    /// Fresh state over `config`, and the reconcile mailbox's receiving end.
+    pub(crate) fn new(
+        config: Config,
+        clock: Arc<dyn Clock>,
+        logs: Arc<LogRing>,
+    ) -> (Self, mpsc::Receiver<()>) {
+        let (tx, rx) = mpsc::channel(NUDGE_DEPTH);
+        let state = Self {
+            boot: Arc::new(BootState::new(&*clock)),
+            lanes: Arc::new(Lanes::new(Arc::clone(&clock), config.lane_idle)),
+            clock,
+            config: Arc::new(config),
+            events: EventBus::new(),
+            logs,
+            engines: Arc::new(OnceLock::new()),
+            reconcile: ReconcileNudge { tx },
+            shutdown: ShutdownTrigger::new(),
+        };
+        (state, rx)
+    }
+}
+
 /// A handle onto the reconcile mailbox — what `POST /api/roots/reconcile` pokes and
 /// the manifest watcher consumes.
 ///
@@ -140,13 +163,14 @@ impl ShutdownTrigger {
     }
 }
 
-/// The whole HTTP surface: ten routes, the two guards, and the fallbacks that
+/// The whole HTTP surface: ten routes, the three guards, and the fallbacks that
 /// keep even a 404 inside the envelope.
 ///
-/// Layer order is load-bearing. `Router::layer` wraps outermost-last, so readiness
-/// is applied second and therefore runs **first** — matching v1's `:api` pipeline
-/// (`ReadinessPlug` then `MutationGuard`): a draining server answers 503 rather than
-/// spending a cross-origin verdict on a request it will not serve either way.
+/// Layer order is load-bearing. `Router::layer` wraps outermost-last, so the host
+/// guard runs **first** — a rebound page learns nothing, not even that the daemon is
+/// draining — then readiness, matching v1's `:api` pipeline (`ReadinessPlug` then
+/// `MutationGuard`): a draining server answers 503 rather than spending a
+/// cross-origin verdict on a request it will not serve either way.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(routes::health))
@@ -166,6 +190,10 @@ pub fn router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             guard::readiness,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.config.bind,
+            guard::host,
         ))
         .with_state(state)
 }
@@ -209,20 +237,9 @@ impl Daemon {
     ) -> Result<Self, Error> {
         crate::config::guard_loopback(config.bind)?;
         let listener = TcpListener::bind(config.bind).await?;
-        let (tx, rx) = mpsc::channel(NUDGE_DEPTH);
-        let lanes = Arc::new(Lanes::new(Arc::clone(&clock), config.lane_idle));
+        let (state, rx) = AppState::new(config, clock, logs);
         Ok(Self {
-            state: AppState {
-                boot: Arc::new(BootState::new(&*clock)),
-                clock,
-                config: Arc::new(config),
-                lanes,
-                events: EventBus::new(),
-                logs,
-                engines: Arc::new(OnceLock::new()),
-                reconcile: ReconcileNudge { tx },
-                shutdown: ShutdownTrigger::new(),
-            },
+            state,
             listener,
             nudges: Some(rx),
         })

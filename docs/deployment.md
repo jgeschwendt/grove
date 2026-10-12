@@ -2,19 +2,24 @@
 
 ## Posture: loopback-only, unauthenticated, guarded
 
-The API is **unauthenticated**. Served-mode auth is a later phase, so three compensating
-controls stand in its place, and all three retire together when it lands:
+The API is **unauthenticated**. Served-mode auth is a later phase, so four compensating
+controls stand in its place, and all four retire together when it lands:
 
 1. **The bind gate.** `GROVE_BIND` accepts a **literal** `ip:port` and only a loopback
    address. A hostname is refused rather than resolved — what a name points at is not the
    daemon's to decide, and a gate applied after resolution is a gate applied to whatever
    the resolver said that second. There is no override, and the check runs both in
    `Config::new` and again at `Daemon::bind`, so a hand-built config cannot slip past it.
-2. **The readiness gate.** While draining or degraded, every `/api` path but
+2. **The host guard.** Every request — reads and the event stream included — must carry a
+   `Host` of `localhost`, `127.0.0.1`, `::1` or the bind address, any port. A page whose
+   name was rebound to 127.0.0.1 still sends its own name as `Host`, so it can read
+   neither the snapshot nor the stream.
+3. **The readiness gate.** While draining or degraded, every `/api` path but
    `/api/health` and `/api/daemon/shutdown` answers 503.
-3. **The mutation guard.** A state-changing request must carry no `Origin` (every
+4. **The mutation guard.** A state-changing request must carry no `Origin` (every
    non-browser client) or one whose host is `localhost`, `127.0.0.1` or `::1` — a fixed
-   list, never the request's own `Host`, which is what makes it a DNS-rebinding defense.
+   list, never the request's own `Host`, which is what makes it the mutating half of the
+   DNS-rebinding defense.
 
 Residual and accepted: another process already on a loopback port can present a loopback
 origin, and any local user who can reach the port can drive the API. Both need request
@@ -22,7 +27,8 @@ authentication to close. Putting grove on a LAN is another service's job; grove 
 do it itself.
 
 The CLI's client is deliberately looser than the daemon: it accepts a hostname in
-`GROVE_BIND`, because it only has to reach whatever is listening, and it builds its HTTP
+`GROVE_BIND`, because it only has to reach whatever is listening — though the host guard
+answers only `localhost` among names, so any other alias is refused with 403 — and it builds its HTTP
 client with `no_proxy` so an `HTTP_PROXY` in the operator's environment cannot sit between
 it and a daemon on its own loopback address.
 

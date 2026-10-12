@@ -3,7 +3,7 @@
 ```stele
 kind: component
 purpose: >-
-  The resident half: axum routes, boot state, the readiness and mutation guards, per-root
+  The resident half: axum routes, boot state, the host, readiness and mutation guards, per-root
   lanes, the convergence engines, the manifest watcher, the event bus and log ring, the SSE read surface.
 commands:
   test: mise exec -- cargo nextest run -p grove-daemon
@@ -31,7 +31,7 @@ invariants:
 hazards:
   - claim: "a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or the self-update health gate would accept the bundle that broke it."
     anchor: ※ boot-degrade-sticky
-  - claim: "the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed cross-origin allowlist are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin"
+  - claim: "the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed loopback allowlist — checked against every request's Host and every mutation's Origin — are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin"
     anchor: ※ unauthenticated-api
 edges:
   depends: [crates/grove-api, crates/grove-ops]
@@ -43,11 +43,11 @@ edges:
 
 - ※ boot-degrade-sticky → src/boot.rs:68
 - ※ loopback-bind-gate → src/config.rs:200
-- ※ mutation-guard → src/guard.rs:66
+- ※ mutation-guard → src/guard.rs:93
 - ※ per-root-lane → src/lane.rs:172
 - ※ push-only → src/engine/mod.rs:355
-- ※ readiness-whitelist → src/guard.rs:21
+- ※ readiness-whitelist → src/guard.rs:23
 - ※ status-is-a-cache → src/engine/status.rs:52
-- ※ unauthenticated-api → src/guard.rs:31
+- ※ unauthenticated-api → src/guard.rs:34
 
 <!-- @end -->

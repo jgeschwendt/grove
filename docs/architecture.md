@@ -212,7 +212,11 @@ unconditional post-boot ready signal, or the self-update health gate would accep
 bundle that broke it. `mark_stopping` does override a degrade — a daemon asked to drain
 *is* draining.
 
-Two middleware layers wrap every `/api` route, readiness outermost so it runs first:
+Three middleware layers wrap every route, host outermost so it runs first:
+
+- **Host** 403s (`forbidden`) any request whose `Host` is not `localhost`, `127.0.0.1`,
+  `::1` or the bind address — reads and the event stream included, so a page rebound to
+  127.0.0.1 cannot read the snapshot. A missing or unparseable `Host` is refused.
 
 - **Readiness** 503s every non-whitelisted `/api` path while `stopping` or `degraded`.
   The whitelist is exactly `/api/health` and `/api/daemon/shutdown` — health so the state
@@ -224,7 +228,7 @@ Two middleware layers wrap every `/api` route, readiness outermost so it runs fi
   `forbidden`. The list is fixed, never the request's own `Host` — that is what makes it a
   DNS-rebinding defense.
 
-Both, plus the loopback bind refusal in `config::guard_loopback`, are compensating controls
+All three, plus the loopback bind refusal in `config::guard_loopback`, are compensating controls
 for an unauthenticated API and retire only when served-mode auth lands.
 
 ### Drain
