@@ -6,7 +6,7 @@
 //! answered for it, and v1 held that verdict in the updater's memory alone — so a
 //! crash in between stranded `current` on a version nothing had ever proven. The
 //! marker writes that owed verdict to disk before `current` moves, and the updater
-//! clears it once the gate settles; see [`Updater::up`](super::Updater::up) for the
+//! clears it only once a gate vouches for `current`; see [`Updater::up`](super::Updater::up) for the
 //! recovery that reads it.
 
 use std::collections::BTreeSet;
@@ -99,9 +99,9 @@ impl Layout {
         link_target_name(&self.previous_link())
     }
 
-    /// The version a flip moved `current` to and whose gate has not settled — an
-    /// updater that is still running, or one that died mid-update. Cleared by
-    /// [`clear_pending`](Self::clear_pending) the moment the gate answers.
+    /// The version a flip moved `current` to that no gate has vouched for — an updater
+    /// still running, one that died mid-update, or a rejection. Cleared by
+    /// [`clear_pending`](Self::clear_pending) only on a verdict that vouches for it.
     #[must_use]
     pub fn pending_version(&self) -> Option<String> {
         self.pending_flip().map(|p| p.version)
@@ -146,7 +146,7 @@ impl Layout {
         Ok(())
     }
 
-    /// Drop the pending marker — the gate answered, so `current` is vouched for.
+    /// Drop the pending marker — a gate vouched for `current`.
     /// Best-effort on the fsync, like every other directory barrier here.
     pub fn clear_pending(&self) {
         let _ = fs::remove_file(self.pending_path());

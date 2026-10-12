@@ -530,6 +530,19 @@ mod tests {
         assert!(feat.join(".envrc").is_symlink());
     }
 
+    /// A share of a tracked path equals the trunk's in every clean worktree, yet it is
+    /// git's file, not grove's: taking it back reads as a deletion and blocks the remove.
+    #[test]
+    fn remove_leaves_a_tracked_share_to_git() {
+        for mode in ["symlink", "copy"] {
+            let tmp = TempDir::new().unwrap();
+            let home = home_with_root(&tmp);
+            crate::manifest::add_share(&manifest_path(&home), "o/r", mode, &["README.md"]).unwrap();
+            create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
+            remove(&home, "o/r", "feat").unwrap_or_else(|e| panic!("{mode}: {e}"));
+        }
+    }
+
     /// A worktree declared under the trunk's own name never has its share sources
     /// taken: they are the trunk's real files, identical to themselves.
     #[test]

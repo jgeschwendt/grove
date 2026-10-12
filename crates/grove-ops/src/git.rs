@@ -1,5 +1,6 @@
 //! Git operations: bare clone (gix) and worktree creation (git CLI).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -886,6 +887,22 @@ pub fn worktree_prune(bare: &Path) -> Result<()> {
     let out = run_git(cmd, None, "git worktree prune")?;
     check_status(&out, "git worktree prune")?;
     Ok(())
+}
+
+/// Which of `paths` (worktree-relative, taken literally) git tracks in `wt` — one
+/// spawn for any number of them.
+pub fn tracked(wt: &Path, paths: &[&str]) -> Result<HashSet<String>> {
+    let mut cmd = git_command();
+    cmd.args(["--literal-pathspecs", "-C"])
+        .arg(wt)
+        .args(["ls-files", "-z", "--"])
+        .args(paths);
+    let out = run_git(cmd, None, "git ls-files")?;
+    check_status(&out, "git ls-files")?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .split_terminator('\0')
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Remove the worktree at `path` from `bare` (refuses if it has changes).

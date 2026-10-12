@@ -296,7 +296,7 @@ accepted, announced on the stream and settles on the fetched commit (`tests/obse
 `tests/http_contract.rs`); the pool fills to target
 and a declared worktree claims a warm slot; the same
 declaration is cold-created when the pool is empty; a lowered pool target reclaims its
-slots; the clone semaphore bounds concurrent reconciles; a reconcile without a permit frees
+slots; the clone semaphore bounds concurrent cloning reconciles; a reconcile without a permit frees
 its lane and resumes when one lands; a ready root's reconcile and sync run while other clones
 hold every permit; a restarted engine re-derives its status from disk;
 the engine set mirrors the declared roots; an unreadable manifest leaves every engine

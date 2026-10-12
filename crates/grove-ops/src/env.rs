@@ -129,7 +129,8 @@ pub fn materialize(home: &Path, slug: Option<&str>, fix: Fix) -> Result<Vec<Shar
 /// remove`, which counts shares as untracked files and refuses over them. Only a
 /// declared share path is touched, and there only a grove-shaped link or a real file
 /// byte-identical to its trunk source — both data-free, re-laid by the next
-/// materialize. An edited copy is the user's and still blocks; so is everything else.
+/// materialize. A path git tracks is git's, whatever its bytes; an edited copy is the
+/// user's and still blocks; so is everything else.
 /// Never the trunk itself, whose share paths ARE the sources. Best-effort per share.
 pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
     let trunk = roots::trunk(home, slug)?;
@@ -139,7 +140,10 @@ pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
     let root_fd = open_dir(&code_dir(home, slug))?;
     let trunk_fd = open_dir_nofollow(&root_fd, OsStr::new(&trunk.name))?;
     let wt_fd = open_dir_nofollow(&root_fd, OsStr::new(name))?;
-    for share in manifest::list_shares(&manifest_path(home), slug)? {
+    let shares = manifest::list_shares(&manifest_path(home), slug)?;
+    let paths: Vec<&str> = shares.iter().map(|s| s.path.as_str()).collect();
+    let tracked = crate::git::tracked(&code_dir(home, slug).join(name), &paths)?;
+    for share in shares.iter().filter(|s| !tracked.contains(&s.path)) {
         let rel = Path::new(&share.path);
         let _ = (|| -> Result<()> {
             let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, false)? else {

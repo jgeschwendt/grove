@@ -1,6 +1,6 @@
 //! The three guards every request passes: host, readiness, then mutation.
 //!
-//! All are compensating controls for an unauthenticated API, and both retire only
+//! All are compensating controls for an unauthenticated API, and all retire only
 //! when served-mode auth lands — together with the loopback bind gate they are the
 //! whole of carried law 10.
 
@@ -47,7 +47,10 @@ pub async fn host(State(bind): State<SocketAddr>, request: Request, next: Next) 
         .get(axum::http::header::HOST)
         .and_then(|host| authority_host(host.to_str().ok()?))
         .is_some_and(|host| {
-            LOOPBACK_ORIGINS.contains(&host) || host.parse::<IpAddr>() == Ok(bind.ip())
+            LOOPBACK_ORIGINS
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(host))
+                || host.parse::<IpAddr>() == Ok(bind.ip())
         });
     if allowed {
         return next.run(request).await;
@@ -190,7 +193,7 @@ mod tests {
             ),
             ("/api/roots", Some("127.0.0.2:7777"), StatusCode::FORBIDDEN),
             ("/api/roots", None, StatusCode::FORBIDDEN),
-            ("/api/roots", Some("localhost"), StatusCode::OK),
+            ("/api/roots", Some("LocalHost"), StatusCode::OK),
             ("/api/roots", Some("127.0.0.1:7777"), StatusCode::OK),
             ("/api/roots", Some("[::1]:7777"), StatusCode::OK),
             ("/api/roots", Some("127.9.9.9:7777"), StatusCode::OK),

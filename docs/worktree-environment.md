@@ -93,7 +93,9 @@ else is left alone. GC is top-level only; nested-share GC is not implemented.
 `worktrees::remove` never forces `git worktree remove`, which refuses over untracked files —
 and a share the repo does not ignore is one. `env::unlay` first takes back, at each declared
 share path, a grove-shaped link or a real file byte-identical to its trunk source: both are
-data-free. An edited copy is the worktree's own and still blocks, as does any other
+data-free. A path git tracks in that worktree (one `git ls-files` for all share paths) is
+git's, never taken — in a clean worktree it always equals the trunk's, and unlinking it
+would read as a deletion that blocks the remove. An edited copy is the worktree's own and still blocks, as does any other
 untracked file; on that refusal the shares are materialized again. The trunk is never
 unlaid — its share paths are the sources.
 

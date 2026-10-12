@@ -91,8 +91,12 @@ moves. A healthy (or not-running) verdict clears it; a rejection leaves it stand
 the rollback it owes overwrites it with its own, so no instant has `current` on a rejected
 version with no marker saying so. A rejection with nowhere to roll back keeps the forward
 marker, and the next `grove up` re-gates that version instead of reporting "already on" it.
-A marker still naming `current` at the start of the next `grove up` is therefore proof that
-the last verdict on it was never a healthy one.
+Every gate follows the one rule — `up`'s, the auto-rollback's recovery bounce, `grove up
+--rollback`'s, and the re-gate below — so a re-gate that rejects again leaves the marker
+for the next `grove up` too. A marker still naming `current` at the start of the next `grove up` is therefore proof that
+the last verdict on it was never a healthy one. The cost: while it keeps failing, every
+`grove up` errors at that re-gate, a newer release included; `grove off` then `grove up`
+gets a not-running verdict, which clears it and lets the update proceed.
 
 Gating *before* the flip is not an option: in served mode the bounce hands off to a
 supervisor that restarts whatever `current` points at, so a pre-flip gate cannot be
@@ -100,14 +104,13 @@ expressed at all.
 
 The direction is not decoration. **Both** movers of `current` mark a flip pending — a
 rollback owes a gate exactly as a forward flip does — and a rollback's marker names the
-version that was just *proven*. `Updater::recover_unproven_flip` distinguishes three crash
-windows:
+version that was just *proven*. `Updater::recover_unproven_flip` distinguishes three states:
 
 | marker | what happened | recovery |
 |---|---|---|
 | names something other than `current` | the process died before the rename; nothing moved | drop the marker, carry on |
-| names `current`, direction `forward` | the flip landed, the gate never answered — `current` is unproven | roll back to the proven version (or, on a first install with nowhere to fall back to, keep `current` and give it the gate it was owed) |
-| names `current`, direction `rollback` | `current` is already the proven version | do **not** flip; re-run the owed gate |
+| names `current`, direction `forward` | the flip landed and no gate vouched for it (a crash, or a rejection with nowhere to roll back) — `current` is unproven | roll back to the proven version (or, on a first install with nowhere to fall back to, keep `current` and give it the gate it was owed) |
+| names `current`, direction `rollback` | `current` is already the proven version, but no gate has vouched for it since the rollback | do **not** flip; re-run the owed gate |
 
 Reading a rollback marker as a forward flip would undo the rollback, land back on the
 release the gate rejected, then report "already on `<v>`" and exit 0 with no bounce at all.

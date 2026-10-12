@@ -43,7 +43,7 @@ edges:
 
 - ※ boot-degrade-sticky → src/boot.rs:68
 - ※ loopback-bind-gate → src/config.rs:200
-- ※ mutation-guard → src/guard.rs:93
+- ※ mutation-guard → src/guard.rs:96
 - ※ per-root-lane → src/lane.rs:172
 - ※ push-only → src/engine/mod.rs:355
 - ※ readiness-whitelist → src/guard.rs:23
