@@ -286,7 +286,13 @@ the network fetch: `gix` materializes the bare with its `origin` before a byte o
 transfer lands, and adoption must not read that as a discovery — otherwise an operator's
 undeclare is silently undone and the root re-cloned on the next manifest event. It sits
 beside the bare rather than in the code dir, which holds checkouts and nothing else; a
-crashed clone leaves it behind on purpose, so the leftover is visibly grove's.
+crashed clone leaves it behind on purpose, so the leftover is visibly grove's. The clone
+holds an exclusive `flock` on the marker for its whole length, and a lock dies with its
+process — that is what tells a live clone from a crashed one. A second realizer (another
+offline CLI, a daemon booted mid-clone) that finds the lock held touches nothing: the
+outcome is `failed` with "a clone of this root is in flight". A free lock on a leftover
+marker is a crashed clone's, and the recovery above proceeds under it, removing the
+marker once the root is whole.
 
 Worktree reconcile and share materialization are best-effort inside `reconcile_one` — a
 share hiccup must not fail the root — but a worktree the reconcile *cannot* recreate is
@@ -306,7 +312,8 @@ already declared. It:
   operator's eyes only — a U+FFFD-laced slug would not round-trip to the real directory,
   so it is never minted;
 - skips a repo with no `origin` (no URL to record);
-- skips a clone still in flight, which the `cloning` marker names;
+- skips a clone in flight or crashed short of a whole root, which the `cloning` marker
+  names, lock held or not;
 - **never overwrites a declared URL**;
 - is best-effort per repo — one failure does not abort the rest;
 - canonicalizes the manifest at the end, so a pure hand-edit reorder is normalized even

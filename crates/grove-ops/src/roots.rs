@@ -450,7 +450,25 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
     //    path a human also writes into is how carried law 5 fails on the one code path
     //    that names it. The root dir goes with it — it is grove's alone, and the bare
     //    inside it is the thing being replaced.
+    //
+    // All three wait on a clone in flight: a bare with no trunk is also what another
+    // realizer's clone looks like mid-transfer, and that one holds the `cloning`
+    // marker's lock. Held → nothing here is ours to touch; free → the marker is a
+    // crashed clone's, and the claim taken on it keeps a third realizer out while the
+    // root is repaired.
     if bare.exists() {
+        let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
+        let _claim = match marker.exists().then(|| claim_marker(&marker)) {
+            Some(Ok(None) | Err(_)) => {
+                return Applied {
+                    slug: root.slug.clone(),
+                    status: ReconcileStatus::Failed,
+                    default_branch: None,
+                    error: Some(IN_FLIGHT.into()),
+                };
+            }
+            claim => claim,
+        };
         if has_live_worktrees(home, &root.slug, &bare) {
             return Applied {
                 slug: root.slug.clone(),
@@ -465,6 +483,7 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
         }
         match recover_trunk(home, &root.slug, &bare) {
             Ok(branch) => {
+                let _ = std::fs::remove_file(&marker);
                 return Applied {
                     slug: root.slug.clone(),
                     status: ReconcileStatus::Cloned,
@@ -562,13 +581,19 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
 
     // A marker for the whole of the network clone, so `adopt` does not declare the
     // half-materialized bare a clone in flight has already written (gix creates the
-    // bare with its `origin` before a byte of the transfer lands). Removed on both
+    // bare with its `origin` before a byte of the transfer lands). Its flock, held
+    // until this returns, is what tells that clone from a crashed one: a lock dies
+    // with its process, so a second realizer — another CLI, a daemon booted mid-clone
+    // — finds it held only while the clone is live, and backs off. Removed on both
     // exits: a *crashed* clone leaves it behind on purpose — the leftover is then
     // visibly grove's, and undeclaring the root keeps it undeclared instead of adopt
-    // resurrecting it on the next manifest event. It lives beside the bare rather than
-    // in the code dir, which holds checkouts and nothing else.
+    // resurrecting it on the next manifest event, until `realize` makes the root
+    // whole. It lives beside the bare rather than in the code dir, which holds
+    // checkouts and nothing else.
     let marker = dir.join(CLONING_MARKER);
-    let _ = std::fs::write(&marker, "");
+    let Some(_claim) = claim_marker(&marker)? else {
+        bail!(IN_FLIGHT);
+    };
     let cloned = git::clone_bare(&root.url, bare).and_then(|cloned_onto| {
         // Desired state wins the moment the bare exists. The manifest's `trunk` is
         // what this root integrates on; `HEAD` is where `git::default_branch` — the
@@ -586,6 +611,19 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
 
 /// Written under `roots/<slug>` for the length of a clone; see [`clone_and_trunk`].
 const CLONING_MARKER: &str = "cloning";
+
+/// The refusal a second realizer reports while the marker's lock is held.
+const IN_FLIGHT: &str = "a clone of this root is in flight in another realizer; nothing touched";
+
+/// Create `marker` and take its exclusive flock without blocking: `None` while another
+/// realizer holds it (any lock error reads as held — backing off is the safe answer).
+/// The lock lives as long as the returned handle, and std opens it `O_CLOEXEC`, so no
+/// spawned git outlives it holding the lock.
+fn claim_marker(marker: &Path) -> Result<Option<std::fs::File>> {
+    let file =
+        std::fs::File::create(marker).with_context(|| format!("create {}", marker.display()))?;
+    Ok(file.try_lock().ok().map(|()| file))
+}
 
 /// Re-add the missing trunk checkout from the bare that is already on disk — the
 /// whole of the repair when a checkout, not a repository, is what went missing.
@@ -830,7 +868,8 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
             // `origin` and nothing else. Adopting it re-declares a root the operator
             // may have just undeclared, and the engine then re-clones what they
             // asked to be rid of — so the marker `clone_and_trunk` writes is a
-            // "not mine to discover" sign, not a lock.
+            // "not mine to discover" sign whether or not its lock is held: a crashed
+            // clone's leftover stays undeclared until `realize` makes it whole.
             if root_dir(home, &slug).join(CLONING_MARKER).exists() {
                 continue;
             }
@@ -1622,9 +1661,10 @@ mod tests {
         fixture_repo(&src);
         add(&home, "o/r", src.to_str().unwrap()).unwrap();
 
-        // Simulate an interrupted clone: bare present, trunk checkout gone.
+        // Simulate a clone that crashed between the bare and the trunk: bare present,
+        // trunk checkout gone, its `cloning` marker left behind unlocked.
         std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
-        assert!(bare_dir(&home, "o/r").exists());
+        std::fs::write(root_dir(&home, "o/r").join(CLONING_MARKER), "").unwrap();
 
         assert_eq!(
             reconcile_one(&home, "o/r").unwrap().status,
@@ -1632,6 +1672,50 @@ mod tests {
             "re-clones instead of stuck present"
         );
         assert!(trunk_dir(&home, "o/r").join("README.md").exists());
+        assert!(
+            !root_dir(&home, "o/r").join(CLONING_MARKER).exists(),
+            "a whole root sheds the stale marker, or adopt would skip it forever"
+        );
+    }
+
+    /// One realizer, ever: a clone another process is running holds the marker's
+    /// flock, and a second realizer — before the bare lands, or after gix has laid down
+    /// a half-written one — touches nothing. Once the holder is gone the marker is
+    /// stale and the recovery proceeds.
+    #[test]
+    fn reconcile_one_leaves_a_clone_in_flight_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        manifest::add_root(&manifest_path(&home), "o/r", src.to_str().unwrap()).unwrap();
+        std::fs::create_dir_all(root_dir(&home, "o/r")).unwrap();
+        let held = std::fs::File::create(root_dir(&home, "o/r").join(CLONING_MARKER)).unwrap();
+        held.lock().unwrap();
+        let bare = bare_dir(&home, "o/r");
+        let in_flight = |home: &Path| {
+            let out = reconcile_one(home, "o/r").unwrap();
+            assert_eq!(out.status, ReconcileStatus::Failed);
+            assert!(out.error.unwrap().contains("in flight"));
+        };
+
+        in_flight(&home);
+        assert!(!bare.exists(), "no second clone started");
+        crate::testfix::git(&home, &["init", "--bare", "-q", bare.to_str().unwrap()]);
+        crate::testfix::git(&bare, &["remote", "add", "origin", src.to_str().unwrap()]);
+        std::fs::write(bare.join("IN_FLIGHT"), "the holder's pack").unwrap();
+        in_flight(&home);
+        assert!(
+            bare.join("IN_FLIGHT").exists(),
+            "the half-written bare is not wiped"
+        );
+
+        drop(held);
+        assert_eq!(
+            reconcile_one(&home, "o/r").unwrap().status,
+            ReconcileStatus::Cloned
+        );
+        assert!(!root_dir(&home, "o/r").join(CLONING_MARKER).exists());
     }
 
     #[test]
