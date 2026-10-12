@@ -589,7 +589,7 @@ fn launcher(install: &Path) -> PathBuf {
 /// Note the asymmetry with the daemon's own [`grove_daemon::parse_bind`], which
 /// refuses a hostname outright: the daemon decides what to *expose* and must not
 /// let a resolver choose that; the CLI only has to reach whatever is listening.
-fn resolve_bind(raw: Option<String>) -> Result<SocketAddr, CliError> {
+pub(crate) fn resolve_bind(raw: Option<String>) -> Result<SocketAddr, CliError> {
     let Some(raw) = raw else {
         return Ok(grove_daemon::DEFAULT_BIND);
     };

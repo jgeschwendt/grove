@@ -66,10 +66,17 @@ impl ApiClient {
     /// The raw bind goes into the URL unresolved: unlike the daemon — which decides
     /// what to *expose* and so refuses a hostname outright — the client only has to
     /// reach whatever is listening, and `GROVE_BIND=localhost:7777` must keep working.
-    #[must_use]
-    pub fn from_env() -> Self {
-        let bind = std::env::var("GROVE_BIND").unwrap_or_else(|_| default_bind());
-        Self::new(format!("http://{bind}"), timeouts::PROBE).for_home(grove_ops::home())
+    pub fn from_env() -> Result<Self, CliError> {
+        Self::from_bind(std::env::var("GROVE_BIND").ok())
+    }
+
+    /// [`Self::from_env`] over an explicit bind, validated exactly as `grove on`
+    /// validates it. A malformed one fails reqwest's URL build, which is not a connect
+    /// error, so unchecked it read as `Busy` — a daemon that does not exist, waited on.
+    fn from_bind(bind: Option<String>) -> Result<Self, CliError> {
+        crate::server::resolve_bind(bind.clone())?;
+        let bind = bind.unwrap_or_else(default_bind);
+        Ok(Self::new(format!("http://{bind}"), timeouts::PROBE).for_home(grove_ops::home()))
     }
 
     /// A client pointed at `addr` with an explicit probe budget — the constructor
@@ -502,6 +509,25 @@ mod tests {
             }
         });
         addr
+    }
+
+    /// A malformed `GROVE_BIND` is the error `grove on` gives, not `Busy` — while the
+    /// default and a hostname still go into the URL as written.
+    #[test]
+    fn from_bind_refuses_a_malformed_bind() {
+        let err = ApiClient::from_bind(Some("127.0.0.1:77777".into()))
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("not a valid socket address"),
+            "{err}"
+        );
+        assert_eq!(
+            ApiClient::from_bind(None).unwrap().base,
+            "http://127.0.0.1:7777"
+        );
+        let host = ApiClient::from_bind(Some("localhost:7777".into())).unwrap();
+        assert_eq!(host.base, "http://localhost:7777");
     }
 
     #[test]

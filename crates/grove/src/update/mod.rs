@@ -216,11 +216,12 @@ impl Updater {
         // from inside the bounce would misread it as "the new version failed to
         // start" and trigger a rollback of a perfectly good release.
         let server = ServerControl::from_env()?;
+        let api = ApiClient::from_env()?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let bounce = move |expected: &str, ensure_running: bool| {
             gated_bounce(
                 server.running_pid().is_some(),
-                ApiClient::from_env().reachable(),
+                api.reachable(),
                 ensure_running,
                 || {
                     if supervised {
@@ -230,7 +231,7 @@ impl Updater {
                         server.reboot() // off+on — starts even if it wasn't running
                     }
                 },
-                || poll_ready(&*clock, gate, expected),
+                || poll_ready(&api, &*clock, gate, expected),
             )
         };
 
@@ -480,10 +481,8 @@ fn health_gate(raw: Option<String>) -> Duration {
 /// `None`), and a ready 200 reporting a *different* version (a stale process still
 /// bound to the port, or a separately-started `grove on`). Without the version
 /// check, either would green-light a failed flip and mask auto-rollback.
-fn poll_ready(clock: &dyn Clock, timeout: Duration, expected: &str) -> bool {
-    poll_ready_with(clock, timeout, expected, || {
-        ApiClient::from_env().ready_version()
-    })
+fn poll_ready(api: &ApiClient, clock: &dyn Clock, timeout: Duration, expected: &str) -> bool {
+    poll_ready_with(clock, timeout, expected, || api.ready_version())
 }
 
 /// `poll_ready` with the version probe injected, so the version-match gate is

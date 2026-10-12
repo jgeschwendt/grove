@@ -72,6 +72,25 @@ fn worktree_dir(home: &Path, slug: &str, name: &str) -> PathBuf {
     code_dir(home, slug).join(name)
 }
 
+/// Declare a worktree without realizing it — every user-facing declaration's one
+/// door. The manifest refuses a name another branch already holds; this refuses the
+/// trunk's own directory, which the manifest cannot see (the trunk may be the bare's
+/// `HEAD`) and which `roots::converge_trunk` would otherwise refuse on every pass.
+pub fn declare(
+    home: &Path,
+    slug: &str,
+    name: &str,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<(), Error> {
+    if crate::roots::trunk(home, slug).is_ok_and(|t| t.name == name) {
+        return Err(Error::Conflict(format!(
+            "`{name}` is the trunk checkout of {slug}; a worktree cannot take its directory"
+        )));
+    }
+    manifest::add_worktree(&manifest_path(home), slug, name, branch, base).map_err(Error::io)
+}
+
 /// Declare a worktree, then realize it — **claiming a warm pool slot when one is
 /// there**, and cold-checking-out when none is. Declaration persists, so a failed
 /// realize is retried by `reconcile` — same contract as roots.
@@ -96,10 +115,12 @@ pub fn create(
     // whose trunk cannot be resolved (no bare yet) keeps git's default.
     let trunk = crate::roots::trunk(home, slug).ok().map(|t| t.branch);
     let base = base.or(trunk.as_deref());
+    // Declared before the promote, so a refused name never has a slot attached to its
+    // branch and moved into place first.
+    declare(home, slug, name, branch, base)?;
     if crate::pool::promote(home, slug, name, branch, base)? == crate::pool::Promotion::Promoted {
         return Ok(());
     }
-    manifest::add_worktree(&manifest_path(home), slug, name, branch, base).map_err(Error::io)?;
     git::worktree_add(
         &bare_dir(home, slug),
         &worktree_dir(home, slug, name),
@@ -577,6 +598,36 @@ mod tests {
                 .and_then(|w| w.base.as_deref()),
             Some("canary"),
             "and the base it actually used is the one declared: {declared:?}"
+        );
+    }
+
+    /// A name is one directory: the trunk's is never a worktree's, and a declared
+    /// one is not handed to a second branch that folds onto it — refused before the
+    /// pool attaches that branch to a slot and moves it into place.
+    #[test]
+    fn create_refuses_the_trunks_directory_and_a_name_another_branch_holds() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        let err = create(&home, "o/r", "main", "x", None).unwrap_err();
+        assert_eq!(err.code(), "conflict", "{err}");
+
+        let mpath = manifest_path(&home);
+        manifest::add_worktree(&mpath, "o/r", "feature-x", "feature/x", None).unwrap();
+        crate::pool::fill(&home, "o/r").unwrap();
+        let err = create(&home, "o/r", "feature-x", "feature-x", None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("already declared on branch `feature/x`")
+        );
+        assert_eq!(
+            pool_count(&home, "o/r").unwrap(),
+            1,
+            "the slot was left alone"
+        );
+        let declared = manifest::list_worktrees(&mpath, "o/r").unwrap();
+        assert_eq!(
+            (declared.len(), declared[0].branch.as_str()),
+            (1, "feature/x")
         );
     }
 

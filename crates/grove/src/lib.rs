@@ -170,28 +170,30 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Some(Command::Apply) => commands::apply(&home()),
         Some(Command::Clone { action }) => match action {
-            CloneAction::Add { repo } => commands::clone_add(&home(), &api(), repo),
+            CloneAction::Add { repo } => commands::clone_add(&home(), &api()?, repo),
             CloneAction::Remove { repo, force } => {
-                commands::clone_remove(&home(), &api(), repo, *force)
+                commands::clone_remove(&home(), &api()?, repo, *force)
             }
         },
         Some(Command::Doctor { slug, dry_run, fix }) => {
-            commands::doctor(&home(), &api(), slug.as_deref(), *dry_run, *fix)
+            commands::doctor(&home(), &api()?, slug.as_deref(), *dry_run, *fix)
         }
         Some(Command::Off) => ServerControl::from_env()?.off(),
-        Some(Command::Ok) => api().ok().map(|line| println!("{line}")),
+        Some(Command::Ok) => api()?.ok().map(|line| println!("{line}")),
         Some(Command::On) => ServerControl::from_env()?.on(),
         Some(Command::Reboot) => ServerControl::from_env()?.reboot(),
         Some(Command::Serve) => serve(),
-        Some(Command::Sync { slug }) => commands::sync(&home(), &api(), slug),
+        Some(Command::Sync { slug }) => commands::sync(&home(), &api()?, slug),
         Some(Command::Tree { action }) => match action {
             TreeAction::Add { repo, branch, base } => {
-                commands::tree_add(&home(), &api(), repo, branch, base.as_deref())
+                commands::tree_add(&home(), &api()?, repo, branch, base.as_deref())
             }
             TreeAction::List { repo, verbose } => {
-                commands::tree_list(&home(), &api(), repo, *verbose)
+                commands::tree_list(&home(), &api()?, repo, *verbose)
             }
-            TreeAction::Remove { repo, name } => commands::tree_remove(&home(), &api(), repo, name),
+            TreeAction::Remove { repo, name } => {
+                commands::tree_remove(&home(), &api()?, repo, name)
+            }
         },
         // `--rollback` ignores `--version`/`--channel` by construction: it flips to
         // whatever `previous` names, which is the one version a rollback can mean.

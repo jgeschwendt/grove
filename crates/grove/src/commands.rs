@@ -122,16 +122,7 @@ pub fn tree_add(
     let from = base
         .as_deref()
         .map_or_else(String::new, |base| format!(" based on {base}"));
-    let declare = || {
-        grove_ops::manifest::add_worktree(
-            &grove_ops::roots::manifest_path(home),
-            slug,
-            &name,
-            branch,
-            base.as_deref(),
-        )
-        .map_err(io)
-    };
+    let declare = || grove_ops::worktrees::declare(home, slug, &name, branch, base.as_deref());
 
     match api.reachable() {
         Reachability::Up => {
@@ -748,6 +739,12 @@ mod tests {
         assert!(
             !home.path().join("code/o/r/feature-x").exists(),
             "no in-process create while the server is busy"
+        );
+        // `feature-x` folds onto the same directory: refused, not overwritten.
+        let err = tree_add(home.path(), &busy(), SLUG, "feature-x", None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("already declared on branch `feature/x`")
         );
     }
 

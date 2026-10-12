@@ -427,6 +427,17 @@ pub fn add_worktree(
             .or_insert(Item::Table(Table::new()))
             .as_table_mut()
             .context("worktree is not a table")?;
+        // Idempotent for the same branch only: names are folded (`feature/x` and
+        // `feature-x` both check out at `feature-x`), so a second branch landing on a
+        // declared name is a collision, and overwriting would drop the first.
+        if let Some(held) = entry.get("branch").and_then(Item::as_str)
+            && held != branch
+        {
+            bail!(
+                "worktree `{name}` of {slug} is already declared on branch `{held}`; \
+                 remove it before declaring `{branch}` there"
+            );
+        }
         entry["branch"] = value(branch);
         if let Some(base) = base {
             entry["base"] = value(base);
@@ -1036,6 +1047,19 @@ mod tests {
             list_worktrees(&path, "o/r").unwrap()[0].base.as_deref(),
             Some("dev")
         );
+    }
+
+    /// `feature/x` and `feature-x` fold to one directory: the second declaration is
+    /// refused, not written over the first's branch.
+    #[test]
+    fn add_worktree_refuses_a_name_another_branch_holds() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        add_root(&path, "o/r", "u").unwrap();
+        add_worktree(&path, "o/r", "feature-x", "feature/x", Some("main")).unwrap();
+        let err = add_worktree(&path, "o/r", "feature-x", "feature-x", None).unwrap_err();
+        assert!(format!("{err:#}").contains("already declared on branch `feature/x`"));
+        assert_eq!(list_worktrees(&path, "o/r").unwrap()[0].branch, "feature/x");
     }
 
     #[test]
