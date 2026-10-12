@@ -94,9 +94,10 @@ marker, and the next `grove up` re-gates that version instead of reporting "alre
 Every gate follows the one rule — `up`'s, the auto-rollback's recovery bounce, `grove up
 --rollback`'s, and the re-gate below — so a re-gate that rejects again leaves the marker
 for the next `grove up` too. A marker still naming `current` at the start of the next `grove up` is therefore proof that
-the last verdict on it was never a healthy one. The cost: while it keeps failing, every
-`grove up` errors at that re-gate, a newer release included; `grove off` then `grove up`
-gets a not-running verdict, which clears it and lets the update proceed.
+the last verdict on it was never a healthy one. A re-gate that rejects again blocks only a
+re-request of that same version, which exits 6 with the marker kept; any other target
+(`--version <fix>`, or a channel that has moved on) goes forward past it to its own flip and
+gate, and on rejection the usual rollback.
 
 Gating *before* the flip is not an option: in served mode the bounce hands off to a
 supervisor that restarts whatever `current` points at, so a pre-flip gate cannot be
@@ -108,14 +109,14 @@ version that was just *proven*. `Updater::recover_unproven_flip` distinguishes t
 
 | marker | what happened | recovery |
 |---|---|---|
-| names something other than `current` | the process died before the rename; nothing moved | drop the marker, carry on |
+| names something other than `current` | the process died before the rename; nothing moved, but `current` may itself be unvouched (a forward flip off a rejected version) | do **not** flip; re-run the gate on `current` |
 | names `current`, direction `forward` | the flip landed and no gate vouched for it (a crash, or a rejection with nowhere to roll back) — `current` is unproven | roll back to the proven version (or, on a first install with nowhere to fall back to, keep `current` and give it the gate it was owed) |
 | names `current`, direction `rollback` | `current` is already the proven version, but no gate has vouched for it since the rollback | do **not** flip; re-run the owed gate |
 
 Reading a rollback marker as a forward flip would undo the rollback, land back on the
 release the gate rejected, then report "already on `<v>`" and exit 0 with no bounce at all.
 
-Both landing arms re-run the bounce, because whatever is *running* may still be the version
+Every arm re-runs the bounce, because whatever is *running* may still be the version
 the interrupted update was leaving behind. They pass `ensure_running = false`: a marker on
 disk says nothing about whether this box runs a daemon at all, and force-starting one an
 operator deliberately stopped is not recovery.

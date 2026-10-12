@@ -250,11 +250,21 @@ impl Updater {
         // Before anything else, and inside the lock: an update that died between its
         // flip and its gate left `current` on an unproven version, and going forward
         // from there would stack a second unproven flip on top of it.
-        let recovered = self.recover_unproven_flip()?;
-
-        let version = match version {
-            Some(v) => v.to_string(),
-            None => self.source.channel_version(&self.channel)?,
+        let recovered = self.recover_unproven_flip();
+        let version = version.map_or_else(
+            || self.source.channel_version(&self.channel),
+            |v| Ok(v.to_string()),
+        );
+        // A re-gate that rejects again blocks only a re-request of the version it
+        // rejected: any other target gets its own flip and gate (and, on rejection, the
+        // usual rollback), while `current` keeps its marker until that flip overwrites it.
+        let (recovered, version) = match (recovered, version) {
+            (Ok(r), v) => (r, v?),
+            (Err(e), Ok(v)) if self.layout.current_version().as_deref() != Some(v.as_str()) => {
+                eprintln!("grove: {e}; going on to {v}");
+                (Recovery::Undid, v)
+            }
+            (Err(e), _) => return Err(e),
         };
         if !valid_version(&version) {
             return Err(CliError::Update(format!(
@@ -321,7 +331,8 @@ impl Updater {
     /// are distinguishable:
     ///
     /// - it names something other than `current` → the process died before the
-    ///   rename. Nothing moved, nothing is unproven; drop the marker and carry on.
+    ///   rename. Nothing moved, but `current` may itself be unvouched — `up` flips
+    ///   forward off a version whose re-gate just rejected it — so re-gate it in place.
     /// - it names `current` and moved **forward** → the flip landed and no gate has
     ///   vouched for it. `current` is unproven: roll back to the version that *was*
     ///   proven, or re-gate it in place when there is none.
@@ -333,7 +344,7 @@ impl Updater {
     ///   spans a full server restart plus up to [`timeouts::HEALTH_GATE`] of polling.
     ///
     /// Whichever way it moved, whatever is *running* may still be the version the
-    /// interrupted update was leaving behind, so both landing arms re-run the bounce
+    /// interrupted update was leaving behind, so every arm re-runs the bounce
     /// and surface an unhealthy result rather than letting `up` continue over a dead
     /// server — and an unhealthy one leaves the marker for the next `up` to re-gate
     /// again. `ensure_running = false`, unlike [`Updater::roll_back`]'s own recovery
@@ -341,16 +352,22 @@ impl Updater {
     /// marker on disk says nothing about whether this box runs a daemon at all — and
     /// force-starting one an operator deliberately stopped is not recovery.
     fn recover_unproven_flip(&self) -> Result<Recovery, CliError> {
-        let Some(pending) = self.layout.pending_flip() else {
-            return Ok(Recovery::None);
-        };
-        if self.layout.current_version().as_deref() != Some(pending.version.as_str()) {
+        let (Some(pending), Some(current)) =
+            (self.layout.pending_flip(), self.layout.current_version())
+        else {
             self.layout.clear_pending();
             return Ok(Recovery::None);
-        }
+        };
 
-        let (proven, outcome) = match pending.kind {
-            Flip::Forward if self.layout.previous_version().is_some() => {
+        let landed_forward = pending.kind == Flip::Forward && pending.version == current;
+        let (proven, outcome) = match self.layout.previous_version() {
+            _ if !landed_forward => {
+                println!(
+                    "grove: {current} has no healthy verdict since an interrupted update; re-gating it"
+                );
+                (current, Recovery::Regated)
+            }
+            Some(_) => {
                 let restored = self.layout.rollback()?;
                 // The swap left the undone, unproven version as `previous`. `up` goes on
                 // to re-gate whatever it targets, and if that target is `restored`
@@ -365,19 +382,12 @@ impl Updater {
             // Nothing to fall back to (a first install). `current` stays where it is —
             // it is the only version installed — but it is still unproven, so it gets
             // the gate it was owed and `up` must not shortcut past it.
-            Flip::Forward => {
+            None => {
                 println!(
                     "grove: {} has no healthy verdict and nothing to fall back to; re-gating it",
                     pending.version
                 );
-                (pending.version.clone(), Recovery::Undid)
-            }
-            Flip::Rollback => {
-                println!(
-                    "grove: the rollback to {} has no healthy verdict; re-gating it",
-                    pending.version
-                );
-                (pending.version.clone(), Recovery::Regated)
+                (current, Recovery::Undid)
             }
         };
 
@@ -1176,9 +1186,9 @@ mod tests {
 
     /// The same window on the manual path (`grove up --rollback` clears its marker
     /// only after its own healthy bounce), and the half of the recovery that must not
-    /// be silent: the re-run gate says the restored version is *not* healthy, so `up`
-    /// exits 6 rather than continuing over a box that is down — and leaves the marker
-    /// for the next `up` to re-gate again.
+    /// be silent: the re-run gate says the restored version is *not* healthy, so an `up`
+    /// re-requesting it exits 6 rather than reporting "already on" a box that is down —
+    /// and leaves the marker for the next `up` to re-gate again.
     #[test]
     fn a_crash_in_a_manual_rollback_surfaces_the_re_run_gate() {
         let home = TempDir::new().unwrap();
@@ -1192,7 +1202,7 @@ mod tests {
         assert_eq!(layout.rollback().unwrap(), "0.3.1");
 
         let (next, probe) = updater(&home, &src, Bounce::Unhealthy);
-        let err = next.up(None).unwrap_err();
+        let err = next.up(Some("0.3.1")).unwrap_err();
 
         assert_eq!(err.exit_code(), 6, "a dead box is not a successful update");
         assert!(err.to_string().contains("still unproven"), "{err}");
@@ -1281,6 +1291,37 @@ mod tests {
                 Layout::new(home.path()).pending_version().as_deref(),
                 Some("0.4.0")
             );
+        }
+    }
+
+    /// The stuck version blocks only a re-request of itself. Both reviewer shapes —
+    /// a first install that boots unhealthy, and a rejected update whose rollback is
+    /// rejected too — must let `grove up --version <fix>` reach the fix, not exit 6
+    /// re-gating the version it is trying to leave.
+    #[test]
+    fn a_stuck_version_does_not_block_a_different_target() {
+        for history in [&[][..], &["0.3.1"]] {
+            let home = TempDir::new().unwrap();
+            let src = TempDir::new().unwrap();
+            let only = |good: &'static str| {
+                let source = fixture_source(src.path(), "t", &["0.3.1", "0.4.0", "0.5.0"]);
+                Updater::new(Layout::new(home.path()), "t", source, move |v: &str, _| {
+                    Ok(if v == good {
+                        Bounce::Healthy
+                    } else {
+                        Bounce::Unhealthy
+                    })
+                })
+            };
+            for v in history {
+                only(v).up(Some(v)).unwrap();
+            }
+            let sick = only("0.5.0");
+            assert!(sick.up(Some("0.4.0")).is_err(), "{history:?}");
+            sick.up(Some("0.5.0")).unwrap();
+            let layout = Layout::new(home.path());
+            assert_eq!(layout.current_version().as_deref(), Some("0.5.0"));
+            assert!(layout.pending_version().is_none(), "{history:?}");
         }
     }
 }
