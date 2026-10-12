@@ -40,15 +40,13 @@ use std::path::{Path, PathBuf};
 /// offline realizer writes — and nothing would fail while the copies agreed.
 #[must_use]
 pub fn home() -> PathBuf {
-    std::env::var_os("GROVE_HOME")
-        .filter(|v| !v.is_empty())
-        .map_or_else(
-            || {
-                let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
-                PathBuf::from(home).join(".grove")
-            },
-            PathBuf::from,
-        )
+    std::env::var_os("GROVE_HOME").map_or_else(
+        || {
+            let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
+            PathBuf::from(home).join(".grove")
+        },
+        PathBuf::from,
+    )
 }
 
 /// The install root every grove process launches from and `grove up` flips:
@@ -82,9 +80,6 @@ pub fn install_home() -> PathBuf {
 // and the one `std::env::var_os` can satisfy: as a generic fn item it implements
 // `Fn` at one instantiated lifetime, never for all of them.
 fn install_home_from(var: impl Fn(&'static str) -> Option<OsString>) -> PathBuf {
-    // Set-but-empty is unset, as the XDG spec reads XDG_DATA_HOME and the shell's
-    // `${VAR:-…}` reads every rung: an empty value must never resolve to the cwd.
-    let var = |key| var(key).filter(|v| !v.is_empty());
     if let Some(install) = var("GROVE_INSTALL") {
         return PathBuf::from(install);
     }
@@ -143,16 +138,6 @@ mod install_home_tests {
 
     /// Rung 3 spells out the XDG default rather than deriving it, so a box with no
     /// `XDG_DATA_HOME` still lands where an XDG-respecting one does.
-    #[test]
-    fn install_home_skips_empty_rungs() {
-        let resolved = install_home_from(env(&[
-            ("GROVE_INSTALL", ""),
-            ("XDG_DATA_HOME", ""),
-            ("HOME", "/home/u"),
-        ]));
-        assert_eq!(resolved, PathBuf::from("/home/u/.local/share/grove"));
-    }
-
     #[test]
     fn install_home_falls_back_to_home() {
         let resolved = install_home_from(env(&[("HOME", "/home/u")]));

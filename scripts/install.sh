@@ -45,6 +45,13 @@
 set -euo pipefail
 
 repo="jgeschwendt/grove"
+# grove reads a set-but-empty GROVE_HOME, GROVE_INSTALL or XDG_DATA_HOME as set — the
+# cwd — and `${VAR:-…}` below would read it as unset: refuse rather than act on a tree
+# `grove up` does not.
+empty() { [ "$2" != set ] || [ -n "$3" ] || { echo "grove: $1 is set but empty; unset it or name a path" >&2; exit 2; }; }
+empty GROVE_HOME "${GROVE_HOME+set}" "${GROVE_HOME:-}"
+empty GROVE_INSTALL "${GROVE_INSTALL+set}" "${GROVE_INSTALL:-}"
+empty XDG_DATA_HOME "${XDG_DATA_HOME+set}" "${XDG_DATA_HOME:-}"
 grove_home="${GROVE_HOME:-$HOME/.grove}"
 grove_install="${GROVE_INSTALL:-${XDG_DATA_HOME:-$HOME/.local/share}/grove}"
 channel="${channel:-stable}"

@@ -161,15 +161,14 @@ HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
   GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" --purge
 [ ! -e "$GH" ] || fail "--purge left the workspace $GH behind"
 
-# A set-but-empty XDG_DATA_HOME is unset, as in grove_ops::install_home and the XDG
-# spec: the root is ~/.local/share/grove, never the cwd-relative `grove` — else the
-# scripts and `grove up` manage two different trees.
+# grove reads a set-but-empty XDG_DATA_HOME as set (the cwd); the scripts refuse it
+# rather than act on a tree `grove up` does not, and touch neither candidate.
 echo "smoke: uninstall.sh (XDG_DATA_HOME set but empty)"
 mkdir -p "$WORK/cwd/grove" "$HOME_DIR/.local/share/grove"
-(cd "$WORK/cwd" && env -u GROVE_INSTALL HOME="$HOME_DIR" XDG_DATA_HOME= GROVE_HOME="$GH" \
-  GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" >/dev/null)
-[ -d "$WORK/cwd/grove" ] && [ ! -e "$HOME_DIR/.local/share/grove" ] ||
-  fail "uninstall.sh read an empty XDG_DATA_HOME as set"
+! (cd "$WORK/cwd" && env -u GROVE_INSTALL HOME="$HOME_DIR" XDG_DATA_HOME= GROVE_HOME="$GH" \
+  GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" 2>/dev/null) &&
+  [ -d "$WORK/cwd/grove" ] && [ -d "$HOME_DIR/.local/share/grove" ] ||
+  fail "uninstall.sh acted on a set-but-empty XDG_DATA_HOME"
 
 # publish-canary.sh against a stub gh and release.sh in a scratch copy: it must upload
 # every asset install.sh fetches, and hand back Cargo.toml/Cargo.lock exactly as it
