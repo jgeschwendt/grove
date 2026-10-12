@@ -60,21 +60,26 @@ pub enum ShareMode {
 
 /// A slug becomes a directory under `GROVE_HOME/code/` (the root's checkouts) and
 /// another under `GROVE_HOME/roots/` (everything grove owns for it), plus a TOML key,
-/// so it must be a safe relative path: non-empty, only `Normal` components (no `..`, no
-/// absolute/root/`.`/prefix part), no backslash or control chars. This is the
-/// chokepoint against path traversal from a crafted clone URL or a hand-edited /
-/// git-synced manifest (e.g. `../../etc`).
+/// so it must be a safe relative path: non-empty, no backslash or control chars, and
+/// every `/`-separated segment a real name (no `..`, `.`, or empty segment — so no
+/// absolute, doubled-`/` or trailing-`/` spelling either). This is the chokepoint
+/// against path traversal from a crafted clone URL or a hand-edited / git-synced
+/// manifest (e.g. `../../etc`). Canonical, not merely safe: `o/r/` names `o/r`'s
+/// directories but is a different manifest key and lane key, so a slug that passes is
+/// the only spelling of its root.
 pub fn validate_slug(slug: &str) -> Result<()> {
-    let safe = !slug.is_empty()
-        && !slug.contains('\\')
+    let safe = !slug.contains('\\')
         && !slug.bytes().any(|b| b.is_ascii_control())
-        && Path::new(slug)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)));
+        && slug
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..");
     if safe {
         Ok(())
     } else {
-        bail!("invalid slug {slug:?}: must be a relative path with no '..' or absolute parts");
+        bail!(
+            "invalid slug {slug:?}: must be a relative path with no '..', '.', empty or \
+             absolute parts"
+        );
     }
 }
 
@@ -1188,10 +1193,11 @@ mod tests {
     }
 
     #[test]
-    fn add_root_rejects_traversal_slugs() {
+    fn add_root_rejects_traversal_and_non_canonical_slugs() {
         let tmp = TempDir::new().unwrap();
         let path = manifest(&tmp);
-        for bad in ["../escape", "a/../../b", "/abs", "..", "", "a\\b"] {
+        let bad = ["../escape", "a/../../b", "/abs", "..", "", "a\\b"];
+        for bad in bad.into_iter().chain(["o/r/", "o//r", "./o/r", "o/./r"]) {
             assert!(add_root(&path, bad, "u").is_err(), "should reject {bad:?}");
         }
         // a literal dotted name is fine (not traversal)

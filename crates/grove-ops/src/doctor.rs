@@ -49,6 +49,11 @@ pub fn run(
     dry_run: bool,
     fix: bool,
 ) -> Result<(Vec<env::ShareOutcome>, Vec<pool::PoolStatus>)> {
+    // A slug is operator input: everything below builds paths from it and renames
+    // under them, so it must name a declared root before any of that runs.
+    if let Some(slug) = slug {
+        roots::declared(home, slug)?;
+    }
     // Before the share pass, and only under `--fix`: a legacy root's trunk moves out
     // from under the links, so the pass that writes them has to run after the move.
     // `dry_run` wins, as everywhere else here — a diagnosis mutates nothing.
@@ -1132,6 +1137,29 @@ symlink = ["../../etc/passwd"]
             assert!(code.join("feat").join(".env").is_symlink());
             assert_migrated(&home, generation == "v2");
         }
+    }
+
+    /// A slug is operator input, so one that names no declared root is refused before
+    /// any path is built from it: a foreign checkout named by absolute path keeps its
+    /// `.git` under `--fix`, and `o/r/` — `o/r` as tab-completion spells it — GCs none
+    /// of `o/r`'s links on a lane the engine's `o/r` would not serialize against.
+    #[test]
+    fn a_slug_naming_no_declared_root_is_refused_before_any_path_is_built() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root_and_worktree(&tmp);
+        let shares = roots::manifest_path(&home);
+        manifest::add_share(&shares, testfix::SLUG, "symlink", &[".env"]).unwrap();
+        run(&home, Some(testfix::SLUG), false, false).unwrap();
+        let foreign = tmp.path().join("src");
+        for slug in [foreign.to_str().unwrap(), "o/r/", "o//r", "o/x"] {
+            assert!(run(&home, Some(slug), false, true).is_err(), "{slug}");
+        }
+        assert!(foreign.join(".git").is_dir());
+        assert!(
+            roots::code_dir(&home, testfix::SLUG)
+                .join("feat/.env")
+                .is_symlink()
+        );
     }
 
     /// A migration that died between the rename and everything after it leaves two

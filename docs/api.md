@@ -414,6 +414,12 @@ Each root's share converge, pool read and plumbing checks then run as **one** jo
 root's own** lane (foreground tier) under a 30 s budget, concurrently across roots, with
 reports concatenated in declared order.
 
+A named slug must be a declared root, checked before it keys a lane or builds a path —
+an invalid, non-canonical (`o/r/`) or undeclared one is `doctor_failed`, and the offline
+`grove doctor` refuses it the same way. The raw string would otherwise migrate a foreign
+checkout named by absolute path under `fix`, or converge `o/r`'s shares on a lane `o/r`'s
+engine does not serialize against.
+
 A root that misses its budget is *named rather than absent*: in the whole-home form it
 contributes a `root`/`unavailable` check and every other root's answer still returns. A
 request that **named** a slug is answered strictly and 422s — the caller asked about one

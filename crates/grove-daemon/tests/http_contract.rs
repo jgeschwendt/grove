@@ -901,6 +901,29 @@ async fn doctor_422s_a_malformed_body() {
     assert_eq!(error.message, "malformed doctor request");
 }
 
+/// A named slug that is no declared root 422s before it keys a lane or builds a path:
+/// `o/r/` would GC `o/r`'s links off `o/r`'s lane, and an absolute path would have its
+/// `.git` migrated under `fix`.
+#[tokio::test]
+async fn doctor_422s_a_slug_naming_no_declared_root() {
+    let tmp = TempDir::new().unwrap();
+    let home = testfix::home_with_root(&tmp);
+    let daemon = Harness::ready(&home).await;
+    let foreign = tmp.path().join("src");
+
+    for slug in [foreign.to_str().unwrap(), "o/r/", "o/x"] {
+        let error = err_body(
+            daemon
+                .post("/api/doctor", &json!({"slug": slug, "fix": true}))
+                .await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+        .await;
+        assert_eq!(error.code, ErrorCode::DoctorFailed, "{slug}");
+    }
+    assert!(foreign.join(".git").is_dir());
+}
+
 // ─── fallbacks ──────────────────────────────────────────────────────────────────
 
 /// v1's framework fallback rendered the envelope from a *second* hand-written

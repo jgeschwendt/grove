@@ -122,6 +122,17 @@ pub fn list(home: &Path) -> Result<Vec<manifest::Root>, Error> {
     manifest::list(&manifest_path(home)).map_err(Error::io)
 }
 
+/// The declared root `slug` names, looked up before any caller builds a path from it:
+/// an invalid or non-canonical slug is `InvalidInput`, a valid one no root carries is
+/// `NotDeclared`.
+pub fn declared(home: &Path, slug: &str) -> Result<manifest::Root, Error> {
+    manifest::validate_slug(slug).map_err(Error::invalid_input)?;
+    list(home)?
+        .into_iter()
+        .find(|r| r.slug == slug)
+        .ok_or_else(|| Error::NotDeclared(format!("root not declared: {slug}")))
+}
+
 /// The git status of a root's trunk checkout — what the dashboard draws next to
 /// the repo name.
 ///
@@ -187,10 +198,7 @@ pub enum Removal {
 pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
     // Validate before building a path we `remove_dir_all` — a traversal slug
     // must never reach the filesystem here.
-    manifest::validate_slug(slug).map_err(Error::invalid_input)?;
-    if !list(home)?.iter().any(|r| r.slug == slug) {
-        return Err(Error::NotDeclared(format!("root not declared: {slug}")));
-    }
+    declared(home, slug)?;
     if removal == Removal::Guarded {
         let unsaved = unsaved_work(home, slug);
         if !unsaved.is_empty() {
@@ -255,11 +263,7 @@ fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
 /// `Err` is reserved for not-declared / lookup faults; a clone or guard failure is
 /// an `Ok(Applied{status: Failed})` so one wedged root never aborts the rest.
 pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
-    manifest::validate_slug(slug).map_err(Error::invalid_input)?;
-    let root = list(home)?
-        .into_iter()
-        .find(|r| r.slug == slug)
-        .ok_or_else(|| Error::NotDeclared(format!("root not declared: {slug}")))?;
+    let root = declared(home, slug)?;
 
     // Converge the trunk before realizing: which directory *is* the trunk is a
     // manifest question, and `realize` below reads the answer as settled. A pending

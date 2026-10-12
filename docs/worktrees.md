@@ -64,7 +64,7 @@ git-synced manifest, so neither entrance is the only gate.
 
 | validator | rule |
 |---|---|
-| `validate_slug` | non-empty relative path, `Normal` components only — no `..`, absolute, `.`, or prefix parts; no backslash; no ASCII control characters |
+| `validate_slug` | non-empty relative path whose every `/` segment is a real name — no `..`, `.`, or empty segment, so no absolute, doubled-`/` or trailing-`/` spelling (`o/r/` would be a second manifest and lane key for `o/r`); no backslash; no ASCII control characters |
 | `validate_name` | exactly one `Normal` segment (so no `/`), the slug rules otherwise, and never a dotted name — no checkout can be spelled that way |
 | `validate_share_path` | one or more safe segments (nesting allowed), canonical — no `.`, empty (`//`) or trailing-`/` segments — no segment beginning with `-`, and no dotted first segment once the path nests (`.env` is a share; a path *under* a dotted entry is not) |
 | `validate_ref_arg` | a `branch`, `base` or `trunk` is non-empty and does not begin with `-`, so a crafted declaration cannot smuggle a git flag |

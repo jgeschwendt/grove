@@ -347,18 +347,21 @@ pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Byt
     let home = state.config.home.clone();
     let scoped = request.slug.is_some();
 
-    let slugs = match request.slug.clone() {
-        Some(slug) => vec![slug],
-        None => match ops({
-            let home = home.clone();
-            move || grove_ops::roots::list(&home)
-        })
-        .await
-        {
-            Err(response) => return response,
-            Ok(Err(e)) => return doctor_failed(&e.to_string()),
-            Ok(Ok(roots)) => roots.into_iter().map(|root| root.slug).collect(),
-        },
+    // A named slug must be a declared root before it keys a lane or builds a path: the
+    // raw string would otherwise migrate a foreign checkout named by absolute path, or
+    // run `o/r/` on a lane `o/r`'s engine does not serialize against.
+    let slugs = match ops({
+        let (home, slug) = (home.clone(), request.slug.clone());
+        move || match slug {
+            Some(slug) => grove_ops::roots::declared(&home, &slug).map(|root| vec![root]),
+            None => grove_ops::roots::list(&home),
+        }
+    })
+    .await
+    {
+        Err(response) => return response,
+        Ok(Err(e)) => return doctor_failed(&e.to_string()),
+        Ok(Ok(roots)) => roots.into_iter().map(|root| root.slug).collect::<Vec<_>>(),
     };
 
     let mut data = DoctorData::default();

@@ -42,15 +42,15 @@ hazards:
 ## Anchors in this territory
 
 - ※ clock-seam → tests/harness_meta.rs:354
-- ※ delete-before-undeclare → src/roots.rs:186
-- ※ files-authoritative → src/manifest.rs:296
+- ※ delete-before-undeclare → src/roots.rs:197
+- ※ files-authoritative → src/manifest.rs:301
 - ※ lane-is-callers → src/env.rs:123
 - ※ never-clobber → src/env.rs:309
 - ※ promote-attach-before-move → src/pool.rs:164
 - ※ reconcile-additive → src/worktrees.rs:259
-- ※ sync-never-forces → src/roots.rs:658
+- ※ sync-never-forces → src/roots.rs:662
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:611
+- ※ trunk-recovery-guard → src/roots.rs:615
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 
