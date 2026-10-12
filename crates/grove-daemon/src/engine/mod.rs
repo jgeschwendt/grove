@@ -398,6 +398,11 @@ impl Driver {
     ///
     /// ## Where a reconcile's clone permit is taken
     ///
+    /// **Only when disk says the root is unrealized** — a realized root's reconcile
+    /// cannot clone, so it runs without one. Every manifest event re-arms reconcile on
+    /// every root and reconcile outranks sync and fill, so a ready root that needed a
+    /// permit would have its syncs and fills starved behind other roots' clones.
+    ///
     /// **Tried at the head of the root's own lane, and never waited for there.** Two
     /// failure modes have to be avoided at once, and only this ordering avoids both.
     ///
@@ -419,8 +424,8 @@ impl Driver {
     ///
     /// So the job takes the permit with `try_acquire` and, failing, returns
     /// [`BgOutcome::Deferred`] immediately: the lane is released, reads answer again,
-    /// and the reconcile is re-armed. A waiter task then awaits a permit off the lane
-    /// purely as a wake-up — it drops the permit it got and pokes the driver, which
+    /// and the reconcile is re-armed. [`Driver::bg_done`] then spawns a waiter that
+    /// awaits a permit off the lane purely as a wake-up — it drops the permit it got and pokes the driver, which
     /// re-dispatches into the same try. No timer, and no permit is held by anything
     /// that is not cloning.
     ///
@@ -444,10 +449,12 @@ impl Driver {
                 TaskKind::Reconcile => {
                     let job = {
                         let (home, slug, events) = (home.clone(), slug.clone(), events.clone());
-                        let clones = Arc::clone(&clones);
                         move || {
-                            let Ok(permit) = clones.try_acquire_owned() else {
-                                return None;
+                            // Only a root disk says is unrealized can clone; read here,
+                            // under the lane, so no op of this root's moves it after.
+                            let permit = match disk_status(&home, &slug) {
+                                DiskStatus::Ready => None,
+                                DiskStatus::Missing => Some(clones.try_acquire_owned().ok()?),
                             };
                             started(&events, &slug, kind);
                             Some((
@@ -462,19 +469,11 @@ impl Driver {
                     };
                     match lanes.run(&slug, Priority::Background, job).await {
                         Ok(Some((applied, pool, permit))) => {
-                            return finish(
-                                &tx,
-                                kind,
-                                BgOutcome::Reconcile(applied, pool),
-                                Some(permit),
-                            );
+                            return finish(&tx, kind, BgOutcome::Reconcile(applied, pool), permit);
                         }
-                        // No permit was free. The lane is already released; wait for
-                        // one off-lane, then poke the driver to try again.
-                        Ok(None) => {
-                            spawn_permit_waiter(clones, tx.clone());
-                            BgOutcome::Deferred
-                        }
+                        // No permit was free. The lane is already released; the driver
+                        // waits for one off-lane, then tries again.
+                        Ok(None) => BgOutcome::Deferred,
                         Err(_) => BgOutcome::Crashed,
                     }
                 }
@@ -521,10 +520,10 @@ impl Driver {
 
     /// A background op landed: free the slot, apply the outcome, re-drive.
     ///
-    /// `permit` is a reconcile's clone permit, held for exactly as long as this
+    /// `permit` is a cloning reconcile's permit, held for exactly as long as this
     /// function runs. Dropping it here — after `task_finished` is published — is what
-    /// makes the clone bound observable from the event stream: a started/finished
-    /// pair brackets a held permit exactly.
+    /// makes the clone bound observable from the event stream: an unrealized root's
+    /// started/finished pair brackets a held permit exactly.
     fn bg_done(
         &mut self,
         kind: TaskKind,
@@ -533,8 +532,11 @@ impl Driver {
     ) {
         self.bg = None;
         // A deferred reconcile never ran: nothing to report, nothing to publish. It
-        // is re-armed and the driver waits for the permit waiter's poke.
+        // is re-armed and the driver waits for the permit waiter's poke. The waiter
+        // is spawned here, with the slot already free, so its poke cannot land while
+        // `bg` still reads occupied and be dropped.
         if matches!(outcome, BgOutcome::Deferred) {
+            spawn_permit_waiter(Arc::clone(&self.deps.clones), self.tx.clone());
             self.reconcile_pending = true;
             self.status = next_status(
                 self.status,
@@ -772,8 +774,10 @@ fn finish(
 /// The permit itself is dropped immediately: this is a wake-up, not a claim. Holding
 /// it across the driver's re-dispatch would put us back where we started, waiting for
 /// a lane while occupying one of the bound's slots. The re-dispatched job simply
-/// tries again, and defers again if another root won the race — each round waits on a
-/// real permit release, so there is no spin and no timer.
+/// tries again, and defers again if another root won the race. No timer, but not free
+/// under contention either: the semaphore is FIFO, so a released permit passes through
+/// every queued waiter — each dropping it to the next — before `try_acquire` can see
+/// it, and each poke re-dispatches a lane job that defers again.
 fn spawn_permit_waiter(clones: Arc<Semaphore>, tx: mpsc::UnboundedSender<Msg>) {
     tokio::spawn(async move {
         // A closed semaphore means the daemon is going away; there is nothing to

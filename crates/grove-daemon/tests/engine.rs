@@ -773,6 +773,31 @@ async fn a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_
     settles_on(&engine, RootStatus::Ready).await;
 }
 
+/// A **realized** root's reconcile cannot clone, so it takes no clone permit — and
+/// the sync queued behind it is not starved by other roots' clones.
+///
+/// Every manifest event re-arms reconcile on every root, and reconcile outranks sync
+/// and fill. Were the permit tried regardless, a bulk `clone add` saturating the
+/// permits would hold every ready root's sync, fill and worktree convergence until an
+/// unrelated clone finished.
+#[tokio::test]
+async fn a_ready_roots_reconcile_and_sync_run_while_other_clones_hold_every_permit() {
+    let tmp = TempDir::new().unwrap();
+    let (home, src) = declared_home(&tmp);
+    let room = Room::with_clone_limit(home, 1);
+    let engine = room.start(SLUG);
+    settles_on(&engine, RootStatus::Ready).await;
+    commit(&src, "REMOTE.md");
+
+    let _held = Arc::clone(&room.deps.clones).acquire_owned().await.unwrap();
+    engine.roots_changed();
+    engine.sync().await.unwrap();
+    until("the sync to land with every permit held", async || {
+        (!engine.sync_info().await.unwrap().syncing).then_some(())
+    })
+    .await;
+}
+
 // ── restart ─────────────────────────────────────────────────────────────────────
 
 /// Reactivation is a cold boot (carried law 11): a fresh engine over a realized root

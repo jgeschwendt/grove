@@ -174,6 +174,12 @@ fill crash is logged and forgotten.
 (`GROVE_CLONE_LIMIT`), bounding how many roots may hold a clone at once. Without it a
 daemon booting a home with N declared roots fans out N concurrent network fetches.
 
+Only a reconcile of a root disk says is unrealized takes a permit, read under the root's
+lane: a realized root's reconcile cannot clone, and since every manifest event re-arms
+reconcile on every root ahead of sync and fill, a ready root that needed a permit would
+starve its syncs and fills behind other roots' clones.
+`a_ready_roots_reconcile_and_sync_run_while_other_clones_hold_every_permit` pins that.
+
 The permit is **tried at the head of the root's own lane, and never waited for there**.
 Two failure modes have to be avoided at once, and only this ordering avoids both.
 
@@ -193,14 +199,15 @@ nothing while `/api/health` still answers `ready`: damage meant to be local to a
 becomes the daemon's.
 
 So the lane job takes the permit with `try_acquire` and, failing, returns immediately —
-the lane is released, reads answer again, and the reconcile is re-armed. A waiter task then
-awaits a permit *off* the lane purely as a wake-up: it drops the permit it got and pokes
+the lane is released, reads answer again, and the reconcile is re-armed. The driver, having
+freed its slot, spawns a waiter that awaits a permit *off* the lane purely as a wake-up: it drops the permit it got and pokes
 the driver, which re-dispatches into the same try. No timer, and no permit is ever held by
 something that is not cloning.
 `a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_lands` pins it.
 
 The permit travels back to the driver with the result and is dropped *after*
-`task_finished` is published, so a started/finished pair brackets a held permit exactly —
+`task_finished` is published, so a cloning reconcile's started/finished pair brackets a
+held permit exactly —
 which is what makes the bound observable from the event stream rather than merely true.
 
 The root's status stays honest while it waits: `cloning` is set when the reconcile is
@@ -290,7 +297,8 @@ accepted, announced on the stream and settles on the fetched commit (`tests/obse
 and a declared worktree claims a warm slot; the same
 declaration is cold-created when the pool is empty; a lowered pool target reclaims its
 slots; the clone semaphore bounds concurrent reconciles; a reconcile without a permit frees
-its lane and resumes when one lands; a restarted engine re-derives its status from disk;
+its lane and resumes when one lands; a ready root's reconcile and sync run while other clones
+hold every permit; a restarted engine re-derives its status from disk;
 the engine set mirrors the declared roots; an unreadable manifest leaves every engine
 running; a reconcile parked on a busy lane holds no clone permit.
 
