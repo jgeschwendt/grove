@@ -59,9 +59,12 @@ echo "publish-canary: $tag ($target) → $repo"
 
 # Always revert the version stamp and drop the local dist, even if the build or the
 # upload fails — a stamped-but-unpublished tree must never be left behind for the
-# next commit to pick up.
+# next commit to pick up. The revert restores this script's own snapshot, not the
+# index: `git checkout --` would also discard an operator's uncommitted edit.
+snap=$(mktemp -d)
+cp -p Cargo.toml Cargo.lock "$snap"
 cleanup() {
-  git checkout -- Cargo.toml Cargo.lock 2>/dev/null || true
+  cp -p "$snap/Cargo.toml" "$snap/Cargo.lock" . && rm -rf "$snap"
   rm -rf "dist/$vsn" dist/latest
 }
 trap cleanup EXIT
@@ -75,12 +78,14 @@ sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$vsn\"/" Cargo.toml && rm -f 
 #    — a mislabelled bundle would break the health gate on every box that pulls it.
 DIST="$PWD/dist" sh scripts/release.sh
 
-# 4. Publish the host bundle + sidecar + bootstrap CLI as a prerelease.
+# 4. Publish the host bundle + bootstrap CLI, each with its sidecar, as a prerelease —
+#    the same four assets release.yaml uploads and install.sh fetches.
 gh release create "$tag" --repo "$repo" --prerelease --title "$tag" \
   --notes "grove $tag — local $target build (canary channel)" \
   "dist/$vsn/$target.tar.gz" \
   "dist/$vsn/$target.tar.gz.sha256" \
-  "dist/$vsn/grove-$target"
+  "dist/$vsn/grove-$target" \
+  "dist/$vsn/grove-$target.sha256"
 
 echo "publish-canary: published $tag ($target)"
 echo "publish-canary: pull it with  grove up --channel canary"

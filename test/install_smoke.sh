@@ -23,7 +23,7 @@ cd "$ROOT"
 
 echo "smoke: building grove"
 cargo build -p grove --quiet
-GROVE_BIN="$ROOT/target/debug/grove"
+GROVE_BIN="${CARGO_TARGET_DIR:-$ROOT/target}/debug/grove"
 
 # Compute the target the same way grove + install.sh do.
 arch=$(uname -m)
@@ -161,4 +161,37 @@ HOME="$HOME_DIR" GROVE_HOME="$GH" GROVE_INSTALL="$INSTALL" GROVE_BIND="$BIND" \
   GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" --purge
 [ ! -e "$GH" ] || fail "--purge left the workspace $GH behind"
 
-echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall, purge"
+# A set-but-empty XDG_DATA_HOME is unset, as in grove_ops::install_home and the XDG
+# spec: the root is ~/.local/share/grove, never the cwd-relative `grove` — else the
+# scripts and `grove up` manage two different trees.
+echo "smoke: uninstall.sh (XDG_DATA_HOME set but empty)"
+mkdir -p "$WORK/cwd/grove" "$HOME_DIR/.local/share/grove"
+(cd "$WORK/cwd" && env -u GROVE_INSTALL HOME="$HOME_DIR" XDG_DATA_HOME= GROVE_HOME="$GH" \
+  GROVE_LINK_DIR="$LINK_DIR" sh "$ROOT/scripts/uninstall.sh" >/dev/null)
+[ -d "$WORK/cwd/grove" ] && [ ! -e "$HOME_DIR/.local/share/grove" ] ||
+  fail "uninstall.sh read an empty XDG_DATA_HOME as set"
+
+# publish-canary.sh against a stub gh and release.sh in a scratch copy: it must upload
+# every asset install.sh fetches, and hand back Cargo.toml/Cargo.lock exactly as it
+# found them — an operator's uncommitted edit included.
+echo "smoke: publish-canary.sh (stub gh)"
+C="$WORK/canary"
+mkdir -p "$C/scripts" "$C/bin"
+cp "$ROOT/scripts/publish-canary.sh" "$C/scripts/"
+: >"$C/scripts/release.sh"
+printf 'version = "0.0.0"\n# uncommitted\n' >"$C/Cargo.toml"
+printf 'lock\n' >"$C/Cargo.lock"
+cp "$C/Cargo.toml" "$C/Cargo.lock" "$WORK"
+cat >"$C/bin/gh" <<EOF
+#!/bin/sh
+[ "\$2" = create ] && printf '%s\n' "\$@" >"$C/gh.log"; [ "\$2" != view ]
+EOF
+chmod +x "$C/bin/gh"
+PATH="$C/bin:$PATH" bash "$C/scripts/publish-canary.sh" 9.9.9-canary.1 >/dev/null
+for a in "$TARGET.tar.gz" "$TARGET.tar.gz.sha256" "grove-$TARGET" "grove-$TARGET.sha256"; do
+  grep -qx "dist/9.9.9-canary.1/$a" "$C/gh.log" || fail "publish-canary did not upload $a"
+done
+cmp -s "$C/Cargo.toml" "$WORK/Cargo.toml" && cmp -s "$C/Cargo.lock" "$WORK/Cargo.lock" ||
+  fail "publish-canary did not restore Cargo.toml/Cargo.lock as it found them"
+
+echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall, purge, canary"
