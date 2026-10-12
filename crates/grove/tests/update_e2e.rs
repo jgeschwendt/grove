@@ -334,7 +334,7 @@ fn slow_an_interrupted_flip_is_undone_by_the_next_up() {
     world
         .grove(&["up", "--version", HONEST])
         .ok()
-        .says("never health-gated")
+        .says("has no healthy verdict")
         .says(&format!("rolled back to {HONEST}"));
 
     assert_eq!(
