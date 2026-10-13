@@ -119,8 +119,8 @@ when the pool has any), so a hint that only ever counted fills would sit stale-h
 starve the refill that should follow.
 
 `task_started` is published from *inside* the lane job, once the work actually begins —
-so neither a reconcile queued behind its own root's lane nor one waiting on the clone
-semaphore is reported as running. The signal that a queued reconcile exists is the root's
+so neither a reconcile queued behind its own root's lane nor one deferred for want of a
+clone permit is reported as running. The signal that a queued reconcile exists is the root's
 own `cloning` status. `task_finished` is published by the driver when the outcome lands.
 Both name one of the three background kinds (`reconcile | sync | fill`) and a coarse
 outcome (`ok | failed`); foreground work — remove, doctor — answers on its own request and
@@ -168,9 +168,9 @@ A background task that returns nothing at all (`BgOutcome::Crashed`) is a third 
 reconcile crash degrades **that root only**, a sync crash leaves a `failed` sync note, a
 fill crash is logged and forgotten.
 
-## The clone semaphore
+## The clone bound
 
-`Deps::clones` is a global `Semaphore` with `DEFAULT_CLONE_LIMIT = 4` permits
+`Deps::clones` is a global `ClonePermits` with `DEFAULT_CLONE_LIMIT = 4` permits
 (`GROVE_CLONE_LIMIT`), bounding how many roots may hold a clone at once. Without it a
 daemon booting a home with N declared roots fans out N concurrent network fetches.
 
@@ -193,17 +193,41 @@ convergence for the length of the pass.
 *Blocking* for a permit inside the lane job is worse, because the job holds the lane while
 it waits. Once the permits are all held by clones that have stalled — a peer that accepts
 the connection and then goes silent, a dropped VPN, a slept laptop's half-open socket —
-every other root's reconcile parks on the semaphore holding its own lane, and those roots'
+every other root's reconcile parks on the bound holding its own lane, and those roots'
 snapshot reads shed as `unavailable`. The whole home then reports unavailable and converges
 nothing while `/api/health` still answers `ready`: damage meant to be local to a busy root
 becomes the daemon's.
 
-So the lane job takes the permit with `try_acquire` and, failing, returns immediately —
-the lane is released, reads answer again, and the reconcile is re-armed. The driver, having
-freed its slot, spawns a waiter that awaits a permit *off* the lane purely as a wake-up: it drops the permit it got and pokes
-the driver, which re-dispatches into the same try. No timer, and no permit is ever held by
-something that is not cloning.
+So the lane job only *tries* for a permit and, failing, returns immediately — the lane is
+released, reads answer again, and the reconcile is re-armed. The driver, having freed its
+slot, parks its mailbox in `ClonePermits`' one shared registry, holding nothing. No timer,
+and no permit is ever held by something that is not cloning.
 `a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_lands` pins it.
+
+A freed permit **pokes** the driver at the front of the registry, and the driver
+re-dispatches into the same try carrying the poke. The poke is a wake-up, not a claim, so a
+re-dispatched reconcile still waiting out its own lane holds no permit. Each poke ends
+exactly once — consumed by that try, or declined by being dropped (the driver is gone,
+busy, or its root no longer needs a clone) — and a decline pokes the next parked driver.
+Pokes in flight never fall below free permits while a driver is parked, so a release wakes
+exactly one driver rather than every waiter. In general a release costs one poke and each
+steal (below) one more. `slow_a_cold_boot_contending_for_one_permit_pokes_once_per_release`
+pins the bound for its own scenario: forty missing roots against one permit converge with at
+most 2×ROOTS pokes in total. `a_poke_a_driver_cannot_use_is_declined_to_the_next_parked_root`
+pins the decline path: a poke dropped unused, in the lane job or after the re-drive, wakes
+the next parked root.
+
+The registry is not a fair queue. A fresh dispatch, one not poked, may take a free permit
+ahead of the poked driver it was freed for; that driver's try then fails and it parks again
+at the back — one re-park per steal. The driver parks when the deferral lands rather than
+inside the lane job, so a poke can never reach it while its slot still reads busy and be
+declined as unwanted, and a permit freed between the failed try and the park is poked for
+by the park itself. A driver already parked keeps its one entry: a re-dispatch that defers
+again while it is still queued adds none.
+
+Wake-up order can also lag the permit. A poked reconcile queued behind foreground work on
+its own lane carries its poke until the lane admits it, so while that op runs the next
+parked root is not woken — even though the permit is free for any fresh try meanwhile.
 
 The permit travels back to the driver with the result and is dropped *after*
 `task_finished` is published, so a cloning reconcile's started/finished pair brackets a
@@ -296,7 +320,7 @@ accepted, announced on the stream and settles on the fetched commit (`tests/obse
 `tests/http_contract.rs`); the pool fills to target
 and a declared worktree claims a warm slot; the same
 declaration is cold-created when the pool is empty; a lowered pool target reclaims its
-slots; the clone semaphore bounds concurrent cloning reconciles; a reconcile without a permit frees
+slots; the clone bound limits concurrent cloning reconciles; a cold boot contending for one permit pokes once per release; a reconcile without a permit frees
 its lane and resumes when one lands; a ready root's reconcile and sync run while other clones
 hold every permit; a restarted engine re-derives its status from disk;
 the engine set mirrors the declared roots; an unreadable manifest leaves every engine

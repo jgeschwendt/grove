@@ -44,6 +44,7 @@
 //! `status` keeps answering while a clone drags for minutes — v1's invariant "no
 //! foreground ops call inside an engine callback", carried.
 
+mod permits;
 mod set;
 mod status;
 
@@ -57,11 +58,13 @@ use grove_api::policy::{
 use grove_api::status::{RootStatus, SyncNote};
 use grove_ops::clock::Clock;
 use grove_ops::roots::{Applied, SyncReport};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::events::EventBus;
 use crate::lane::{LaneError, Lanes, Priority};
 
+use permits::Poke;
+pub use permits::{ClonePermit, ClonePermits};
 pub use set::RootSet;
 pub use status::{DiskStatus, Transition, disk_status, next_status};
 
@@ -71,9 +74,10 @@ pub use status::{DiskStatus, Transition, disk_status, next_status};
 /// fanned out N concurrent clones, each a full network fetch.
 ///
 /// A permit is **tried** at the head of the root's own lane and never waited for
-/// there — see [`Driver::dispatch`] for both halves of that. Either way the root's
-/// status is honest while it waits: `cloning` is set when the reconcile is
-/// dispatched, not when it reaches a permit.
+/// there — see [`Driver::dispatch`] for both halves of that — and a driver whose try
+/// failed waits in [`ClonePermits`]' registry, holding nothing, for a freed permit's
+/// poke. Either way the root's status is honest while it waits: `cloning` is set when
+/// the reconcile is dispatched, not when it reaches a permit.
 pub const DEFAULT_CLONE_LIMIT: usize = 4;
 
 /// What the dashboard's sync surface reads: is one pending or running, and what did
@@ -133,15 +137,15 @@ pub struct Deps {
     pub lanes: Arc<Lanes>,
     pub events: EventBus,
     pub clock: Arc<dyn Clock>,
-    /// The dispatch-side clone bound, shared across every root.
-    pub clones: Arc<Semaphore>,
+    /// The clone bound and its waiter registry, shared across every root.
+    pub clones: Arc<ClonePermits>,
 }
 
 impl std::fmt::Debug for Deps {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Deps")
             .field("home", &self.home)
-            .field("clones", &self.clones.available_permits())
+            .field("clones", &self.clones.available())
             .finish_non_exhaustive()
     }
 }
@@ -161,9 +165,10 @@ enum Msg {
     SyncInfo(oneshot::Sender<SyncInfo>),
     /// Accept-only: set the flag, kick the driver, answer at once.
     Sync(oneshot::Sender<()>),
-    /// A clone permit came free somewhere; re-drive a reconcile that deferred.
-    PermitFreed,
-    BgDone(TaskKind, BgOutcome, Option<OwnedSemaphorePermit>),
+    /// A clone permit came free and this driver was at the front of the registry:
+    /// re-drive the reconcile that deferred, handing it the poke to consume.
+    PermitFreed(Poke),
+    BgDone(TaskKind, BgOutcome, Option<ClonePermit>),
     Stop,
 }
 
@@ -172,7 +177,7 @@ enum Msg {
 enum BgOutcome {
     Reconcile(Result<Applied, grove_ops::Error>, Option<PoolRead>),
     /// The reconcile never ran: no clone permit was free, and the lane was released
-    /// rather than held while one came available. Re-armed, not failed.
+    /// rather than held while one came available. Re-armed and parked, not failed.
     Deferred,
     Sync(Result<SyncReport, grove_ops::Error>),
     Fill(Result<usize, grove_ops::Error>),
@@ -211,6 +216,7 @@ impl Engine {
             pool: 0,
             bg: None,
             fill_blocked: false,
+            poke: None,
             reconcile_pending: true,
             sync_pending: false,
             sync_note: None,
@@ -302,6 +308,10 @@ struct Driver {
     /// A pool converge failed; wait for the next real event rather than
     /// re-dispatching into the same failure on a still-true level condition.
     fill_blocked: bool,
+    /// A freed permit's wake-up, held only for the [`Driver::drive`] it triggered: a
+    /// reconcile dispatched there carries it into its try, and anything else declines
+    /// it on the spot so the next parked driver is woken instead.
+    poke: Option<Poke>,
     reconcile_pending: bool,
     sync_pending: bool,
     sync_note: Option<SyncNote>,
@@ -341,7 +351,11 @@ impl Driver {
                     self.publish_sync_changed();
                     let _ = reply.send(());
                 }
-                Msg::PermitFreed => self.drive(),
+                Msg::PermitFreed(poke) => {
+                    self.poke = Some(poke);
+                    self.drive();
+                    self.poke = None;
+                }
                 Msg::BgDone(kind, outcome, permit) => self.bg_done(kind, outcome, permit),
                 Msg::Stop => break,
             }
@@ -392,8 +406,8 @@ impl Driver {
     /// what makes the coalescing airtight: a second trigger arriving one line later
     /// already sees `bg` occupied. The `task_started` event, by contrast, is
     /// published from inside the lane job once the work actually begins, so neither a
-    /// reconcile queued behind its own root's lane nor one waiting on the clone
-    /// semaphore is reported as running. The signal that a queued reconcile exists is
+    /// reconcile queued behind its own root's lane nor one deferred for want of a
+    /// clone permit is reported as running. The signal that a queued reconcile exists is
     /// the root's own `cloning` status, set below.
     ///
     /// ## Where a reconcile's clone permit is taken
@@ -417,17 +431,18 @@ impl Driver {
     /// holds the lane while it waits. Once the permits are all held by clones that
     /// have stalled — a peer that accepts the connection and then goes silent; a
     /// dropped VPN; a slept laptop's half-open socket — every other root's reconcile
-    /// parks on the semaphore holding its own lane, and each of those roots' snapshot
+    /// parks on the bound holding its own lane, and each of those roots' snapshot
     /// reads are shed as `unavailable`. The whole home then reports unavailable and
     /// converges nothing, while `/api/health` still says `ready`. Damage that was
     /// meant to be local to a busy root became the daemon's.
     ///
-    /// So the job takes the permit with `try_acquire` and, failing, returns
+    /// So the job only *tries* for a permit and, failing, returns
     /// [`BgOutcome::Deferred`] immediately: the lane is released, reads answer again,
-    /// and the reconcile is re-armed. [`Driver::bg_done`] then spawns a waiter that
-    /// awaits a permit off the lane purely as a wake-up — it drops the permit it got and pokes the driver, which
-    /// re-dispatches into the same try. No timer, and no permit is held by anything
-    /// that is not cloning.
+    /// and the reconcile is re-armed. [`Driver::bg_done`] then parks the driver in
+    /// [`ClonePermits`]' registry, and a freed permit pokes exactly one parked driver,
+    /// which re-dispatches into the same try carrying the poke. No timer, no permit
+    /// held by anything that is not cloning, and no circling: a poke is a wake-up for
+    /// one driver, not a permit handed down a queue of them.
     ///
     /// The permit travels back to the driver with the result, so it outlives
     /// `task_finished` (see [`Driver::bg_done`]). Releasing it when the lane job ends
@@ -440,6 +455,10 @@ impl Driver {
         let (home, slug) = (self.deps.home.clone(), self.slug.to_string());
         let lanes = Arc::clone(&self.deps.lanes);
         let clones = Arc::clone(&self.deps.clones);
+        // Only a reconcile can consume a poke. A sync or fill must not carry one into
+        // its future, where a stalled fetch would sit on the wake-up meant for the next
+        // parked root; left behind, it is declined when the PermitFreed handler ends.
+        let poke = self.poke.take_if(|_| matches!(kind, TaskKind::Reconcile));
         let events = self.deps.events.clone();
         let target = self.target;
         let tx = self.tx.clone();
@@ -451,10 +470,15 @@ impl Driver {
                         let (home, slug, events) = (home.clone(), slug.clone(), events.clone());
                         move || {
                             // Only a root disk says is unrealized can clone; read here,
-                            // under the lane, so no op of this root's moves it after.
+                            // under the lane, so no op of this root's moves it after. A
+                            // poke this try does not consume is declined before the
+                            // reconcile, not after it.
                             let permit = match disk_status(&home, &slug) {
-                                DiskStatus::Ready => None,
-                                DiskStatus::Missing => Some(clones.try_acquire_owned().ok()?),
+                                DiskStatus::Ready => {
+                                    drop(poke);
+                                    None
+                                }
+                                DiskStatus::Missing => Some(clones.take(poke)?),
                             };
                             started(&events, &slug, kind);
                             Some((
@@ -472,7 +496,8 @@ impl Driver {
                             return finish(&tx, kind, BgOutcome::Reconcile(applied, pool), permit);
                         }
                         // No permit was free. The lane is already released; the driver
-                        // waits for one off-lane, then tries again.
+                        // parks for a poke, then tries again. A job the lane never ran
+                        // drops its poke with it, which declines it.
                         Ok(None) => BgOutcome::Deferred,
                         Err(_) => BgOutcome::Crashed,
                     }
@@ -524,19 +549,16 @@ impl Driver {
     /// function runs. Dropping it here — after `task_finished` is published — is what
     /// makes the clone bound observable from the event stream: an unrealized root's
     /// started/finished pair brackets a held permit exactly.
-    fn bg_done(
-        &mut self,
-        kind: TaskKind,
-        outcome: BgOutcome,
-        permit: Option<OwnedSemaphorePermit>,
-    ) {
+    fn bg_done(&mut self, kind: TaskKind, outcome: BgOutcome, permit: Option<ClonePermit>) {
         self.bg = None;
         // A deferred reconcile never ran: nothing to report, nothing to publish. It
-        // is re-armed and the driver waits for the permit waiter's poke. The waiter
-        // is spawned here, with the slot already free, so its poke cannot land while
-        // `bg` still reads occupied and be dropped.
+        // is re-armed and the driver parks for a poke. Parked here, with the slot
+        // already free, rather than in the lane job: a poke sent before this deferral
+        // landed would find `bg` occupied and be declined, and the driver would wait
+        // for a wake-up already spent. A permit freed since the failed try is not
+        // lost either — the park itself pokes for it.
         if matches!(outcome, BgOutcome::Deferred) {
-            spawn_permit_waiter(Arc::clone(&self.deps.clones), self.tx.clone());
+            self.deps.clones.park(&self.tx);
             self.reconcile_pending = true;
             self.status = next_status(
                 self.status,
@@ -764,28 +786,9 @@ fn finish(
     tx: &mpsc::UnboundedSender<Msg>,
     kind: TaskKind,
     outcome: BgOutcome,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Option<ClonePermit>,
 ) {
     let _ = tx.send(Msg::BgDone(kind, outcome, permit));
-}
-
-/// Wait — **off any lane** — until a clone permit is free, then poke the driver.
-///
-/// The permit itself is dropped immediately: this is a wake-up, not a claim. Holding
-/// it across the driver's re-dispatch would put us back where we started, waiting for
-/// a lane while occupying one of the bound's slots. The re-dispatched job simply
-/// tries again, and defers again if another root won the race. No timer, but not free
-/// under contention either: the semaphore is FIFO, so a released permit passes through
-/// every queued waiter — each dropping it to the next — before `try_acquire` can see
-/// it, and each poke re-dispatches a lane job that defers again.
-fn spawn_permit_waiter(clones: Arc<Semaphore>, tx: mpsc::UnboundedSender<Msg>) {
-    tokio::spawn(async move {
-        // A closed semaphore means the daemon is going away; there is nothing to
-        // wake for.
-        if clones.acquire().await.is_ok() {
-            let _ = tx.send(Msg::PermitFreed);
-        }
-    });
 }
 
 /// The root's warm-pool facts, read inside the reconcile's lane job: what the

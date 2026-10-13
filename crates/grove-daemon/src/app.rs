@@ -9,11 +9,11 @@ use axum::Router;
 use axum::routing::{get, post};
 use grove_ops::clock::Clock;
 use tokio::net::TcpListener;
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 
 use crate::boot::BootState;
 use crate::config::Config;
-use crate::engine::{Deps, RootSet};
+use crate::engine::{ClonePermits, Deps, RootSet};
 use crate::events::EventBus;
 use crate::lane::Lanes;
 use crate::logs::LogRing;
@@ -278,7 +278,7 @@ impl Daemon {
             lanes: Arc::clone(&self.state.lanes),
             events: self.state.events.clone(),
             clock: Arc::clone(&self.state.clock),
-            clones: Arc::new(Semaphore::new(self.state.config.clone_limit)),
+            clones: Arc::new(ClonePermits::new(self.state.config.clone_limit)),
         };
         let set = RootSet::start(deps);
         // Infallible: `bind` just built this `OnceLock` and nothing else can reach

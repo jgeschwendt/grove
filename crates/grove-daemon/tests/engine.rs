@@ -21,13 +21,13 @@ use grove_api::events::{Event, TaskKind, TaskOutcome};
 use grove_api::status::RootStatus;
 use grove_daemon::RootSet;
 use grove_daemon::engine;
-use grove_daemon::engine::{Deps, Engine};
+use grove_daemon::engine::{ClonePermits, Deps, Engine};
 use grove_daemon::events::EventBus;
 use grove_daemon::lane::{DEFAULT_IDLE, Lanes, Priority};
 use grove_ops::clock::SystemClock;
 use grove_ops::testfix;
 use tempfile::TempDir;
-use tokio::sync::{Semaphore, broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot};
 
 const SLUG: &str = "o/r";
 
@@ -58,6 +58,19 @@ fn declare(home: &Path, slug: &str, url: &Path) {
     .unwrap();
 }
 
+/// A home declaring `o/r0`…`o/r{n-1}` against one fixture remote, nothing realized.
+fn declared_roots(tmp: &TempDir, n: usize) -> (PathBuf, Vec<String>) {
+    let src = tmp.path().join("src");
+    testfix::fixture_repo(&src);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let slugs: Vec<String> = (0..n).map(|n| format!("o/r{n}")).collect();
+    for slug in &slugs {
+        declare(&home, slug, &src);
+    }
+    (home, slugs)
+}
+
 /// A commit on the source repo's `main`, so a sync has something to fast-forward to.
 fn commit(repo: &Path, file: &str) {
     std::fs::write(repo.join(file), file).unwrap();
@@ -86,7 +99,7 @@ impl Room {
                 lanes: Arc::new(Lanes::new(Arc::new(SystemClock), DEFAULT_IDLE)),
                 events: bus,
                 clock: Arc::new(SystemClock),
-                clones: Arc::new(Semaphore::new(clones)),
+                clones: Arc::new(ClonePermits::new(clones)),
             },
             events,
         }
@@ -676,24 +689,17 @@ async fn slow_a_lowered_pool_target_reclaims_its_slots() {
 // ── the clone bound ─────────────────────────────────────────────────────────────
 
 /// The mitigation v1 designed and shelved: six roots declared at once do not become
-/// six concurrent clones. Bounded dispatch-side, so a queued root still reads
-/// `cloning` rather than pretending nothing is happening.
+/// six concurrent clones. The permit is tried at the head of each root's lane, while
+/// the root reports `cloning` from dispatch — so a root still waiting for a permit
+/// reads `cloning` rather than pretending nothing is happening.
 #[tokio::test]
-async fn slow_the_clone_semaphore_bounds_concurrent_reconciles() {
+async fn slow_the_clone_bound_limits_concurrent_reconciles() {
     const ROOTS: usize = 6;
     const LIMIT: usize = 2;
 
     let tmp = TempDir::new().unwrap();
-    let src = tmp.path().join("src");
-    testfix::fixture_repo(&src);
-    let home = tmp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let slugs: Vec<String> = (0..ROOTS).map(|n| format!("o/r{n}")).collect();
-    for slug in &slugs {
-        declare(&home, slug, &src);
-    }
-
-    let mut room = Room::with_clone_limit(home.clone(), LIMIT);
+    let (home, slugs) = declared_roots(&tmp, ROOTS);
+    let mut room = Room::with_clone_limit(home, LIMIT);
     let engines: Vec<Engine> = slugs.iter().map(|slug| room.start(slug)).collect();
 
     // Watch the whole run rather than sampling: the bound is a property of every
@@ -735,12 +741,34 @@ async fn slow_the_clone_semaphore_bounds_concurrent_reconciles() {
     assert!((1..=LIMIT).contains(&peak), "peak concurrency was {peak}");
 }
 
+/// Forty missing roots contending for one permit converge with about one poke per
+/// release. A freed permit wakes one parked driver; were it handed down the queue of
+/// waiters, each one re-dispatching a reconcile that loses its try, a cold boot would
+/// spin through every waiter on every release.
+#[tokio::test]
+async fn slow_a_cold_boot_contending_for_one_permit_pokes_once_per_release() {
+    const ROOTS: usize = 40;
+    let tmp = TempDir::new().unwrap();
+    let (home, slugs) = declared_roots(&tmp, ROOTS);
+    let room = Room::with_clone_limit(home, 1);
+    let engines: Vec<Engine> = slugs.iter().map(|slug| room.start(slug)).collect();
+    for engine in &engines {
+        settles_on(engine, RootStatus::Ready).await;
+    }
+    let pokes = room.deps.clones.pokes();
+    assert!(pokes <= 2 * ROOTS as u64, "{pokes} pokes for {ROOTS} roots");
+    assert!(
+        format!("{:?}", room.deps).contains("clones: 1"),
+        "every permit came back"
+    );
+}
+
 /// A reconcile that cannot get a clone permit **releases its root's lane** instead of
 /// holding it, and converges as soon as a permit frees — with no timer.
 ///
 /// This is the difference between one wedged clone and a wedged home. When the permit
 /// is *waited for* inside the lane job, every root whose reconcile is queued behind
-/// the exhausted semaphore holds its own lane too; their snapshot reads then shed as
+/// the exhausted bound holds its own lane too; their snapshot reads then shed as
 /// `unavailable`, so a handful of unreachable-but-connected remotes takes the whole
 /// home's readability down while `/api/health` still says `ready`.
 #[tokio::test]
@@ -750,7 +778,7 @@ async fn a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_
     let room = Room::with_clone_limit(home.clone(), 1);
     let lanes = Arc::clone(&room.deps.lanes);
     // Every permit taken, as a stalled clone would hold it.
-    let held = Arc::clone(&room.deps.clones).acquire_owned().await.unwrap();
+    let held = room.deps.clones.try_acquire().unwrap();
 
     let engine = room.start(SLUG);
 
@@ -773,6 +801,41 @@ async fn a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_
     settles_on(&engine, RootStatus::Ready).await;
 }
 
+/// A poke the driver cannot use is declined, and the wake-up passes on — whichever of
+/// the two ways it goes unused. r0 is realized behind its engine's back, so its
+/// re-driven reconcile finds the root ready and drops the poke in the lane job. r1 is
+/// realized and converged before the release, so the poke re-drives nothing and is
+/// dropped when the handler ends. Either poke forgotten instead of dropped, `poked`
+/// stays at `free` and r2, parked behind them, never hears of the permit.
+#[tokio::test]
+async fn a_poke_a_driver_cannot_use_is_declined_to_the_next_parked_root() {
+    let tmp = TempDir::new().unwrap();
+    let (home, slugs) = declared_roots(&tmp, 3);
+    let room = Room::with_clone_limit(home.clone(), 1);
+    let clones = Arc::clone(&room.deps.clones);
+    let held = clones.try_acquire().unwrap();
+
+    // Started one at a time, so the registry's order is r0, r1, r2.
+    let mut engines = Vec::new();
+    for slug in &slugs {
+        engines.push(room.start(slug));
+        let n = engines.len();
+        until(&format!("{slug} to park"), async || {
+            (clones.parked() == n).then_some(())
+        })
+        .await;
+    }
+    for slug in &slugs[..2] {
+        grove_ops::roots::reconcile_one(&home, slug).unwrap();
+    }
+    engines[1].roots_changed();
+    settles_on(&engines[1], RootStatus::Ready).await;
+
+    drop(held);
+    settles_on(&engines[2], RootStatus::Ready).await;
+    settles_on(&engines[0], RootStatus::Ready).await;
+}
+
 /// A **realized** root's reconcile cannot clone, so it takes no clone permit — and
 /// the sync queued behind it is not starved by other roots' clones.
 ///
@@ -789,7 +852,7 @@ async fn a_ready_roots_reconcile_and_sync_run_while_other_clones_hold_every_perm
     settles_on(&engine, RootStatus::Ready).await;
     commit(&src, "REMOTE.md");
 
-    let _held = Arc::clone(&room.deps.clones).acquire_owned().await.unwrap();
+    let _held = room.deps.clones.try_acquire().unwrap();
     engine.roots_changed();
     engine.sync().await.unwrap();
     until("the sync to land with every permit held", async || {

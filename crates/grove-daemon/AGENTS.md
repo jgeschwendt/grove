@@ -10,8 +10,8 @@ commands:
 invariants:
   - claim: "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background and no preemption of an op already running"
     anchor: ※ per-root-lane
-  - claim: "a clone permit is TRIED at the head of a root's lane and never waited for there: waiting dispatch-side would hold a permit against roots whose lanes are free, and waiting inside the lane job holds the lane, so a handful of stalled clones would shed every other root's snapshot reads as unavailable while health still says ready. Failing the try, the job returns the lane at once and an off-lane waiter pokes the driver when a permit frees"
-    anchor: crates/grove-daemon/src/engine/mod.rs#spawn_permit_waiter
+  - claim: "a clone permit is TRIED at the head of a root's lane and never waited for there: waiting dispatch-side would hold a permit against roots whose lanes are free, and waiting inside the lane job holds the lane, so a handful of stalled clones would shed every other root's snapshot reads as unavailable while health still says ready. Failing the try, the job returns the lane at once and the driver parks in the shared registry; a freed permit pokes exactly one parked driver, which re-dispatches into the same try"
+    anchor: crates/grove-daemon/src/engine/permits.rs#ClonePermits
   - claim: "POST /api/roots/sync is ACCEPT-ONLY and takes no lane of its own: it answers {sync: accepted} once the root's engine has recorded the request, so a burst coalesces through the engine's single background slot, and completion is observed on root_sync_changed / the snapshot's syncing+sync_note rather than returned. Declaredness is read off the manifest first (404), and a declared root no engine is driving is 503 — acknowledging there would be a request nothing recorded and a root_sync_changed no client ever sees"
     anchor: crates/grove-daemon/src/routes.rs#sync
     enforced_by: crates/grove-daemon/tests/http_contract.rs
@@ -45,7 +45,7 @@ edges:
 - ※ loopback-bind-gate → src/config.rs:200
 - ※ mutation-guard → src/guard.rs:96
 - ※ per-root-lane → src/lane.rs:172
-- ※ push-only → src/engine/mod.rs:355
+- ※ push-only → src/engine/mod.rs:369
 - ※ readiness-whitelist → src/guard.rs:23
 - ※ status-is-a-cache → src/engine/status.rs:52
 - ※ unauthenticated-api → src/guard.rs:34
