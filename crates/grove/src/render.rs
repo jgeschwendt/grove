@@ -16,6 +16,7 @@ use grove_api::{DoctorData, RootStatus};
 use grove_ops::doctor::{Check, CheckKind};
 use grove_ops::env::ShareOutcome;
 use grove_ops::git::FastForward;
+use grove_ops::pool::PoolStatus;
 use grove_ops::roots::{Applied, SyncReport};
 use grove_ops::wire::ReconcileStatus;
 
@@ -92,28 +93,24 @@ const fn trunk(outcome: FastForward) -> &'static str {
 pub fn doctor(d: &DoctorData) -> String {
     let mut out = String::new();
     if d.report.is_empty() {
-        out.push_str("no shares declared\n");
+        out += "no shares declared\n";
     }
     for row in &d.report {
-        let (at, why) = (
-            suffix(" @", row.worktree.as_deref()),
-            suffix(" — ", row.reason.as_deref()),
-        );
+        let at = suffix(" @", row.worktree.as_deref());
+        let why = suffix(" — ", row.reason.as_deref());
         let _ = writeln!(out, "{} {}{at}: {:?}{why}", row.slug, row.path, row.status);
     }
     // Under-fill is the operator's recovery signal when a background refill failed (it
     // retries on the next event, not a timer).
-    for row in &d.pools {
-        let flag = if row.observed < row.target as usize {
-            " (under-filled)"
-        } else {
-            ""
-        };
-        let _ = writeln!(
-            out,
-            "pool {}: {}/{}{flag}",
-            row.slug, row.observed, row.target
-        );
+    for PoolStatus {
+        slug,
+        observed,
+        target,
+    } in &d.pools
+    {
+        let under = *observed < *target as usize;
+        let flag = if under { " (under-filled)" } else { "" };
+        let _ = writeln!(out, "pool {slug}: {observed}/{target}{flag}");
     }
     // Degraded-first, the recovery signal when a clone wedged; steady `ready` roots stay
     // quiet. The error is indented under its row: `degraded` alone reads as "the clone
@@ -140,24 +137,21 @@ pub fn doctor(d: &DoctorData) -> String {
             .iter()
             .filter(|row| row.check == kind)
             .partition(|row| row.is_finding());
-        let name = label(kind);
         match (findings.len(), findings.len() + ok.len()) {
             (_, 0) => {}
             (0, n) => {
-                let _ = writeln!(out, "check {name}: {n} ok");
+                let _ = writeln!(out, "check {}: {n} ok", label(kind));
             }
             (f, n) => {
-                let _ = writeln!(out, "check {name}: {f} of {n} need attention");
+                let _ = writeln!(out, "check {}: {f} of {n} need attention", label(kind));
                 for row in findings {
                     let at = [row.slug.as_deref(), row.name.as_deref()]
                         .into_iter()
                         .flatten()
                         .collect::<Vec<_>>()
                         .join(" ");
-                    let (at, why) = (
-                        suffix(" ", Some(at.as_str()).filter(|at| !at.is_empty())),
-                        suffix(" — ", row.detail.as_deref()),
-                    );
+                    let at = suffix(" ", Some(at.as_str()).filter(|at| !at.is_empty()));
+                    let why = suffix(" — ", row.detail.as_deref());
                     let _ = writeln!(out, "  {:?}{at}{why}", row.status);
                 }
             }
@@ -208,14 +202,10 @@ pub fn fail_on_unresolved(rows: &[ShareOutcome]) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{applied, doctor, fail_on_unresolved, sync_report};
-    use grove_api::{DoctorData, RootStatus, RootStatusEntry};
-    use grove_ops::doctor::{Check, CheckKind, CheckStatus};
-    use grove_ops::env::{ShareOutcome, ShareStatus};
-    use grove_ops::git::FastForward;
-    use grove_ops::pool::PoolStatus;
-    use grove_ops::roots::{Applied, SyncReport};
-    use grove_ops::wire::ReconcileStatus;
+    use super::*;
+    use grove_api::RootStatusEntry;
+    use grove_ops::doctor::CheckStatus;
+    use grove_ops::env::ShareStatus;
 
     fn share(status: ShareStatus) -> ShareOutcome {
         ShareOutcome {
@@ -267,40 +257,37 @@ mod tests {
     #[test]
     fn the_sync_report_reads_exactly_so() {
         use FastForward::{AlreadyCurrent, Dirty, Diverged, Updated};
-        for (fetched, trunk, stale_slots_pruned, want) in [
-            (
-                true,
-                Updated,
-                0,
-                "synced o/r: fetched, trunk updated\n  tip abc\n",
-            ),
-            (
-                false,
-                AlreadyCurrent,
-                1,
-                "synced o/r: not fetched, trunk already current\n  tip abc\n  1 stale pool slot recycled\n",
-            ),
-            (
-                true,
-                Diverged,
-                3,
-                "synced o/r: fetched, trunk diverged — local commits kept, nothing forced\n  tip abc\n  3 stale pool slots recycled\n",
-            ),
-            (
-                true,
-                Dirty,
-                0,
-                "synced o/r: fetched, trunk dirty — uncommitted tracked files kept, nothing forced\n  tip abc\n",
-            ),
-        ] {
-            let report = SyncReport {
-                fetched,
-                trunk,
-                tip: "abc".into(),
-                stale_slots_pruned,
-            };
-            assert_eq!(sync_report("o/r", &report), want);
-        }
+        let sync = |fetched, trunk, stale_slots_pruned| {
+            sync_report(
+                "o/r",
+                &SyncReport {
+                    fetched,
+                    trunk,
+                    tip: "abc".into(),
+                    stale_slots_pruned,
+                },
+            )
+        };
+        assert_eq!(
+            [
+                sync(true, Updated, 0),
+                sync(false, AlreadyCurrent, 1),
+                sync(true, Diverged, 3),
+                sync(true, Dirty, 0),
+            ]
+            .concat(),
+            "synced o/r: fetched, trunk updated
+  tip abc
+synced o/r: not fetched, trunk already current
+  tip abc
+  1 stale pool slot recycled
+synced o/r: fetched, trunk diverged — local commits kept, nothing forced
+  tip abc
+  3 stale pool slots recycled
+synced o/r: fetched, trunk dirty — uncommitted tracked files kept, nothing forced
+  tip abc
+"
+        );
     }
 
     /// Every arm of every section, and all nine check labels, byte for byte. The
@@ -308,6 +295,8 @@ mod tests {
     /// key, and must not leave a trailing space.
     #[test]
     fn the_doctor_report_reads_exactly_so() {
+        use CheckKind::{Drift, Manifest, OrphanCode, Worktree};
+        use CheckStatus::{Invalid, Mismatch, Ok, Undeclared};
         assert_eq!(doctor(&DoctorData::default()), "no shares declared\n");
         let check =
             |check, status, slug: Option<&str>, name: Option<&str>, detail: Option<&str>| Check {
@@ -317,33 +306,13 @@ mod tests {
                 name: name.map(Into::into),
                 detail: detail.map(Into::into),
             };
-        let mut checks: Vec<_> = CheckKind::ALL
-            .map(|kind| check(kind, CheckStatus::Ok, None, None, None))
-            .into();
-        checks.extend([
-            check(CheckKind::Manifest, CheckStatus::Invalid, None, None, None),
-            check(
-                CheckKind::OrphanCode,
-                CheckStatus::Mismatch,
-                Some(""),
-                None,
-                None,
-            ),
-            check(
-                CheckKind::Worktree,
-                CheckStatus::Mismatch,
-                Some("o/r"),
-                Some("feat"),
-                Some("on `x`"),
-            ),
-            check(
-                CheckKind::Drift,
-                CheckStatus::Undeclared,
-                Some("o/r"),
-                None,
-                None,
-            ),
-        ]);
+        let mut checks = vec![
+            check(Manifest, Invalid, None, None, None),
+            check(OrphanCode, Mismatch, Some(""), None, None),
+            check(Worktree, Mismatch, Some("o/r"), Some("feat"), Some("x")),
+            check(Drift, Undeclared, Some("o/r"), None, None),
+        ];
+        checks.extend(CheckKind::ALL.map(|k| check(k, Ok, None, None, None)));
         let root = |slug: &str, status, error: Option<&str>| RootStatusEntry {
             slug: slug.into(),
             status,
@@ -393,7 +362,7 @@ check root: 1 ok
 check bare: 1 ok
 check trunk: 1 ok
 check worktree: 1 of 2 need attention
-  Mismatch o/r feat — on `x`
+  Mismatch o/r feat — x
 check drift: 1 of 2 need attention
   Undeclared o/r
 "
