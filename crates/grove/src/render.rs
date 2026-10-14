@@ -16,7 +16,6 @@ use grove_api::{DoctorData, RootStatus};
 use grove_ops::doctor::{Check, CheckKind};
 use grove_ops::env::ShareOutcome;
 use grove_ops::git::FastForward;
-use grove_ops::pool::PoolStatus;
 use grove_ops::roots::{Applied, SyncReport};
 use grove_ops::wire::ReconcileStatus;
 
@@ -102,15 +101,10 @@ pub fn doctor(d: &DoctorData) -> String {
     }
     // Under-fill is the operator's recovery signal when a background refill failed (it
     // retries on the next event, not a timer).
-    for PoolStatus {
-        slug,
-        observed,
-        target,
-    } in &d.pools
-    {
-        let under = *observed < *target as usize;
+    for p in &d.pools {
+        let under = p.observed < p.target as usize;
         let flag = if under { " (under-filled)" } else { "" };
-        let _ = writeln!(out, "pool {slug}: {observed}/{target}{flag}");
+        let _ = writeln!(out, "pool {}: {}/{}{flag}", p.slug, p.observed, p.target);
     }
     // Degraded-first, the recovery signal when a clone wedged; steady `ready` roots stay
     // quiet. The error is indented under its row: `degraded` alone reads as "the clone
@@ -206,6 +200,7 @@ mod tests {
     use grove_api::RootStatusEntry;
     use grove_ops::doctor::CheckStatus;
     use grove_ops::env::ShareStatus;
+    use grove_ops::pool::PoolStatus;
 
     fn share(status: ShareStatus) -> ShareOutcome {
         ShareOutcome {
