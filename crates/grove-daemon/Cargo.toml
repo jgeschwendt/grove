@@ -24,6 +24,7 @@ grove-ops = { path = "../grove-ops" }
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 # `rt-multi-thread` is the runtime `grove serve` builds; `sync` carries the shutdown
 # watch, the reconcile mailbox, the lanes and the event bus; `time` the shutdown
 # grace and the clock-seam waits.
