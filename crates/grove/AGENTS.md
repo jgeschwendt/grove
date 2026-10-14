@@ -35,8 +35,8 @@ edges:
 
 ## Anchors in this territory
 
-- ※ apply-is-ungated → src/commands.rs:553
-- ※ busy-refuses-destructive → src/commands.rs:70
+- ※ apply-is-ungated → src/commands.rs:552
+- ※ busy-refuses-destructive → src/commands.rs:69
 - ※ cli-health-poll → src/server.rs:489
 - ※ pending-marker → src/update/layout.rs:178
 - ※ reachability-tri-state → src/api.rs:136
