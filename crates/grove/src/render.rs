@@ -10,19 +10,21 @@
 //! to the catch-all arm and turned a failed apply into a success. The enums make that
 //! unrepresentable — every match below is total.
 
-use grove_api::RootStatusEntry;
+use std::fmt::Write;
+
+use grove_api::{DoctorData, RootStatus};
 use grove_ops::doctor::{Check, CheckKind};
 use grove_ops::env::ShareOutcome;
 use grove_ops::git::FastForward;
-use grove_ops::pool::PoolStatus;
 use grove_ops::roots::{Applied, SyncReport};
 use grove_ops::wire::ReconcileStatus;
 
 use crate::CliError;
 
-/// One line per root touched by an apply or a `clone add`. Failures go to stderr:
-/// they are the half an operator pipes somewhere else.
-pub fn applied(rows: &[Applied]) {
+/// One line per root touched by an apply or a `clone add`, then exit 1 when any root
+/// failed to realize. Failures go to stderr: they are the half an operator pipes
+/// somewhere else.
+pub fn applied(rows: &[Applied]) -> Result<(), CliError> {
     for row in rows {
         match row.status {
             ReconcileStatus::Cloned => println!(
@@ -38,15 +40,7 @@ pub fn applied(rows: &[Applied]) {
             ),
         }
     }
-}
-
-/// Exit 1 when any root failed to realize. Typed, not string-matched: a new
-/// [`ReconcileStatus`] must be classified here before this compiles.
-pub fn fail_if_any_failed(rows: &[Applied]) -> Result<(), CliError> {
-    if rows
-        .iter()
-        .any(|row| matches!(row.status, ReconcileStatus::Failed))
-    {
+    if rows.iter().any(|row| row.status == ReconcileStatus::Failed) {
         Err(CliError::Api(
             "one or more repositories failed to apply".into(),
         ))
@@ -65,21 +59,20 @@ pub fn fail_if_any_failed(rows: &[Applied]) -> Result<(), CliError> {
 /// The lines, in the order an operator reads them: what happened to the trunk, then
 /// where it now sits, then what the prune cost the warm pool. The tip and the prune
 /// count are indented because they are consequences of the first line, not peers of it.
-pub fn sync_report(slug: &str, report: &SyncReport) {
-    let fetched = if report.fetched {
-        "fetched"
-    } else {
-        "not fetched"
-    };
-    println!("synced {slug}: {fetched}, trunk {}", trunk(report.trunk));
-    println!("  tip {}", report.tip);
+pub fn sync_report(slug: &str, report: &SyncReport) -> String {
+    let not = if report.fetched { "" } else { "not " };
+    let mut out = format!(
+        "synced {slug}: {not}fetched, trunk {}\n  tip {}\n",
+        trunk(report.trunk),
+        report.tip
+    );
     // Silent at zero: a steady-state sync prunes nothing, and a line saying so every
     // time trains an operator to skip the place the interesting number appears.
-    match report.stale_slots_pruned {
-        0 => {}
-        1 => println!("  1 stale pool slot recycled"),
-        n => println!("  {n} stale pool slots recycled"),
+    if let n @ 1.. = report.stale_slots_pruned {
+        let s = if n == 1 { "" } else { "s" };
+        let _ = writeln!(out, "  {n} stale pool slot{s} recycled");
     }
+    out
 }
 
 /// A fast-forward outcome as an operator reads it. Total over [`FastForward`], so a
@@ -95,102 +88,87 @@ const fn trunk(outcome: FastForward) -> &'static str {
     }
 }
 
-/// The share half of a doctor report — one row per declared share path.
-pub fn report(rows: &[ShareOutcome]) {
-    if rows.is_empty() {
-        println!("no shares declared");
+/// The whole doctor report: shares, pools, non-`ready` roots, then the plumbing checks.
+pub fn doctor(d: &DoctorData) -> String {
+    let mut out = String::new();
+    if d.report.is_empty() {
+        out.push_str("no shares declared\n");
     }
-    for row in rows {
-        let at = row
-            .worktree
-            .as_deref()
-            .map_or(String::new(), |w| format!(" @{w}"));
-        let why = row
-            .reason
-            .as_deref()
-            .map_or(String::new(), |r| format!(" — {r}"));
-        println!("{} {}{at}: {:?}{why}", row.slug, row.path, row.status);
+    for row in &d.report {
+        let (at, why) = (
+            suffix(" @", row.worktree.as_deref()),
+            suffix(" — ", row.reason.as_deref()),
+        );
+        let _ = writeln!(out, "{} {}{at}: {:?}{why}", row.slug, row.path, row.status);
     }
-}
-
-/// Pool levels, flagging under-fill — the operator's recovery signal when a
-/// background refill failed (it retries on the next event, not a timer).
-pub fn pools(rows: &[PoolStatus]) {
-    for row in rows {
+    // Under-fill is the operator's recovery signal when a background refill failed (it
+    // retries on the next event, not a timer).
+    for row in &d.pools {
         let flag = if row.observed < row.target as usize {
             " (under-filled)"
         } else {
             ""
         };
-        println!("pool {}: {}/{}{flag}", row.slug, row.observed, row.target);
-    }
-}
-
-/// Per-root engine status, degraded-first — the operator's recovery signal when a
-/// clone wedged. Steady `ready` roots stay quiet; only non-`ready` rows print.
-pub fn statuses(rows: &[RootStatusEntry]) {
-    let mut rows: Vec<_> = rows
-        .iter()
-        .filter(|row| row.status != grove_api::RootStatus::Ready)
-        .collect();
-    rows.sort_by(|a, b| {
-        a.status
-            .as_str()
-            .cmp(b.status.as_str())
-            .then_with(|| a.slug.cmp(&b.slug))
-    });
-    for row in rows {
-        println!("root {}: {}", row.slug, row.status.as_str());
-        // Indented under the row it explains: `degraded` alone reads as "the clone
-        // broke", and grove's refusals — a legacy layout, an occupied root
-        // directory — are the opposite, each naming the command that clears it.
-        if let Some(error) = &row.error {
-            println!("  {error}");
-        }
-    }
-}
-
-/// The git-plumbing pass, grouped by what was inspected.
-///
-/// Grouped rather than interleaved because the kinds answer different questions — "is
-/// the manifest sound", "is this root's git there", "does declared match actual" — and
-/// an operator scans for the group, not the row. Passing checks are summarized in one
-/// line per kind; findings print in full, because a finding is the reason to run this.
-pub fn checks(rows: &[Check]) {
-    for kind in CheckKind::ALL {
-        let group: Vec<&Check> = rows.iter().filter(|row| row.check == kind).collect();
-        if group.is_empty() {
-            continue;
-        }
-        let findings: Vec<&&Check> = group.iter().filter(|row| row.is_finding()).collect();
-        if findings.is_empty() {
-            println!("check {}: {} ok", label(kind), group.len());
-            continue;
-        }
-        println!(
-            "check {}: {} of {} need attention",
-            label(kind),
-            findings.len(),
-            group.len()
+        let _ = writeln!(
+            out,
+            "pool {}: {}/{}{flag}",
+            row.slug, row.observed, row.target
         );
-        for row in findings {
-            let at = [row.slug.as_deref(), row.name.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let at = if at.is_empty() {
-                String::new()
-            } else {
-                format!(" {at}")
-            };
-            let why = row
-                .detail
-                .as_deref()
-                .map_or(String::new(), |d| format!(" — {d}"));
-            println!("  {:?}{at}{why}", row.status);
+    }
+    // Degraded-first, the recovery signal when a clone wedged; steady `ready` roots stay
+    // quiet. The error is indented under its row: `degraded` alone reads as "the clone
+    // broke", and grove's refusals — a legacy layout, an occupied root directory — are
+    // the opposite, each naming the command that clears it.
+    let mut rows: Vec<_> = d
+        .statuses
+        .iter()
+        .filter(|row| row.status != RootStatus::Ready)
+        .collect();
+    rows.sort_by_key(|&row| (row.status.as_str(), &row.slug));
+    for row in rows {
+        let _ = writeln!(out, "root {}: {}", row.slug, row.status.as_str());
+        if let Some(error) = &row.error {
+            let _ = writeln!(out, "  {error}");
         }
     }
+    // Grouped by kind, because the kinds answer different questions and an operator
+    // scans for the group, not the row. Passing checks are summarized in one line per
+    // kind; findings print in full, because a finding is the reason to run this.
+    for kind in CheckKind::ALL {
+        let (findings, ok): (Vec<&Check>, Vec<_>) = d
+            .checks
+            .iter()
+            .filter(|row| row.check == kind)
+            .partition(|row| row.is_finding());
+        let name = label(kind);
+        match (findings.len(), findings.len() + ok.len()) {
+            (_, 0) => {}
+            (0, n) => {
+                let _ = writeln!(out, "check {name}: {n} ok");
+            }
+            (f, n) => {
+                let _ = writeln!(out, "check {name}: {f} of {n} need attention");
+                for row in findings {
+                    let at = [row.slug.as_deref(), row.name.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let (at, why) = (
+                        suffix(" ", Some(at.as_str()).filter(|at| !at.is_empty())),
+                        suffix(" — ", row.detail.as_deref()),
+                    );
+                    let _ = writeln!(out, "  {:?}{at}{why}", row.status);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// An optional tail: `sep` and the value when there is one, nothing when there is not.
+fn suffix(sep: &str, value: Option<&str>) -> String {
+    value.map_or_else(String::new, |v| format!("{sep}{v}"))
 }
 
 /// A check kind's operator-facing name. Total over [`CheckKind`], so a new kind must
@@ -213,11 +191,11 @@ const fn label(kind: CheckKind) -> &'static str {
 /// unresolved conflicts → exit 5 (`Conflict`, a usable CI gate even under
 /// `--dry-run`); else success.
 ///
-/// The plumbing [`checks`] are **report-only** and deliberately exit-neutral, for the
-/// reason `grove_ops::doctor` states: a `missing`/`undeclared`/`mismatch` finding is
-/// either drift the reconciler already owns or a human's edit to reconcile with, and a
-/// `grove doctor` that exits non-zero on ordinary transient drift is a gate nobody can
-/// wire into anything.
+/// The plumbing checks [`doctor`] renders are **report-only** and deliberately
+/// exit-neutral, for the reason `grove_ops::doctor` states: a
+/// `missing`/`undeclared`/`mismatch` finding is either drift the reconciler already
+/// owns or a human's edit to reconcile with, and a `grove doctor` that exits non-zero
+/// on ordinary transient drift is a gate nobody can wire into anything.
 pub fn fail_on_unresolved(rows: &[ShareOutcome]) -> Result<(), CliError> {
     if rows.iter().any(|row| row.status.is_error()) {
         Err(CliError::Api("doctor: one or more checks errored".into()))
@@ -230,9 +208,13 @@ pub fn fail_on_unresolved(rows: &[ShareOutcome]) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fail_if_any_failed, fail_on_unresolved};
+    use super::{applied, doctor, fail_on_unresolved, sync_report};
+    use grove_api::{DoctorData, RootStatus, RootStatusEntry};
+    use grove_ops::doctor::{Check, CheckKind, CheckStatus};
     use grove_ops::env::{ShareOutcome, ShareStatus};
-    use grove_ops::roots::Applied;
+    use grove_ops::git::FastForward;
+    use grove_ops::pool::PoolStatus;
+    use grove_ops::roots::{Applied, SyncReport};
     use grove_ops::wire::ReconcileStatus;
 
     fn share(status: ShareStatus) -> ShareOutcome {
@@ -245,104 +227,176 @@ mod tests {
         }
     }
 
-    fn applied(status: ReconcileStatus) -> Applied {
-        Applied {
-            slug: "o/r".into(),
-            status,
-            default_branch: Some("main".into()),
-            error: None,
-        }
+    fn code(rows: &[ShareOutcome]) -> u8 {
+        fail_on_unresolved(rows).unwrap_err().exit_code()
     }
 
-    /// v1's `doctor_exit_code_is_conflict_on_unresolved`, carried whole.
+    /// v1's `doctor_exit_code_is_conflict_on_unresolved`, carried whole — and the
+    /// conflict count is the message, so a CI log says how much work is left.
     #[test]
     fn doctor_exit_code_is_conflict_on_unresolved() {
-        assert!(fail_on_unresolved(&[share(ShareStatus::Ok), share(ShareStatus::Linked)]).is_ok());
-        assert_eq!(
-            fail_on_unresolved(&[share(ShareStatus::Conflict)])
-                .unwrap_err()
-                .exit_code(),
-            5
-        );
-        assert_eq!(
-            fail_on_unresolved(&[share(ShareStatus::Error)])
-                .unwrap_err()
-                .exit_code(),
-            1
-        );
+        use ShareStatus::{Conflict, Error, Linked, Ok};
+        assert!(fail_on_unresolved(&[share(Ok), share(Linked)]).is_ok());
+        assert_eq!(code(&[share(Conflict)]), 5);
+        assert_eq!(code(&[share(Error)]), 1);
         // An error outranks a conflict (exit 1 wins).
-        assert_eq!(
-            fail_on_unresolved(&[share(ShareStatus::Conflict), share(ShareStatus::Error)])
-                .unwrap_err()
-                .exit_code(),
-            1
-        );
-    }
-
-    /// The conflict count is the message, so a CI log says how much work is left.
-    #[test]
-    fn the_conflict_count_reaches_the_message() {
-        let err = fail_on_unresolved(&[share(ShareStatus::Conflict), share(ShareStatus::Conflict)])
-            .unwrap_err();
-        assert!(err.to_string().starts_with("2 unresolved"), "{err}");
+        assert_eq!(code(&[share(Conflict), share(Error)]), 1);
+        let err = fail_on_unresolved(&[share(Conflict), share(Conflict)]).unwrap_err();
+        assert_eq!(err.to_string(), "2 unresolved conflict(s)");
     }
 
     /// The v1 defect this closes: the verdict read `a.status == "failed"`, so a
     /// renamed wire spelling would have made a failed apply exit 0. Typed now.
     #[test]
     fn a_failed_root_is_exit_1_and_the_others_are_not() {
-        assert!(
-            fail_if_any_failed(&[
-                applied(ReconcileStatus::Cloned),
-                applied(ReconcileStatus::Present)
-            ])
-            .is_ok()
-        );
-        let err = fail_if_any_failed(&[
-            applied(ReconcileStatus::Present),
-            applied(ReconcileStatus::Failed),
-        ])
-        .unwrap_err();
+        use ReconcileStatus::{Cloned, Failed, Present};
+        let row = |status| Applied {
+            slug: "o/r".into(),
+            status,
+            default_branch: Some("main".into()),
+            error: None,
+        };
+        assert!(applied(&[row(Cloned), row(Present)]).is_ok());
+        let err = applied(&[row(Present), row(Failed)]).unwrap_err();
         assert_eq!(err.exit_code(), 1);
     }
 
-    /// Every fast-forward outcome is given words, and the two that leave the trunk
-    /// untouched say so — carried law 9 makes "nothing moved" the answer, and an
-    /// operator who reads only `diverged` has no idea whether their commits survived.
+    /// Every fast-forward outcome in words — the two that leave the trunk untouched say
+    /// "nothing forced", since carried law 9 makes that the answer — and the prune
+    /// line silent at zero.
     #[test]
-    fn every_trunk_outcome_reads_as_prose_and_the_untouched_ones_say_so() {
-        use grove_ops::git::FastForward;
-
-        for outcome in [
-            FastForward::Updated,
-            FastForward::AlreadyCurrent,
-            FastForward::Diverged,
-            FastForward::Dirty,
+    fn the_sync_report_reads_exactly_so() {
+        use FastForward::{AlreadyCurrent, Dirty, Diverged, Updated};
+        for (fetched, trunk, stale_slots_pruned, want) in [
+            (
+                true,
+                Updated,
+                0,
+                "synced o/r: fetched, trunk updated\n  tip abc\n",
+            ),
+            (
+                false,
+                AlreadyCurrent,
+                1,
+                "synced o/r: not fetched, trunk already current\n  tip abc\n  1 stale pool slot recycled\n",
+            ),
+            (
+                true,
+                Diverged,
+                3,
+                "synced o/r: fetched, trunk diverged — local commits kept, nothing forced\n  tip abc\n  3 stale pool slots recycled\n",
+            ),
+            (
+                true,
+                Dirty,
+                0,
+                "synced o/r: fetched, trunk dirty — uncommitted tracked files kept, nothing forced\n  tip abc\n",
+            ),
         ] {
-            assert!(!super::trunk(outcome).is_empty(), "{outcome:?}");
-        }
-        for outcome in [FastForward::Diverged, FastForward::Dirty] {
-            assert!(
-                super::trunk(outcome).contains("nothing forced"),
-                "{outcome:?}: {}",
-                super::trunk(outcome)
-            );
+            let report = SyncReport {
+                fetched,
+                trunk,
+                tip: "abc".into(),
+                stale_slots_pruned,
+            };
+            assert_eq!(sync_report("o/r", &report), want);
         }
     }
 
-    /// Every check kind has an operator-facing label — the match is total, so this is
-    /// a guard on the labels themselves being distinct and non-empty rather than on
-    /// coverage, which the compiler already owns.
+    /// Every arm of every section, and all nine check labels, byte for byte. The
+    /// orphan-code finding's `Some("")` slug is the manifest audit's for a `[roots.""]`
+    /// key, and must not leave a trailing space.
     #[test]
-    fn every_check_kind_has_a_distinct_label() {
-        let mut labels: Vec<&str> = grove_ops::doctor::CheckKind::ALL
-            .iter()
-            .map(|kind| super::label(*kind))
-            .collect();
-        assert!(labels.iter().all(|l| !l.is_empty()));
-        labels.sort_unstable();
-        let len = labels.len();
-        labels.dedup();
-        assert_eq!(labels.len(), len);
+    fn the_doctor_report_reads_exactly_so() {
+        assert_eq!(doctor(&DoctorData::default()), "no shares declared\n");
+        let check =
+            |check, status, slug: Option<&str>, name: Option<&str>, detail: Option<&str>| Check {
+                check,
+                status,
+                slug: slug.map(Into::into),
+                name: name.map(Into::into),
+                detail: detail.map(Into::into),
+            };
+        let mut checks: Vec<_> = CheckKind::ALL
+            .map(|kind| check(kind, CheckStatus::Ok, None, None, None))
+            .into();
+        checks.extend([
+            check(CheckKind::Manifest, CheckStatus::Invalid, None, None, None),
+            check(
+                CheckKind::OrphanCode,
+                CheckStatus::Mismatch,
+                Some(""),
+                None,
+                None,
+            ),
+            check(
+                CheckKind::Worktree,
+                CheckStatus::Mismatch,
+                Some("o/r"),
+                Some("feat"),
+                Some("on `x`"),
+            ),
+            check(
+                CheckKind::Drift,
+                CheckStatus::Undeclared,
+                Some("o/r"),
+                None,
+                None,
+            ),
+        ]);
+        let root = |slug: &str, status, error: Option<&str>| RootStatusEntry {
+            slug: slug.into(),
+            status,
+            error: error.map(Into::into),
+        };
+        let pool = |slug: &str, observed, target| PoolStatus {
+            slug: slug.into(),
+            observed,
+            target,
+        };
+        let data = DoctorData {
+            report: vec![
+                share(ShareStatus::Linked),
+                ShareOutcome {
+                    worktree: None,
+                    path: "cfg".into(),
+                    reason: Some("differs".into()),
+                    ..share(ShareStatus::Conflict)
+                },
+            ],
+            pools: vec![pool("o/r", 2, 2), pool("x/y", 0, 3)],
+            statuses: vec![
+                root("a/a", RootStatus::Ready, None),
+                root("z/z", RootStatus::Degraded, Some("occupied")),
+                root("c/c", RootStatus::Missing, None),
+                root("b/b", RootStatus::Degraded, None),
+            ],
+            checks,
+        };
+        assert_eq!(
+            doctor(&data),
+            "o/r .env @feat: Linked
+o/r cfg: Conflict — differs
+pool o/r: 2/2
+pool x/y: 0/3 (under-filled)
+root b/b: degraded
+root z/z: degraded
+  occupied
+root c/c: missing
+check manifest: 1 of 2 need attention
+  Invalid
+check install-under-home: 1 ok
+check legacy-layout: 1 ok
+check orphan-code: 1 of 2 need attention
+  Mismatch
+check root: 1 ok
+check bare: 1 ok
+check trunk: 1 ok
+check worktree: 1 of 2 need attention
+  Mismatch o/r feat — on `x`
+check drift: 1 of 2 need attention
+  Undeclared o/r
+"
+        );
     }
 }

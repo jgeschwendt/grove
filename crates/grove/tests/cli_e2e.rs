@@ -488,3 +488,16 @@ fn slow_the_offline_flow_realizes_in_process() {
     );
     grove(&home, bind, &["version"]).ok().says("grove 0.");
 }
+
+/// A root whose remote will not clone fails the apply: exit 1, and the failure on
+/// stderr, the half an operator pipes somewhere else.
+#[test]
+fn an_unclonable_root_fails_the_apply() {
+    let tmp = TempDir::new().unwrap();
+    let (home, src) = scratch(&tmp);
+    let toml = format!("[roots.\"{SLUG}\"]\nurl = \"{src}/missing\"\n");
+    std::fs::write(home.join("manifest.toml"), toml).unwrap();
+    let run = grove(&home, None, &["apply"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("failed  o/r: "), "{}", run.stderr);
+}
