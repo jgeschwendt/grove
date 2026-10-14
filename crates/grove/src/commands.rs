@@ -54,8 +54,7 @@ pub fn clone_add(home: &Path, api: &ApiClient, url: &str) -> Result<(), CliError
         // Offline: declare and realize just this root — clone only the one new bare.
         Reachability::Offline => {
             let applied = grove_ops::roots::add(home, &slug, url)?;
-            render::applied(&applied);
-            render::fail_if_any_failed(&applied)
+            render::applied(&applied)
         }
     }
 }
@@ -531,7 +530,7 @@ pub fn sync(home: &Path, api: &ApiClient, slug: &str) -> Result<(), CliError> {
         )),
         Reachability::Offline => {
             let report = grove_ops::roots::sync(home, slug)?;
-            render::sync_report(slug, &report);
+            print!("{}", render::sync_report(slug, &report));
             Ok(())
         }
     }
@@ -553,8 +552,7 @@ pub fn sync(home: &Path, api: &ApiClient, slug: &str) -> Result<(), CliError> {
 // ※ apply-is-ungated
 pub fn apply(home: &Path) -> Result<(), CliError> {
     let applied = grove_ops::apply(home)?;
-    render::applied(&applied);
-    render::fail_if_any_failed(&applied)
+    render::applied(&applied)
 }
 
 /// `grove doctor [slug] [--dry-run] [--fix]`.
@@ -586,10 +584,7 @@ pub fn doctor(
         }
     };
 
-    render::report(&data.report);
-    render::pools(&data.pools);
-    render::statuses(&data.statuses);
-    render::checks(&data.checks);
+    print!("{}", render::doctor(&data));
     render::fail_on_unresolved(&data.report)
 }
 
