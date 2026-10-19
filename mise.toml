@@ -2,9 +2,9 @@
 # The PREBUILT nextest, not `cargo:cargo-nextest` — that backend is `cargo install`,
 # which compiles the runner from source on every cache miss, minutes CI spends
 # before it has run a single test of ours. nextest tags releases `cargo-nextest-<v>`
-# rather than `v<v>`, so the full tag is the version string here; `exe` names the
-# binary inside the tarball (the repo is `nextest`, the executable `cargo-nextest`).
-"github:nextest-rs/nextest" = { version = "cargo-nextest-0.9.143", exe = "cargo-nextest" }
+# rather than `v<v>`, so the full tag is the version string here. No `exe` option:
+# the github backend never read it, and mise ≥ 2026.10.14 fails the install on it.
+"github:nextest-rs/nextest" = "cargo-nextest-0.9.143"
 hk = "2.5.0"
 rust = "1.94.0"
 
