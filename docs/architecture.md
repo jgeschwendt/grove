@@ -341,7 +341,7 @@ stele emit --check  # the committed projections still match the lock
 stele build         # recompile the lock and re-stamp each claim's `verified` mark
 ```
 
-`check` and `emit --check` run in the lefthook pre-push hook and in CI. **`build` runs in
+`check` and `emit --check` run in the hk pre-push hook and in CI. **`build` runs in
 neither** — it re-stamps freshness, so a gate that ran it would launder staleness into a
 green tick. When `check` reports a stale claim, re-read the anchored code, satisfy yourself
 the claim still holds, then `stele build` by hand and commit the lock alongside the change
