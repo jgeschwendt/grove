@@ -100,7 +100,7 @@
       reference docs; history is in git.</p>
   </header>
   <div class="stack">
-    <h3 class="h3">The install is not the workspace <small>· v0.2.0, 0dd3281</small></h3>
+    <h3 class="h3">The install is not the workspace <small>· v0.2.0, ea9629a</small></h3>
     <p>Two roots with opposite lifecycles: <code class="code">$GROVE_INSTALL</code> (default
       <code class="code">~/.local/share/grove</code> — <code class="code">versions/</code>,
       <code class="code">current</code>, <code class="code">previous</code>,
@@ -182,7 +182,7 @@
         disk; under push-only nothing fires the event that would heal it.</li>
     </ul>
     <p>Approach: (1) <code class="code">remove</code> undeclares first, so a ghost reads
-      <code class="code">NotDeclared</code> and never reaches <code class="code">realize</code>,
+      <code class="code">NotDeclared</code> — a transient error, so the engine re-derives — and never reaches <code class="code">realize</code>,
       refusing or waiting while the cloning marker is held — but this inverts the live invariant
       <code class="code">※ delete-before-undeclare</code>, so the ordering must be settled first;
       (2) <code class="code">stop</code> sets a flag the lane job checks before it starts, so a queued
@@ -262,7 +262,7 @@
       keys that share one directory on case-insensitive APFS.</li>
     <li><strong><code class="code">version_key</code> misorders</strong> (plausible, low;
       <code class="code">update/layout.rs</code>). <code class="code">+build</code> metadata folds into
-      the core numbers and prereleases compare by number before label
+      the core numbers (<code class="code">0.4.0+1</code> &gt; <code class="code">0.4.0</code>) and prereleases compare by number before label
       (<code class="code">-canary.10</code> &gt; <code class="code">-rc.1</code>). Pruning order only:
       <code class="code">current</code> and <code class="code">previous</code> are protected.</li>
     <li><strong><code class="code">logs::redact</code> cuts at the first <code class="code">@</code></strong>
@@ -271,7 +271,7 @@
       in a password leaves its tail in the ring.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
-      branch living only on an operator-added remote is minted off <code class="code">HEAD</code>,
+      branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
       untracked. grove clones only <code class="code">origin</code>.</li>
   </ol>
 </section>
