@@ -24,7 +24,8 @@ $GROVE_INSTALL/                  # default ~/.local/share/grove
 **The install is not the workspace.** Everything above is release state: disposable,
 regenerable, owned by `grove up`, and knowing nothing about repos. `$GROVE_HOME`
 (default `~/.grove`) is the other root and holds the opposite — `manifest.toml` and its
-lock, `grove.lock`, `grove.pid`, `grove.log`, and every checkout under `code/`. Two
+lock, `grove.lock`, `grove.pid`, `grove.log`, every checkout under `code/`, and each repo's bare
+clone and pool under `roots/`. Two
 lifecycles, two knobs: the install can be deleted and re-installed at will, the
 workspace is the most valuable tree on the box. Both are resolved once, in `grove-ops`
 (`install_home` and `home`), and the CLI, the launcher and the daemon all read those
