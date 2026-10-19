@@ -1333,6 +1333,8 @@ mod tests {
             "w",
         ];
         crate::worktrees::create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
+        // A tag spelling the branch makes `%(refname:short)` read `heads/feature/x`.
+        crate::testfix::git(&bare_dir(&home, "o/r"), &["tag", "feature/x", "HEAD"]);
         std::fs::write(code.join("feat/README.md"), "precious").unwrap();
         crate::testfix::git(&code.join("feat"), &commit);
         let refusal = || {
