@@ -24,12 +24,12 @@ The per-feature plans live in `docs/plans/` (stele-ignored). This file is the in
 ## Sandbox notes for unattended shifts
 
 - `cargo nextest` fails ~118 tests in the shift sandbox: those binding loopback ports (EPERM), the `ps`-based `process_start_time_is_stable_for_a_live_pid`, and on the `ci` profile the FSEvents-backed `watcher::tests::slow_an_fs_write_to_the_manifest_announces`. These are sandbox denials, not regressions; gate them on a host run.
-- Coverage is not measured in the sandbox (`cargo-llvm-cov` is not installed), so a coverage claim needs a host run.
+- Coverage is measured under `shift-test` (`cargo llvm-cov nextest --workspace --summary-only`, loopback allowed there): 93.09 % lines at the s-20261019T0455Z landing.
 - `test/install_smoke.sh` needs a `mktemp` shim on `PATH` that roots templates under `$TMPDIR`: macOS `mktemp -d` ignores `TMPDIR` and the sandbox denies `/var/folders`.
 
 ## Sweep findings
 
-The s-20261012T0155Z gigasweep (report and ledger kept outside the repo) confirmed 21 defects by probe; fixed on trunk: shares blocking `tree remove`, doctor on an undeclared or non-canonical slug, the clone-remove guard missing branches/stash/foreign entries, the cloning marker not telling a live clone from a crashed one, DNS-rebinding reads, ready roots starved of clone permits, clone-permit FIFO churn, the self-update rollback and pending-marker windows, folded worktree-name collisions, a malformed `GROVE_BIND`, and the canary/install script gaps. Open, highest first:
+The s-20261012T0155Z gigasweep (report and ledger kept outside the repo) confirmed 21 defects by probe; fixed on trunk: shares blocking `tree remove`, doctor on an undeclared or non-canonical slug, the clone-remove guard missing branches/stash/foreign entries, the cloning marker not telling a live clone from a crashed one, DNS-rebinding reads, ready roots starved of clone permits, clone-permit FIFO churn, the self-update rollback and pending-marker windows, folded worktree-name collisions, a malformed `GROVE_BIND`, and the canary/install script gaps. The s-20261019T0455Z sweep fixed three more: userless scp-style slugs (`gh:o/r`), a new branch a tag spells checking out detached, and a tag-shadowed branch misnamed by the remove guard. Open, highest first:
 
 1. **`install_bundle` is not atomic** (confirmed, low). It runs `remove_dir_all(versions/<v>)` then extracts in place, even when `<v>` is the version `current` points at.
 2. **`is_under_trunk` forgets the old trunk** (confirmed, low). After a trunk change (main→canary), share links laid through `../main/` read as foreign.
@@ -37,3 +37,6 @@ The s-20261012T0155Z gigasweep (report and ledger kept outside the repo) confirm
 4. **`grove off` checks for any grove daemon, not this home's** (plausible, medium). It can shut down another home's daemon on the same bind.
 5. **An in-flight back-off is never retried** (plausible, low). A daemon booting during an offline CLI clone reports `failed: … in flight`; the CLI finishing raises no watched event, so status stays `failed` until the next manifest change. Same shape as Next #3.
 6. **Manifest writes don't fsync** (plausible, low). `write_doc` renames `manifest.toml.tmp` without fsyncing the file or its directory.
+7. **Slugs keep their case** (plausible, low). `slug_from_url` of `…/Foo/bar` and `…/foo/bar` mints two manifest keys that share one directory on case-insensitive APFS.
+8. **`version_key` misorders** (plausible, low; `update/layout.rs`). `+build` metadata folds into the core numbers (`0.4.0+1` > `0.4.0`) and prereleases compare by number before label (`-canary.10` > `-rc.1`). Pruning order only: `current` and `previous` are protected.
+9. **`logs::redact` cuts at the first `@`** (plausible, low; `grove-daemon/src/logs.rs`), `telemetry::redact_url` at the last, so a raw `@` in a password leaves its tail in the ring.
