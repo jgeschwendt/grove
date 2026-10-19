@@ -780,7 +780,11 @@ pub fn slug_from_url(url: &str) -> Result<String> {
 
     let rest = if let Some((_, after)) = s.split_once("://") {
         after.split_once('/').map_or("", |x| x.1)
-    } else if s.contains('@') && s.contains(':') {
+    } else if s
+        .split_once(':')
+        .is_some_and(|(host, _)| !host.contains('/'))
+    {
+        // scp-style, user or not: git's rule is a colon before any slash.
         s.rsplit_once(':').map_or(s, |(_, p)| p)
     } else {
         s
@@ -952,6 +956,10 @@ mod tests {
         assert_eq!(slug_from_url("https://github.com/o/r.git").unwrap(), "o/r");
         assert_eq!(slug_from_url("https://github.com/o/r").unwrap(), "o/r");
         assert_eq!(slug_from_url("git@github.com:o/r.git").unwrap(), "o/r");
+        // git reads `host:path` as scp-style ssh with or without a user — the
+        // ~/.ssh/config Host-alias shape.
+        assert_eq!(slug_from_url("gh:o/r.git").unwrap(), "o/r");
+        assert_eq!(slug_from_url("github.com:o/r").unwrap(), "o/r");
     }
 
     #[test]
