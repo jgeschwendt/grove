@@ -439,7 +439,7 @@ pub fn checks(home: &Path, slug: Option<&str>) -> Vec<Check> {
     out
 }
 
-/// The stage-5 migration from `docs/plans/install-home.md`, verbatim.
+/// The install/workspace split's migration (`docs/index.html` §Decisions).
 ///
 /// Doctor is report-only, so this string *is* the fix: an operator reads it and runs
 /// it. `grove doctor` closes that block and is deliberately absent here — it is the
