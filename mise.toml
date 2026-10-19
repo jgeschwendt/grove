@@ -19,15 +19,16 @@ run = "rustup component add rustfmt clippy"
 
 # First-run bootstrap. `hk install --mise` is the load-bearing line: hk is pinned
 # above and configured in hk.pkl, but a fresh clone has NO hook until something
-# writes `.git/hooks/pre-commit` — the gate protects nobody by default. `--force`
-# replaces a lefthook shim left by an older checkout, which would otherwise pass
-# silently. It must be fatal: a bootstrap that "succeeds" without the hook — or without
+# writes `.git/hooks/pre-commit` — the gate protects nobody by default.
+# `--legacy --force` writes `.git/hooks/` scripts over a lefthook shim an older
+# checkout left, which would otherwise keep running and gate nothing; `--force`
+# alone reaches only those scripts, and git ≥ 2.54 would get config hooks instead. It must be fatal: a bootstrap that "succeeds" without the hook — or without
 # the components `check` shells out to — is the failure this exists to prevent.
 [tasks.setup]
 depends = ["components"]
 description = "First-time bootstrap: toolchain components + git hooks + a warm build"
 run = """
-hk install --mise --force || exit 1
+hk install --mise --legacy --force || exit 1
 cargo build --workspace --all-targets
 """
 
