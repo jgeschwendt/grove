@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>grove — docs</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M8 3v10M8 7l-3-2M8 9l3-2' stroke='white' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body data-page="docs">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.810,87.810,0,0,1,16,10.54V195.830a87.810,87.810,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.090,103.090,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+<symbol id="ph-tree" viewBox="0 0 256 256" fill="currentColor"><path d="M198.1,62.6a76,76,0,0,0-140.2,0A72.27,72.27,0,0,0,16,127.8C15.89,166.62,47.36,199,86.14,200A71.68,71.68,0,0,0,120,192.49V232a8,8,0,0,0,16,0V192.49A71.45,71.45,0,0,0,168,200l1.86,0c38.78-1,70.25-33.36,70.14-72.18A72.26,72.26,0,0,0,198.1,62.6ZM169.45,184a55.61,55.61,0,0,1-32.52-9.4q-.47-.3-.93-.57V132.94l43.58-21.78a8,8,0,1,0-7.16-14.32L136,115.06V88a8,8,0,0,0-16,0v51.06L83.58,120.84a8,8,0,1,0-7.16,14.32L120,156.94V174q-.47.27-.93.57A55.7,55.7,0,0,1,86.55,184a56,56,0,0,1-22-106.86,15.9,15.9,0,0,0,8.05-8.33,60,60,0,0,1,110.7,0,15.9,15.9,0,0,0,8.05,8.33,56,56,0,0,1-22,106.86Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-tree" /></svg>
+    grove <small>· docs</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">desired state vs actual state</p>
+  <p class="lead docs-lead">grove cultivates git worktrees. <code class="code">manifest.toml</code>
+    declares desired state, git on disk is actual state, and grove converges them additively —
+    never deleting what it did not create. One Rust workspace, one binary;
+    <code class="code">grove serve</code> is the daemon, and every status it holds is a cache
+    re-derived from disk.</p>
+  <div class="row">
+    <span class="badge badge-accent">v0.3.0 · store and pool</span>
+    <span class="badge">files are authoritative</span>
+    <span class="badge">push-based, no timers</span>
+  </div>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#layout">root layout</a>
+    <a class="pill" href="#engine">engine lanes</a>
+    <a class="pill" href="#update">self-update</a>
+    <a class="pill" href="#decisions">decisions</a>
+    <a class="pill" href="#ghost">ghost reconcile</a>
+    <a class="pill" href="#plan">next</a>
+    <a class="pill" href="#findings">open findings</a>
+    <a class="pill" href="#shifts">unattended shifts</a>
+    <a class="pill" href="#reference">reference</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="layout" data-component="layout">
+  <header>
+    <h2 class="h2">The root layout</h2>
+    <p class="docs-note">Two trees under <code class="code">$GROVE_HOME</code>, one entry per root in
+      each: <code class="code">roots/&lt;owner&gt;/&lt;repo&gt;/</code> holds everything grove owns,
+      <code class="code">code/&lt;owner&gt;/&lt;repo&gt;/</code> holds checkouts and only checkouts.</p>
+  </header>
+  <figure class="figure"><img class="figure-light" src="figures/root-layout.png" alt="manifest.toml, the desired state, feeds roots::reconcile_one, which realizes two trees: roots/owner/repo holding bare/, pool/slot-N and the cloning marker, and code/owner/repo holding the trunk checkout, named worktrees and nothing else but .DS_Store; engine status, the warm-pool count and the log ring are daemon-memory caches re-derived from disk." /><img class="figure-dark" src="figures/root-layout-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>The root layout: files are authoritative, the daemon holds only caches of them. Source: Claude Design canvas <em>grove figures</em>, board root-layout (<code class="code">docs/figures/project/</code>).</figcaption></figure>
+</section>
+
+<section class="docs-section" id="engine" data-component="engine">
+  <header>
+    <h2 class="h2">Engine lanes</h2>
+    <p class="docs-note">One engine per declared root drives convergence through that root's lane;
+      the watcher only discovers and announces. Events, never a clock. Detail: <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a>.</p>
+  </header>
+  <figure class="figure"><img class="figure-light" src="figures/engine-lanes.png" alt="Triggers (nudge, manifest watch, boot) wake the watcher, which adopts undeclared bares and publishes roots_changed on the EventBus; engine::RootSet starts and stops one engine per declared root; each engine dispatches at most one of reconcile, sync or fill to its root's lane, which runs one git writer per root; an unrealized reconcile takes a ClonePermit; GET /api/events streams bus events and log lines; shutdown drains; grove on and off hold process custody." /><img class="figure-dark" src="figures/engine-lanes-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>Engine lanes. Source: Claude Design canvas <em>grove figures</em>, board engine-lanes.</figcaption></figure>
+</section>
+
+<section class="docs-section" id="update" data-component="update">
+  <header>
+    <h2 class="h2">Self-update</h2>
+    <p class="docs-note"><code class="code">grove up</code> installs into an immutable
+      <code class="code">versions/&lt;v&gt;/</code> and moves only <code class="code">current</code>. The
+      flip lands before the health gate answers, so the verdict it owes is written first, as the
+      <code class="code">pending</code> marker. Detail: <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/updates.md">updates.md</a>.</p>
+  </header>
+  <figure class="figure"><img class="figure-light" src="figures/self-update.png" alt="Six steps: fetch, verify the checksum, install into an immutable versions directory, flip current after writing the pending marker, bounce the daemon, gate on GET /api/health; a healthy gate clears pending and prunes, a rejected one flips back to previous; every grove up first recovers an unproven flip from pending." /><img class="figure-dark" src="figures/self-update-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>Self-update. Source: Claude Design canvas <em>grove figures</em>, board self-update.</figcaption></figure>
+</section>
+
+<section class="docs-section" id="decisions" data-component="decisions">
+  <header>
+    <h2 class="h2">Decisions</h2>
+    <p class="docs-note">Shipped designs, the choice each made and why. The mechanics live in the
+      reference docs; history is in git.</p>
+  </header>
+  <div class="stack">
+    <h3 class="h3">The install is not the workspace <small>· v0.2.0, 0dd3281</small></h3>
+    <p>Two roots with opposite lifecycles: <code class="code">$GROVE_INSTALL</code> (default
+      <code class="code">~/.local/share/grove</code> — <code class="code">versions/</code>,
+      <code class="code">current</code>, <code class="code">previous</code>,
+      <code class="code">channel</code>, <code class="code">pending</code>,
+      <code class="code">update.lock</code>) is disposable and owned by <code class="code">grove up</code>;
+      <code class="code">$GROVE_HOME</code> (default <code class="code">~/.grove</code>) is the
+      workspace and nothing else. Each has one resolution
+      (<code class="code">grove_ops::install_home</code>, <code class="code">home</code>), and the
+      launcher passes <code class="code">GROVE_INSTALL</code> to a served daemon. Why: uninstall used
+      to delete every checkout with the binary, and a second home had to carry its own install.
+      <code class="code">uninstall.sh</code> now removes the workspace only behind
+      <code class="code">--purge</code>; a stale layout is the doctor finding
+      <code class="code">install-under-home</code>, whose fix line is the four-line move.</p>
+
+    <h3 class="h3">The trunk is a branch, named by that branch <small>· v0.2.0, ea9629a</small></h3>
+    <p>Every checkout directory is <code class="code">worktrees::name_for(branch)</code>; the trunk is
+      the worktree the manifest's optional <code class="code">trunk</code> key points at, else the
+      bare's <code class="code">HEAD</code>. The manifest key is desired state, the bare's
+      <code class="code">HEAD</code> actual state, and reconcile sets one from the other
+      (<code class="code">git::set_head</code>). Changing the trunk is a manifest edit: the new trunk
+      checkout is ensured, shares repoint, and the old trunk stays on disk as an ordinary worktree —
+      no trunk change deletes anything. Why: a hidden role-named <code class="code">.trunk</code>
+      beside branch-named worktrees was two naming schemes, and some repos integrate on a branch other
+      than the remote default. The wire carries <code class="code">trunk_branch</code>.</p>
+
+    <h3 class="h3">Reconcile refuses a legacy or occupied root <small>· v0.2.2, b43745e</small></h3>
+    <p><code class="code">realize</code> never clones into a directory it does not own: a root in any
+      older layout is a <code class="code">Failed</code> outcome naming the generation and the remedy
+      (<code class="code">grove doctor --fix</code>), and a code dir holding anything but
+      <code class="code">.DS_Store</code> is refused naming the entries. Migration happens only in
+      <code class="code">doctor --fix</code>, where the operator asked for it; the error reaches
+      <code class="code">RootView.error</code> and <code class="code">grove tree list</code>, and the
+      doctor route nudges a migrated root to re-derive. Why: a daemon booted over sixteen pre-0.2 roots
+      re-cloned each beside its legacy layout — reconcile never consulted the doctor finding that
+      already knew.</p>
+
+    <h3 class="h3">A root holds checkouts and nothing else <small>· v0.3.0, 99b7299</small></h3>
+    <p>A <em>root</em> is a declared repo — <code class="code">[roots."o/r"]</code> in the manifest,
+      <code class="code">roots/o/r/</code> on disk (<code class="code">root_dir</code>) holding
+      <code class="code">bare/</code>, <code class="code">pool/slot-N</code> and the
+      <code class="code">cloning</code> marker; its <em>code dir</em> is
+      <code class="code">code/o/r/</code> (<code class="code">code_dir</code>). One word, one thing.
+      <code class="code">clone remove</code> deletes both, so nothing of a root survives elsewhere;
+      <code class="code">adopt</code> walks <code class="code">roots/</code>, and checkouts without a
+      root are the report-only finding <code class="code">orphan-code</code>. One detector
+      (<code class="code">layout::legacy</code>) names all three layout generations and
+      <code class="code">doctor --fix</code> migrates any of them to v3 idempotently, refusing a
+      half-moved root rather than guessing. The root view gains <code class="code">root</code>
+      (shown under <code class="code">--verbose</code>), and <code class="code">grove workspace</code>
+      writes a <code class="code">.code-workspace</code> of every checkout on demand. Why: grove's
+      private <code class="code">.bare</code> and <code class="code">.pool</code> sat in every editor
+      explorer beside the operator's checkouts, and every rule had to say "except grove's own
+      entries".</p>
+  </div>
+</section>
+
+<section class="docs-section" id="ghost" data-component="ghost">
+  <header>
+    <h2 class="h2">Open: a stopped engine must not keep writing the root</h2>
+    <p class="docs-note">Proposed · <a class="link" href="https://github.com/jgeschwendt/grove/issues/2">#2</a>.
+      Target: a stopped engine does no further writes to its root, and status never reports a
+      driver-owned failure over a disk that contradicts it.</p>
+  </header>
+  <div class="stack">
+    <p><code class="code">Engine::stop</code> is deliberately soft: in-flight lane work runs to
+      completion. The engine set's single owner closes the undeclare → redeclare race on the map, not
+      on the lane — a stopped engine's reconcile is still queued or running, still holds a clone
+      permit, and still reaches <code class="code">realize</code>, which repairs a declared-but-missing
+      root by cloning it. Two consequences:</p>
+    <ul>
+      <li><strong>A ghost reconcile re-clones a root being removed.</strong>
+        <code class="code">roots::remove</code> deletes before it undeclares, and between the steps the
+        root is declared and missing — exactly what <code class="code">realize</code> repairs. The
+        clone finishes after the engine stops, and an undeclared code dir reappears after
+        <code class="code">grove clone remove</code> reported it gone.</li>
+      <li><strong><code class="code">degraded</code> over a <code class="code">ready</code> disk is
+        never re-derived.</strong> <code class="code">apply_reconcile</code> maps a
+        <code class="code">failed</code> outcome to <code class="code">degraded</code> without reading
+        disk; under push-only nothing fires the event that would heal it.</li>
+    </ul>
+    <p>Approach: (1) <code class="code">remove</code> undeclares first, so a ghost reads
+      <code class="code">NotDeclared</code> and never reaches <code class="code">realize</code>,
+      refusing or waiting while the cloning marker is held — but this inverts the live invariant
+      <code class="code">※ delete-before-undeclare</code>, so the ordering must be settled first;
+      (2) <code class="code">stop</code> sets a flag the lane job checks before it starts, so a queued
+      job never begins and never takes a permit; (3) a <code class="code">failed</code> outcome over a
+      <code class="code">ready</code> disk publishes the failure on the bus but takes disk for status.
+      Out of scope: cancelling grove-ops work already running, such as a clone mid-transfer.</p>
+  </div>
+</section>
+
+<section class="docs-section" id="plan" data-component="plan">
+  <header>
+    <h2 class="h2">Next</h2>
+    <p class="docs-note">What is open, in order. Locations are symbols and
+      <code class="code">※</code> anchors, never line numbers.</p>
+  </header>
+  <ol id="next" class="steps">
+    <li><strong>Settle the <code class="code">remove</code> ordering before touching it.</strong>
+      Undeclare-first inverts <code class="code">※ delete-before-undeclare</code>
+      (<code class="code">roots::remove</code>, claim in <code class="code">crates/grove-ops/AGENTS.md</code>,
+      asserted by <code class="code">crates/grove-daemon/tests/scenario.rs</code>), whose rationale is
+      that undeclaring first lets <code class="code">adopt</code> re-declare a still-present bare. Pick
+      one ordering and rewrite the claim with it; the marker is
+      <code class="code">roots/&lt;slug&gt;/cloning</code> (<code class="code">CLONING_MARKER</code>,
+      flock-held while a clone is live). → <a class="link" href="#ghost">ghost reconcile</a> (1).</li>
+    <li><strong>Cancel a stopped engine's queued work at the lane head.</strong>
+      <code class="code">Engine::stop</code> only sends <code class="code">Msg::Stop</code>, and the
+      reconcile lane job in <code class="code">Driver::dispatch</code> calls
+      <code class="code">reconcile_one</code> with no stop check (a permit is taken only when
+      <code class="code">disk_status</code> is <code class="code">Missing</code>), so a queued ghost
+      still clones a root being removed. → <a class="link" href="#ghost">ghost reconcile</a> (2).</li>
+    <li><strong>Let disk win over a stale <code class="code">failed</code>.</strong>
+      <code class="code">apply_reconcile</code> maps <code class="code">Applied{status: failed}</code>
+      to <code class="code">Degraded</code> without reading disk. A later
+      <code class="code">Derive(Ready)</code> heals it (<code class="code">engine/status.rs</code>
+      <code class="code">next_status</code>), but under push-only nothing fires that event. →
+      <a class="link" href="#ghost">ghost reconcile</a> (3).</li>
+    <li><strong>Land the three ghost-reconcile tests:</strong> a stopped engine's queued reconcile does
+      not clone and frees its permit; <code class="code">remove</code> racing
+      <code class="code">reconcile_one</code> cannot resurrect; <code class="code">failed</code> over a
+      ready disk reports <code class="code">ready</code>. None exists today. Also reword the
+      cancellation paragraph of <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a>
+      to say grove-ops work already running cannot be cancelled.</li>
+    <li><strong>Work the <a class="link" href="#findings">open sweep findings</a></strong>, highest
+      first.</li>
+  </ol>
+</section>
+
+<section class="docs-section" id="findings" data-component="findings">
+  <header>
+    <h2 class="h2">Open sweep findings</h2>
+    <p class="docs-note">The s-20261012T0155Z gigasweep confirmed 21 defects by probe and the
+      s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
+  </header>
+  <ol class="steps">
+    <li><strong><code class="code">install_bundle</code> is not atomic</strong> (confirmed, low). It
+      runs <code class="code">remove_dir_all(versions/&lt;v&gt;)</code> then extracts in place, even
+      when <code class="code">&lt;v&gt;</code> is the version <code class="code">current</code> points
+      at.</li>
+    <li><strong><code class="code">is_under_trunk</code> forgets the old trunk</strong> (confirmed,
+      low). After a trunk change (main → canary), share links laid through
+      <code class="code">../main/</code> read as foreign.</li>
+    <li><strong><code class="code">RootView.url</code> and <code class="code">error</code> are served
+      unredacted</strong> (plausible). The Host guard closes the remote read path; local readers still
+      see clone URLs, including any embedded credentials.</li>
+    <li><strong><code class="code">grove off</code> checks for any grove daemon, not this
+      home's</strong> (plausible, medium). It can shut down another home's daemon on the same
+      bind.</li>
+    <li><strong>An in-flight back-off is never retried</strong> (plausible, low). A daemon booting
+      during an offline CLI clone reports <code class="code">failed: … in flight</code>; the CLI
+      finishing raises no watched event, so status stays <code class="code">failed</code> until the
+      next manifest change. Same shape as Next 3.</li>
+    <li><strong>Manifest writes don't fsync</strong> (plausible, low). <code class="code">write_doc</code>
+      renames <code class="code">manifest.toml.tmp</code> without fsyncing the file or its
+      directory.</li>
+    <li><strong>Slugs keep their case</strong> (plausible, low). <code class="code">slug_from_url</code>
+      of <code class="code">…/Foo/bar</code> and <code class="code">…/foo/bar</code> mints two manifest
+      keys that share one directory on case-insensitive APFS.</li>
+    <li><strong><code class="code">version_key</code> misorders</strong> (plausible, low;
+      <code class="code">update/layout.rs</code>). <code class="code">+build</code> metadata folds into
+      the core numbers and prereleases compare by number before label
+      (<code class="code">-canary.10</code> &gt; <code class="code">-rc.1</code>). Pruning order only:
+      <code class="code">current</code> and <code class="code">previous</code> are protected.</li>
+    <li><strong><code class="code">logs::redact</code> cuts at the first <code class="code">@</code></strong>
+      (plausible, low; <code class="code">grove-daemon/src/logs.rs</code>),
+      <code class="code">telemetry::redact_url</code> at the last, so a raw <code class="code">@</code>
+      in a password leaves its tail in the ring.</li>
+    <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
+      low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
+      branch living only on an operator-added remote is minted off <code class="code">HEAD</code>,
+      untracked. grove clones only <code class="code">origin</code>.</li>
+  </ol>
+</section>
+
+<section class="docs-section" id="shifts" data-component="shifts">
+  <header>
+    <h2 class="h2">Unattended shifts</h2>
+    <p class="docs-note">Sandbox denials, not regressions; gate them on a host run.</p>
+  </header>
+  <ul>
+    <li><code class="code">cargo nextest</code> fails ~118 tests in the shift sandbox: those binding
+      loopback ports (EPERM), the <code class="code">ps</code>-based
+      <code class="code">process_start_time_is_stable_for_a_live_pid</code>, and on the
+      <code class="code">ci</code> profile the FSEvents-backed
+      <code class="code">watcher::tests::slow_an_fs_write_to_the_manifest_announces</code>.</li>
+    <li>Coverage is measured under <code class="code">shift-test</code>
+      (<code class="code">cargo llvm-cov nextest --workspace --summary-only</code>, loopback allowed
+      there): 93.09 % lines at the s-20261019T0455Z landing.</li>
+    <li><code class="code">test/install_smoke.sh</code> needs a <code class="code">mktemp</code> shim on
+      <code class="code">PATH</code> that roots templates under <code class="code">$TMPDIR</code>: macOS
+      <code class="code">mktemp -d</code> ignores <code class="code">TMPDIR</code> and the sandbox
+      denies <code class="code">/var/folders</code>.</li>
+  </ul>
+</section>
+
+<section class="docs-section" id="reference" data-component="reference">
+  <header>
+    <h2 class="h2">Reference</h2>
+    <p class="docs-note">Present-tense descriptions of the shipped system. This page is the design and
+      the plan; these are the mechanics.</p>
+  </header>
+  <div class="table-wrap">
+    <table data-table>
+      <thead><tr><th>doc</th><th>what it covers</th></tr></thead>
+      <tbody>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/api.md">api.md</a></td><td>the HTTP surface the daemon serves</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/architecture.md">architecture.md</a></td><td>crates, desired vs actual state, reconcile</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/deployment.md">deployment.md</a></td><td>requirements, environment, served mode</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a></td><td>per-root engines, lanes, status derivation</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/updates.md">updates.md</a></td><td>releases, channels, <code class="code">grove up</code> and rollback</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/worktree-environment.md">worktree-environment.md</a></td><td>shares and the per-worktree environment</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/worktrees.md">worktrees.md</a></td><td>trunk, worktrees, pool, recovery, adoption</td></tr>
+        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove">jgeschwendt/grove</a></td><td>the repository</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="docs-foot">grove v0.3.0 · figures render behind <code class="code">mise run figures</code>.</p>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>
