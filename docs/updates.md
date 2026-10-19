@@ -202,8 +202,8 @@ bash scripts/install.sh v0.1.0          # a pinned tag
 `jgeschwendt/grove`, download the bundle, its checksum sidecar, a bootstrap `grove` **and
 the bootstrap's own sidecar** into a staging directory, then hand off to `grove up` with
 that directory as `GROVE_INSTALL_BASE_URL`. The bootstrap's checksum is verified before it
-is made executable: it is the one asset the script *runs*, and it used to be the one asset
-with no sidecar at all — the tarball's checksum was verified by that unverified binary. Everything that touches the layout is unit-tested Rust; the
+is made executable: it is the one asset the script *runs*, and the binary that verifies the tarball.
+Everything that touches the layout is unit-tested Rust; the
 GitHub fetch is the only logic that lives in bash, and it stages into the same local-dir
 source the smoke test and `grove up` already understand.
 
