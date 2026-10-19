@@ -530,11 +530,9 @@ pub struct GitWorktree {
 /// **A new branch is minted** (`git worktree add -b <branch> <path> <start>`) off
 /// `start` (the requested base) or `HEAD` (the bare's default).
 ///
-/// [`branch_exists`] picks the form, never a failed DWIM: `worktree add` takes any
-/// commit-ish, so a new branch a tag, a sha or `origin/x` already spells would DWIM
-/// into a detached checkout and the branch would never exist. Any failure of the
-/// chosen form surfaces as-is — a stray `index.lock` or a branch checked out
-/// elsewhere is never papered over with a fresh branch.
+/// [`branch_target`] picks the form, never a failed DWIM. Any failure of the chosen
+/// form surfaces as-is — a stray `index.lock` or a branch checked out elsewhere is
+/// never papered over with a fresh branch.
 pub fn worktree_add(bare: &Path, path: &Path, branch: &str, start: Option<&str>) -> Result<()> {
     // Codify the contract: every caller composes paths under `GROVE_HOME`, which
     // is absolute by construction. A relative path here would be silently
@@ -568,17 +566,10 @@ pub fn worktree_add(bare: &Path, path: &Path, branch: &str, start: Option<&str>)
 
     // `--` ends git's option parsing for everything after it, so a path or
     // start-point can never be read as a flag either.
-    let exists = branch_exists(bare, branch);
     let mut cmd = git_command();
     cmd.arg("-C").arg(bare).args(["worktree", "add"]);
-    if !exists {
-        cmd.args(["-b", branch]);
-    }
-    cmd.arg("--").arg(path).arg(if exists {
-        branch
-    } else {
-        start.unwrap_or("HEAD")
-    });
+    let target = branch_target(&mut cmd, bare, "-b", branch, start);
+    cmd.arg("--").arg(path).arg(target);
     let out = run_git(cmd, None, "git worktree add")?;
     check_status(&out, "git worktree add")
 }
@@ -597,20 +588,46 @@ pub fn branch_exists(bare: &Path, branch: &str) -> bool {
         .any(|prefix| rev_parse(bare, &format!("{prefix}{branch}")).is_ok())
 }
 
+/// How a checkout gets `branch`: pushes the mint flag (`mint` = `-b`/`-c`) onto `cmd`
+/// when the branch needs creating and returns the revision to name. A local head is
+/// named as-is (git prefers it over a same-named tag); a branch living only as
+/// `origin/<branch>` is minted tracking that ref spelled in full; anything else is
+/// minted off `start` or `HEAD`. Only a local head is ever named bare: git resolves a
+/// tag, a sha or `origin/x` before a remote branch, so a DWIM of any other name lands a
+/// detached checkout and the branch is never made.
+fn branch_target(
+    cmd: &mut Command,
+    repo: &Path,
+    mint: &str,
+    branch: &str,
+    start: Option<&str>,
+) -> String {
+    if rev_parse(repo, &format!("refs/heads/{branch}")).is_ok() {
+        return branch.to_owned();
+    }
+    cmd.args([mint, branch]);
+    let remote = format!("refs/remotes/origin/{branch}");
+    if rev_parse(repo, &remote).is_ok() {
+        cmd.arg("--track");
+        return remote;
+    }
+    start.unwrap_or("HEAD").to_owned()
+}
+
 /// The bare's default branch — its `HEAD` symbolic-ref shortened (`refs/heads/main`
 /// → `main`). The warm-pool checkout target: a detached slot sits at this branch's
 /// tip. Falls back to `main` when `HEAD` is detached/unreadable (a fresh bare clone
 /// always has a symbolic `HEAD`, so the fallback is the pathological case).
 pub fn default_branch(bare: &Path) -> Result<String> {
     let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["symbolic-ref", "--short", "HEAD"]);
+    cmd.arg("-C").arg(bare).args(["symbolic-ref", "HEAD"]);
     let out = run_git(cmd, None, "git symbolic-ref HEAD")?;
     if !out.status.success() {
         return Ok("main".to_string());
     }
-    Ok(stdout_trimmed(&out))
+    // Stripped, never `--short`: a tag `main` makes the short form `heads/main`.
+    let head = stdout_trimmed(&out);
+    Ok(head.strip_prefix("refs/heads/").unwrap_or(&head).to_owned())
 }
 
 /// Point the bare's `HEAD` at `refs/heads/<branch>` — [`default_branch`]'s write-side
@@ -727,19 +744,10 @@ pub fn attach_branch(wt: &Path, branch: &str, start: Option<&str>) -> Result<()>
         "worktree must be absolute; got {}",
         wt.display()
     );
-    // Same gate as `worktree_add`: `switch` refuses a tag outright, so a failed DWIM
-    // cannot pick the form.
-    let exists = branch_exists(wt, branch);
     let mut cmd = git_command();
     cmd.arg("-C").arg(wt).arg("switch");
-    if !exists {
-        cmd.args(["-c", branch]);
-    }
-    cmd.arg("--").arg(if exists {
-        branch
-    } else {
-        start.unwrap_or("HEAD")
-    });
+    let target = branch_target(&mut cmd, wt, "-c", branch, start);
+    cmd.arg("--").arg(target);
     let out = run_git(cmd, None, "git switch")?;
     check_status(&out, "git switch")
 }
@@ -1275,26 +1283,49 @@ mod tests {
         );
     }
 
-    /// A NEW branch whose name a tag already spells is still a branch, on the cold path
-    /// and the warm one: git accepts any commit-ish, so DWIM would detach on the tag.
+    /// A branch whose name a tag also spells is still a branch — new or remote-only,
+    /// cold path or warm — and still the default: git resolves the tag before a remote
+    /// branch, and shortens `refs/heads/main` to `heads/main` beside a tag `main`.
     #[test]
-    fn a_new_branch_named_like_a_tag_is_a_branch() {
+    fn a_branch_named_like_a_tag_is_a_branch() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src");
         fixture_repo(&src);
         let bare = tmp.path().join("repo.git");
         clone_bare(src.to_str().unwrap(), &bare).unwrap();
-        git(&bare, &["tag", "v2", "HEAD"]);
-        git(&bare, &["tag", "v3", "HEAD"]);
-
-        let cold = tmp.path().join("v2");
-        worktree_add(&bare, &cold, "v2", None).unwrap();
-        let warm = tmp.path().join("slot");
-        worktree_add_detached(&bare, &warm, "main").unwrap();
-        attach_branch(&warm, "v3", None).unwrap();
-        for (wt, branch) in [(&cold, "v2"), (&warm, "v3")] {
-            assert_eq!(status(wt).unwrap().branch.as_deref(), Some(branch));
+        for name in ["main", "v2", "v3", "r2", "r3"] {
+            git(&bare, &["tag", name, "HEAD"]);
         }
+        for remote in ["r2", "r3"] {
+            git(
+                &bare,
+                &[
+                    "update-ref",
+                    &format!("refs/remotes/origin/{remote}"),
+                    "HEAD",
+                ],
+            );
+        }
+        assert_eq!(default_branch(&bare).unwrap(), "main");
+
+        let mut checkouts = Vec::new();
+        for (cold, warm) in [("v2", "v3"), ("r2", "r3")] {
+            let wt = tmp.path().join(cold);
+            worktree_add(&bare, &wt, cold, None).unwrap();
+            checkouts.push((wt, cold));
+            let slot = tmp.path().join(warm);
+            worktree_add_detached(&bare, &slot, "main").unwrap();
+            attach_branch(&slot, warm, None).unwrap();
+            checkouts.push((slot, warm));
+        }
+        for (wt, branch) in &checkouts {
+            assert_eq!(status(wt).unwrap().branch.as_deref(), Some(*branch));
+        }
+        assert_eq!(
+            rev_parse(&bare, "r3@{upstream}").unwrap(),
+            rev_parse(&bare, "refs/remotes/origin/r3").unwrap(),
+            "a remote-only branch still tracks origin"
+        );
     }
 
     /// A flag-shaped `branch` must never be parsed as a `git worktree add` option —
