@@ -174,8 +174,7 @@ fn drain<R: std::io::Read + Send + 'static>(r: R) -> thread::JoinHandle<Vec<u8>>
 /// on threads so a chatty child can't deadlock against a full pipe buffer while the
 /// deadline loop polls `try_wait`. `Err` is reserved for real faults — a failed
 /// spawn/wait or the timeout; a **nonzero exit is not an error here**, because
-/// callers interpret it differently (a hard `bail`, a DWIM fallback, a
-/// default-branch guess). Use [`check_status`]/[`fail_with_stderr`] at the call
+/// callers interpret it differently (a hard `bail`, a default-branch guess). Use [`check_status`]/[`fail_with_stderr`] at the call
 /// site to turn a nonzero exit into an error, and [`stdout_trimmed`] to read output.
 fn run_git(cmd: Command, timeout: Option<Duration>, what: &str) -> Result<std::process::Output> {
     let clock = SystemClock;
@@ -234,7 +233,7 @@ fn stdout_trimmed(out: &std::process::Output) -> String {
 
 /// The `<what> failed: <stderr>` error every status-check block bails with, stderr
 /// decoded lossily and trimmed. Split out so a caller that interprets a nonzero exit
-/// itself (the DWIM paths) can still build the terminal error identically.
+/// itself (the `--ff-only` merge) can still build the terminal error identically.
 fn fail_with_stderr(out: &std::process::Output, what: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{what} failed: {}",
@@ -243,8 +242,8 @@ fn fail_with_stderr(out: &std::process::Output, what: &str) -> anyhow::Error {
 }
 
 /// Bail with `<what> failed: <stderr>` unless `out` exited zero — the plain status
-/// gate. The DWIM (`worktree_add`/`attach_branch`) and default-branch paths, which
-/// read a nonzero exit as something other than a hard error, don't use this.
+/// gate. The paths that read a nonzero exit as something other than a hard error
+/// (the default-branch guess) don't use this.
 fn check_status(out: &std::process::Output, what: &str) -> Result<()> {
     if out.status.success() {
         Ok(())
@@ -523,18 +522,19 @@ pub struct GitWorktree {
 
 /// Add a worktree at `path` for `branch`.
 ///
-/// **DWIM first** (`git worktree add <path> <branch>`): checks out an existing
-/// local head, or — when `branch` matches exactly one `refs/remotes/<remote>/<branch>`
-/// — creates a local tracking branch off that remote ref. This is git's own
-/// behavior and is what users expect: `tree add slug feature/x` on a freshly
-/// cloned repo should track `origin/feature/x`, not invent a new branch off
-/// `HEAD`. (The pre-DWIM check `git rev-parse --verify <branch>` got the local
-/// case but routed remote-only branches into the `-b` fallback, silently
-/// orphaning them from their remote.)
+/// **An existing branch DWIMs** (`git worktree add <path> <branch>`): checks out the
+/// local head, or — for a branch that lives only as `origin/<branch>` — creates a
+/// local tracking branch off it, git's own behavior: `tree add slug feature/x` on a
+/// fresh clone tracks `origin/feature/x` rather than inventing a branch off `HEAD`.
 ///
-/// **Fallback `-b`** (`git worktree add -b <branch> <path> <start>`): the branch
-/// is truly new — create it off `start` (the requested base) or `HEAD` (the
-/// bare's default).
+/// **A new branch is minted** (`git worktree add -b <branch> <path> <start>`) off
+/// `start` (the requested base) or `HEAD` (the bare's default).
+///
+/// [`branch_exists`] picks the form, never a failed DWIM: `worktree add` takes any
+/// commit-ish, so a new branch a tag, a sha or `origin/x` already spells would DWIM
+/// into a detached checkout and the branch would never exist. Any failure of the
+/// chosen form surfaces as-is — a stray `index.lock` or a branch checked out
+/// elsewhere is never papered over with a fresh branch.
 pub fn worktree_add(bare: &Path, path: &Path, branch: &str, start: Option<&str>) -> Result<()> {
     // Codify the contract: every caller composes paths under `GROVE_HOME`, which
     // is absolute by construction. A relative path here would be silently
@@ -568,51 +568,19 @@ pub fn worktree_add(bare: &Path, path: &Path, branch: &str, start: Option<&str>)
 
     // `--` ends git's option parsing for everything after it, so a path or
     // start-point can never be read as a flag either.
+    let exists = branch_exists(bare, branch);
     let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "add", "--"])
-        .arg(path)
-        .arg(branch);
-    let dwim = run_git(cmd, None, "git worktree add (DWIM)")?;
-    if dwim.status.success() {
-        return Ok(());
+    cmd.arg("-C").arg(bare).args(["worktree", "add"]);
+    if !exists {
+        cmd.args(["-b", branch]);
     }
-
-    // Only mint a NEW branch when DWIM failed because the revision is *unknown* (no
-    // local head, no unique remote-tracking ref). Any OTHER failure — a transient
-    // `index.lock`, a branch already checked out elsewhere, a locked ref — must NOT
-    // be papered over by silently creating a fresh branch off `HEAD`; surface it so
-    // the caller/operator sees the real cause instead of an orphaned new branch.
-    let dwim_err = String::from_utf8_lossy(&dwim.stderr);
-    if !is_unknown_revision(&dwim_err) {
-        bail!("git worktree add failed: {}", dwim_err.trim());
-    }
-
-    // Brand-new branch: create it off `start` (or HEAD).
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "add", "-b", branch, "--"])
-        .arg(path)
-        .arg(start.unwrap_or("HEAD"));
-    let out = run_git(cmd, None, "git worktree add (-b)")?;
-    check_status(&out, "git worktree add")?;
-    Ok(())
-}
-
-/// Does git's stderr say the requested revision doesn't exist — the *only* signal
-/// that should route `worktree_add`/`attach_branch` into the new-branch (`-b`/`-c`)
-/// fallback. A stray `index.lock`, a locked ref, or a branch already checked out
-/// elsewhere are real failures that must surface, never silently mint a branch. git
-/// phrases the miss as `fatal: invalid reference: <rev>` (2.39); the other forms
-/// cover older/related wording so the gate degrades safely across git versions.
-fn is_unknown_revision(stderr: &str) -> bool {
-    let s = stderr.to_ascii_lowercase();
-    s.contains("invalid reference")
-        || s.contains("not a valid ref")
-        || s.contains("unknown revision")
-        || s.contains("did not match any file")
+    cmd.arg("--").arg(path).arg(if exists {
+        branch
+    } else {
+        start.unwrap_or("HEAD")
+    });
+    let out = run_git(cmd, None, "git worktree add")?;
+    check_status(&out, "git worktree add")
 }
 
 /// Does `branch` already exist in `bare` — as a local head, or as the
@@ -744,46 +712,36 @@ pub fn worktree_repair(bare: &Path, moved: &[&Path]) -> Result<()> {
 }
 
 /// Attach `branch` into the **already-checked-out** worktree at `wt` (a detached
-/// slot just moved into place), mirroring [`worktree_add`]'s DWIM semantics so a
-/// warm promote of an existing branch behaves identically to a cold checkout:
+/// slot just moved into place), mirroring [`worktree_add`] so a warm promote behaves
+/// identically to a cold checkout:
 ///
-/// - **DWIM first** (`git -C <wt> switch <branch>`): switches to an existing local
-///   head, or — for a branch that lives only as `refs/remotes/<remote>/<branch>` —
-///   creates a local tracking branch off it (git's guess-remote default). A bare
-///   `checkout -b` here would orphan a remote-only branch from its upstream, the
-///   exact divergence the cold path's DWIM avoids.
-/// - **Fallback `-c`** (`git -C <wt> switch -c <branch> <start>`): the branch is
-///   truly new — create it off `start` (the requested base) or the current detached
-///   HEAD (the warm slot's tip = the default-branch tip).
+/// - **An existing branch DWIMs** (`git -C <wt> switch <branch>`): switches to the
+///   local head, or — for a branch that lives only as `origin/<branch>` — creates a
+///   local tracking branch off it. A bare `checkout -b` here would orphan a
+///   remote-only branch from its upstream.
+/// - **A new branch is minted** (`git -C <wt> switch -c <branch> <start>`) off `start`
+///   (the requested base) or the detached HEAD (the slot's default-branch tip).
 pub fn attach_branch(wt: &Path, branch: &str, start: Option<&str>) -> Result<()> {
     debug_assert!(
         wt.is_absolute(),
         "worktree must be absolute; got {}",
         wt.display()
     );
+    // Same gate as `worktree_add`: `switch` refuses a tag outright, so a failed DWIM
+    // cannot pick the form.
+    let exists = branch_exists(wt, branch);
     let mut cmd = git_command();
-    cmd.arg("-C").arg(wt).args(["switch", "--"]).arg(branch);
-    let dwim = run_git(cmd, None, "git switch (DWIM)")?;
-    if dwim.status.success() {
-        return Ok(());
+    cmd.arg("-C").arg(wt).arg("switch");
+    if !exists {
+        cmd.args(["-c", branch]);
     }
-
-    // Same gate as `worktree_add`: only create a NEW branch (`-c`) when the DWIM
-    // switch failed because the revision is unknown. A branch already checked out
-    // elsewhere, or any transient fault, surfaces as-is — never a silent new branch.
-    let dwim_err = String::from_utf8_lossy(&dwim.stderr);
-    if !is_unknown_revision(&dwim_err) {
-        bail!("git switch failed: {}", dwim_err.trim());
-    }
-
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(wt)
-        .args(["switch", "-c", branch, "--"])
-        .arg(start.unwrap_or("HEAD"));
-    let out = run_git(cmd, None, "git switch -c")?;
-    check_status(&out, "git switch")?;
-    Ok(())
+    cmd.arg("--").arg(if exists {
+        branch
+    } else {
+        start.unwrap_or("HEAD")
+    });
+    let out = run_git(cmd, None, "git switch")?;
+    check_status(&out, "git switch")
 }
 
 /// The linked worktrees of `bare`, parsed from `git worktree list --porcelain`.
@@ -1317,6 +1275,28 @@ mod tests {
         );
     }
 
+    /// A NEW branch whose name a tag already spells is still a branch, on the cold path
+    /// and the warm one: git accepts any commit-ish, so DWIM would detach on the tag.
+    #[test]
+    fn a_new_branch_named_like_a_tag_is_a_branch() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        let bare = tmp.path().join("repo.git");
+        clone_bare(src.to_str().unwrap(), &bare).unwrap();
+        git(&bare, &["tag", "v2", "HEAD"]);
+        git(&bare, &["tag", "v3", "HEAD"]);
+
+        let cold = tmp.path().join("v2");
+        worktree_add(&bare, &cold, "v2", None).unwrap();
+        let warm = tmp.path().join("slot");
+        worktree_add_detached(&bare, &warm, "main").unwrap();
+        attach_branch(&warm, "v3", None).unwrap();
+        for (wt, branch) in [(&cold, "v2"), (&warm, "v3")] {
+            assert_eq!(status(wt).unwrap().branch.as_deref(), Some(branch));
+        }
+    }
+
     /// A flag-shaped `branch` must never be parsed as a `git worktree add` option —
     /// and the case that matters is the DESTRUCTIVE one, not the harmless one.
     ///
@@ -1376,9 +1356,8 @@ mod tests {
         names
     }
 
-    /// The stderr we parse must be locale-stable: every git invocation pins `LC_ALL=C`
-    /// (and `LANG=C`), so a non-English git can't localize "invalid reference" out from
-    /// under `is_unknown_revision` and turn a real branch-create into a hard failure.
+    /// The output we parse must be locale-stable: every git invocation pins `LC_ALL=C`
+    /// (and `LANG=C`), so a non-English git can't localize it out from under a parser.
     #[test]
     fn git_command_pins_a_c_locale() {
         let cmd = git_command();
@@ -1429,22 +1408,6 @@ mod tests {
         // list (ours scrubbing extra names is harmless), but every variable the
         // INSTALLED git treats as repo-pinning must be covered.
         assert_eq!(unscrubbed, Vec::<&str>::new());
-    }
-
-    /// The DWIM→`-b` fallback must fire ONLY on an unknown revision — never on a
-    /// transient/locked/already-checked-out failure, which would silently mint a
-    /// fresh branch off HEAD.
-    #[test]
-    fn is_unknown_revision_gates_the_new_branch_fallback() {
-        assert!(is_unknown_revision("fatal: invalid reference: feature/x"));
-        assert!(is_unknown_revision("fatal: Not a valid ref: refs/heads/x"));
-        // Non-revision failures must NOT be treated as unknown.
-        assert!(!is_unknown_revision(
-            "fatal: Unable to create '.git/index.lock': File exists."
-        ));
-        assert!(!is_unknown_revision(
-            "fatal: 'x' is already checked out at '/path/x'"
-        ));
     }
 
     /// The `root.sync` git triple: fetch moves the remote-tracking ref, the ff
@@ -1537,9 +1500,8 @@ mod tests {
         );
     }
 
-    /// A branch already checked out elsewhere makes DWIM fail for a *non*-unknown
-    /// reason. The gate must surface that cause and NOT route into the new-branch
-    /// fallback (which pre-fix would have masked it / risked minting a branch).
+    /// A branch already checked out elsewhere makes DWIM fail. That cause must surface,
+    /// never be masked by minting a branch.
     #[test]
     fn worktree_add_of_an_already_checked_out_branch_surfaces_not_mints() {
         let tmp = TempDir::new().unwrap();
