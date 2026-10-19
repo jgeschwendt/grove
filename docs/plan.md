@@ -40,3 +40,4 @@ The s-20261012T0155Z gigasweep (report and ledger kept outside the repo) confirm
 7. **Slugs keep their case** (plausible, low). `slug_from_url` of `…/Foo/bar` and `…/foo/bar` mints two manifest keys that share one directory on case-insensitive APFS.
 8. **`version_key` misorders** (plausible, low; `update/layout.rs`). `+build` metadata folds into the core numbers (`0.4.0+1` > `0.4.0`) and prereleases compare by number before label (`-canary.10` > `-rc.1`). Pruning order only: `current` and `previous` are protected.
 9. **`logs::redact` cuts at the first `@`** (plausible, low; `grove-daemon/src/logs.rs`), `telemetry::redact_url` at the last, so a raw `@` in a password leaves its tail in the ring.
+10. **Only `origin` counts as a branch's remote** (plausible, low; `git::branch_target`, `branch_exists`). A branch living only on a remote the operator added (`upstream/x`) is minted off `HEAD`, untracked. grove clones only `origin`.
