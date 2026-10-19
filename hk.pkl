@@ -1,0 +1,58 @@
+amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pkl"
+// Fast local guards. The authoritative gate is `mise run check` + CI; `hk install --mise`
+// (run by `mise run setup`) wires these once per clone — worktrees share one hooks dir.
+//
+// Every command opens by unsetting git's local-repo environment (`git rev-parse
+// --local-env-vars` — GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, …). git exports those into
+// every hook child and they OVERRIDE `-C <dir>`, so the suite's fixture spawns — and the
+// meta-checks' `git ls-files` — would hit THIS repo instead of the temp one they built.
+// It has already committed fixture droppings onto a main branch once.
+//
+// Every toolchain command goes through `mise x --`, so the hook runs the SAME pins as
+// `mise run check` and CI: a bare `cargo` resolves to whatever leads the hook's PATH,
+// and a newer clippy rejects untouched code the pinned one accepts.
+local scrub = "unset $(git rev-parse --local-env-vars); "
+
+hooks {
+  // Staged `.rs` only, so a docs-only commit skips the toolchain. Check-only: a mutating
+  // `cargo fmt` would rewrite the tree after the index was read, landing the unformatted
+  // blob while CI's `--check` fails the pushed commit.
+  ["pre-commit"] {
+    steps {
+      ["cargo-fmt"] {
+        check = scrub + "mise x -- cargo fmt --all -- --check"
+        glob = "**/*.rs"
+      }
+      ["cargo-lint"] {
+        check = scrub + "mise x -- cargo clippy --workspace -- -D warnings"
+        glob = "**/*.rs"
+      }
+      // Lib-fast tier: the default nextest profile (no `slow_*`), unit tests only.
+      ["cargo-test"] {
+        check = scrub + "mise x -- cargo nextest run --workspace --lib"
+        glob = "**/*.rs"
+      }
+    }
+  }
+  // Unglobbed: `check` spans the workspace, and an edit anywhere inside an anchored
+  // claim's region stales the stele lock, so no file pattern predicts a safe push.
+  // `stele build` is absent, as in CI: it re-stamps `verified` and would launder
+  // staleness — re-read the anchored code, `stele build` by hand, commit the lock.
+  ["pre-push"] {
+    steps {
+      ["check-and-fast-tests"] {
+        check = scrub + "mise run check && mise x -- cargo nextest run --workspace"
+      }
+      ["stele"] {
+        check = scrub + #"""
+          command -v stele >/dev/null 2>&1 || {
+            echo "stele is not on PATH — install it (pinned, as CI does):" >&2
+            echo "  curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0" >&2
+            exit 1
+          }
+          stele check && stele emit --check
+          """#
+      }
+    }
+  }
+}

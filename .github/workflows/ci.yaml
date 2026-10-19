@@ -96,7 +96,7 @@ jobs:
   # running it here would launder staleness into a green tick — the whole point of the
   # freshness signal is that a human re-reads the anchored code and re-stamps by hand.
   # A stale lock therefore fails here, and the fix is a local `stele build` committed
-  # alongside the change that staled it. The lefthook pre-push hook runs the same two
+  # alongside the change that staled it. The hk pre-push hook runs the same two
   # commands, so this is the backstop rather than the first sighting.
   stele:
     runs-on: ubuntu-latest

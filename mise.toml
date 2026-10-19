@@ -5,7 +5,7 @@
 # rather than `v<v>`, so the full tag is the version string here; `exe` names the
 # binary inside the tarball (the repo is `nextest`, the executable `cargo-nextest`).
 "github:nextest-rs/nextest" = { version = "cargo-nextest-0.9.143", exe = "cargo-nextest" }
-lefthook = "1.13.6"
+hk = "2.5.0"
 rust = "1.94.0"
 
 # mise's rust backend is a rustup pass-through — it exports `RUSTUP_TOOLCHAIN` and
@@ -17,16 +17,17 @@ rust = "1.94.0"
 description = "Install the rustup components `check` needs (rustfmt, clippy)"
 run = "rustup component add rustfmt clippy"
 
-# First-run bootstrap. `lefthook install` is the load-bearing line: lefthook is pinned
-# above and configured in lefthook.toml, but a fresh clone or a new worktree has NO
-# hook until something writes `.git/hooks/pre-commit` — the gate protects nobody by
-# default. It must be fatal: a bootstrap that "succeeds" without the hook — or without
+# First-run bootstrap. `hk install --mise` is the load-bearing line: hk is pinned
+# above and configured in hk.pkl, but a fresh clone has NO hook until something
+# writes `.git/hooks/pre-commit` — the gate protects nobody by default. `--force`
+# replaces a lefthook shim left by an older checkout, which would otherwise pass
+# silently. It must be fatal: a bootstrap that "succeeds" without the hook — or without
 # the components `check` shells out to — is the failure this exists to prevent.
 [tasks.setup]
 depends = ["components"]
 description = "First-time bootstrap: toolchain components + git hooks + a warm build"
 run = """
-lefthook install || exit 1
+hk install --mise --force || exit 1
 cargo build --workspace --all-targets
 """
 

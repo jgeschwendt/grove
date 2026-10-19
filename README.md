@@ -219,13 +219,13 @@ mise run smoke   # install → update → rollback → uninstall, against a fixt
 ```
 
 `mise run setup` is not optional in a new checkout — the pre-commit and pre-push gates do
-not exist until `lefthook install` has written them.
+not exist until `hk install --mise` (from `hk.pkl`) has written them.
 
 The pre-push gate also runs `stele check && stele emit --check` over the architecture
 graph in `AGENTS.md` + `.stele/`, so `stele` has to be on PATH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
 ```
 
 Editing code inside an anchored claim's region stales that claim — anywhere inside it, not
