@@ -386,7 +386,7 @@ pub fn unpushed_branches(repo: &Path) -> Result<Vec<String>> {
     let unpushed = read(&["rev-list", "--branches", "--not", "--remotes"])?;
     let heads = read(&[
         "for-each-ref",
-        "--format=%(objectname) %(refname:short)",
+        "--format=%(objectname) %(refname:lstrip=2)",
         "refs/heads",
     ])?;
     Ok(heads
