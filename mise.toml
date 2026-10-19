@@ -69,3 +69,7 @@ cargo nextest run --workspace || fail=1
 cargo test --doc --workspace || fail=1
 exit $fail
 """
+
+[tasks.figures]
+description = "render every board of the Claude Design canvas in docs/figures/project/ to its PNG and its -dark PNG (agent-browser, 2×)"
+run = "sh docs/figures/export.sh"
