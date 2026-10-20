@@ -45,12 +45,12 @@ hazards:
 - ※ delete-before-undeclare → src/roots.rs:198
 - ※ files-authoritative → src/manifest.rs:301
 - ※ lane-is-callers → src/env.rs:124
-- ※ never-clobber → src/env.rs:363
+- ※ never-clobber → src/env.rs:374
 - ※ promote-attach-before-move → src/pool.rs:164
 - ※ reconcile-additive → src/worktrees.rs:280
-- ※ sync-never-forces → src/roots.rs:740
+- ※ sync-never-forces → src/roots.rs:743
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:693
+- ※ trunk-recovery-guard → src/roots.rs:696
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 

@@ -224,6 +224,13 @@
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
       untracked. grove clones only <code class="code">origin</code>.</li>
+    <li><strong>The old trunk's own share source reads as a conflict after a trunk change</strong>
+      (confirmed, low; c079973). The ex-trunk is adopted as a worktree and its real <code class="code">.env</code>
+      is a conflict row, so <code class="code">grove doctor</code> exits 5 after any trunk change.</li>
+    <li><strong>A refused trunk change still links new worktrees through the occupant</strong>
+      (plausible, low; c079973). While a worktree occupies the new trunk's directory, ordinary passes take
+      that checkout as the trunk; a symlink source there reads ok (<code class="code">env.rs</code>
+      source classification), so worktrees created in that window link into the user's checkout.</li>
   </ol>
 </section>
 

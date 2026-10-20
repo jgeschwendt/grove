@@ -424,13 +424,16 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
         // Shares first, while `HEAD` still names the old trunk: it is the one record of
         // which links and sources were grove's, and moving it forgets them — so a pass
         // with an error row leaves `HEAD` where it is, for the next event to retry.
-        if crate::env::carry(home, slug, &crate::worktrees::name_for(&head))
-            .iter()
-            .any(|o| o.status.is_error())
+        if let Some(o) = crate::env::carry(home, slug, &crate::worktrees::name_for(&head))
+            .into_iter()
+            .find(|o| o.status.is_error())
         {
             bail!(
-                "cannot move the trunk of {slug} to `{}`: a share failed to carry",
-                want.branch
+                "cannot move the trunk of {slug} to `{}`: share `{}` in {} failed to carry: {}",
+                want.branch,
+                o.path,
+                o.worktree.as_deref().unwrap_or("the trunk"),
+                o.reason.unwrap_or_default()
             );
         }
         git::set_head(&bare, &want.branch)?;
@@ -1135,7 +1138,8 @@ mod tests {
     }
 
     /// An old-trunk source the pass cannot read is an error, not an absent source: the
-    /// new trunk gets no empty stand-in, and `HEAD` stays put so the next event retries.
+    /// new trunk gets no empty stand-in — not from an ordinary pass in between either —
+    /// and `HEAD` stays put so the next event retries.
     #[test]
     fn an_unreadable_old_source_holds_the_trunk_change() {
         let tmp = TempDir::new().unwrap();
@@ -1143,6 +1147,9 @@ mod tests {
         std::fs::remove_file(code.join("main/.env")).unwrap();
         std::os::unix::fs::symlink("README.md", code.join("main/.env")).unwrap();
         declare_trunk(&home, "o/r", "canary");
+        let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
+        assert!(error.contains(".env"), "{error}");
+        crate::env::materialize(&home, Some("o/r"), crate::env::Fix::Safe).unwrap();
         assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
         assert!(std::fs::symlink_metadata(code.join("canary/.env")).is_err());
         assert_eq!(

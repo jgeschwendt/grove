@@ -131,7 +131,9 @@ cannot be read is an error row, nothing is created, and `HEAD` stays put for the
 event to retry (`an_unreadable_old_source_holds_the_trunk_change`). Every other pass knows
 only the declared trunk, so while a trunk change is refused a link through the old trunk
 is a `conflict`, never repointed into whatever occupies the new trunk's directory
-(`a_refused_trunk_change_leaves_links_through_the_old_trunk_alone`).
+(`a_refused_trunk_change_leaves_links_through_the_old_trunk_alone`); and while the change
+is pending — `HEAD` off the declared trunk — a source missing from the new trunk is an
+error row, never created empty for the next `carry` to take as real.
 
 A real file, a directory, or a foreign symlink is reported as `conflict` and left exactly
 as it was. `grove doctor` exits **5** on any unresolved conflict, which makes it a usable
