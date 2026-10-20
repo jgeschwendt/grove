@@ -1,3 +1,3 @@
 # grove
 
-Tended ground for git worktrees—`grove` grows what the manifest declares and never uproots your work.
+Organic worktrees—`grove` tends the roots; you tend the code.
