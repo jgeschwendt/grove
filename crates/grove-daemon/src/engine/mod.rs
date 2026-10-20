@@ -280,6 +280,8 @@ impl Engine {
     /// grove-ops work already running cannot be cancelled: it runs to completion and
     /// reports to a mailbox nobody reads.
     pub fn stop(&self) {
+        // Stop first: a deferral that sees the flag must land behind it, or the dying
+        // driver parks for a poke it never takes.
         let _ = self.tx.send(Msg::Stop);
         self.stopped.store(true, Ordering::Release);
     }

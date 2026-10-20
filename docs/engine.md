@@ -313,10 +313,10 @@ event bus, never by the watcher directly.
 
 `crates/grove-daemon/tests/engine.rs` is the behavioural gate. Named highlights: a
 declared root clones and reports ready; a burst of manifest events collapses into one
-reconcile; a failed reconcile degrades and stops; a
-degraded root recovers on the next event; a stopped engine's queued reconcile neither clones
-nor takes a permit; a remove ahead of a queued reconcile is not resurrected; a terminal fault degrades where a transient one re-derives; the sync note is set by
-a diverged trunk and cleared by a clean sync; sync accepts immediately and announces its
+reconcile; a failed reconcile degrades and stops; a degraded root recovers on the next
+event; a stopped engine's queued reconcile neither clones nor takes a permit; a remove
+ahead of a queued reconcile is not resurrected; a terminal fault degrades where a transient
+one re-derives; the sync note is set by a diverged trunk and cleared by a clean sync; sync accepts immediately and announces its
 completion; a sync accepted on a degraded root latches — `syncing` true, nothing dispatched,
 one broadcast — and rides the drive that follows the recovery; a sync requested over HTTP is
 accepted, announced on the stream and settles on the fetched commit (`tests/observe.rs`,
