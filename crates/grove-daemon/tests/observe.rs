@@ -536,6 +536,27 @@ async fn slow_doctor_fix_migrates_a_legacy_root_and_leaves_it_ready() {
     );
 }
 
+/// A clone URL can carry a token, and the snapshot is read by whatever reaches the
+/// port: neither the row's `url` nor the degrade text it carries shows the userinfo.
+#[tokio::test]
+async fn a_rows_url_and_error_carry_no_userinfo() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let url = "https://alice:t0ken@127.0.0.1:1/o/r.git";
+    grove_ops::manifest::add_root(&grove_ops::roots::manifest_path(&home), testfix::SLUG, url)
+        .unwrap();
+    let daemon = Harness::start(&home, false).await;
+
+    let row = until(&daemon, "the unreachable root to degrade", |root| {
+        (root.status == RootStatus::Degraded).then(|| root.clone())
+    })
+    .await;
+    assert_eq!(row.url, "https://***@127.0.0.1:1/o/r.git");
+    let error = row.error.expect("a degraded root carries its reason");
+    assert!(error.contains("***@127.0.0.1:1"), "{error}");
+    assert!(!error.contains("t0ken"), "{error}");
+}
+
 /// A home declaring `o/r` over the layout grove laid down before the trunk was named
 /// by its branch: inside the code dir, the bare at `.git` and the trunk checkout at
 /// `.trunk`.
