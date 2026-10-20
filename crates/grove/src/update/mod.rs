@@ -247,7 +247,7 @@ impl Updater {
     // ※ self-update-flip
     pub fn up(&self, version: Option<&str>) -> Result<(), CliError> {
         let _lock = self.layout.lock()?; // serialize concurrent `grove up`
-        self.restore_current();
+        self.restore_asides();
         // Before anything else, and inside the lock: an update that died between its
         // flip and its gate left `current` on an unproven version, and going forward
         // from there would stack a second unproven flip on top of it.
@@ -445,7 +445,7 @@ impl Updater {
     /// rolling back twice would land on the unproven version it exists to escape.
     pub fn rollback(&self) -> Result<(), CliError> {
         let _lock = self.layout.lock()?; // serialize against a concurrent `grove up`
-        self.restore_current();
+        self.restore_asides();
         let restored = self.layout.rollback()?; // marks the flip pending
         // The flip already happened. A running server that boots unhealthy on the
         // restored version — or whose restart errors outright — must be a non-zero
@@ -466,8 +466,15 @@ impl Updater {
         }
     }
 
-    fn restore_current(&self) {
-        if let Some(v) = self.layout.current_version() {
+    fn restore_asides(&self) {
+        // `previous` too: `--rollback` flips onto it with no look of its own
+        for v in [
+            self.layout.current_version(),
+            self.layout.previous_version(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             self.layout.restore_aside(&v);
         }
     }
@@ -1079,7 +1086,7 @@ mod tests {
     }
 
     /// A crash between `install_bundle`'s two renames leaves a version's only tree in
-    /// `.<v>.old` and no pending marker. `up` and `--rollback` both restore it first —
+    /// `.<v>.old` and no pending marker — `current`'s or `previous`'s. `up` and `--rollback` both restore it first —
     /// `up` would otherwise report "already on <v>" over a dangling `current` forever.
     #[test]
     fn a_tree_a_mid_swap_crash_left_aside_is_restored() {
@@ -1094,8 +1101,10 @@ mod tests {
         };
 
         aside("0.4.0");
+        aside("0.3.1");
         up.rollback().unwrap();
         assert!(home.path().join("previous/bin/grove").is_file());
+        assert!(home.path().join("current/bin/grove").is_file());
         aside("0.3.1");
         up.up(Some("0.3.1")).unwrap();
         assert_eq!(
