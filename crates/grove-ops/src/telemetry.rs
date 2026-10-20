@@ -42,12 +42,22 @@ impl Drop for Telemetry {
 }
 
 /// Initialise `OTel` if `GROVE_TELEMETRY` opts in; otherwise a no-op handle.
+#[must_use]
 pub fn init() -> Telemetry {
-    if !enabled_env() {
+    init_with(|key| std::env::var(key).ok())
+}
+
+/// [`init`] over an injected environment: edition 2024 makes `set_var` unsafe, and
+/// this workspace forbids unsafe, so the tests reach the opt-in through here.
+fn init_with(var: impl Fn(&str) -> Option<String>) -> Telemetry {
+    if !matches!(
+        var("GROVE_TELEMETRY").as_deref(),
+        Some("1" | "true" | "yes")
+    ) {
         return Telemetry(None);
     }
 
-    match build() {
+    match build(var("GROVE_OTLP_TRACES_ENDPOINT")) {
         Ok(provider) => {
             global::set_tracer_provider(provider.clone());
             ENABLED.store(true, Ordering::Relaxed);
@@ -57,20 +67,13 @@ pub fn init() -> Telemetry {
     }
 }
 
-fn enabled_env() -> bool {
-    matches!(
-        std::env::var("GROVE_TELEMETRY").as_deref(),
-        Ok("1" | "true" | "yes")
-    )
-}
-
-fn build() -> anyhow::Result<SdkTracerProvider> {
+fn build(endpoint: Option<String>) -> anyhow::Result<SdkTracerProvider> {
     // No default destination. Spans carry `grove.slug` and a redacted `grove.url`,
     // so a built-in fallback host would make opting telemetry in an opt-in to
     // exporting repo identity somewhere the operator never named. Unset is a
     // no-op handle, not an egress.
-    let endpoint = std::env::var("GROVE_OTLP_TRACES_ENDPOINT")
-        .map_err(|_| anyhow::anyhow!("GROVE_OTLP_TRACES_ENDPOINT is unset"))?;
+    let endpoint =
+        endpoint.ok_or_else(|| anyhow::anyhow!("GROVE_OTLP_TRACES_ENDPOINT is unset"))?;
 
     let exporter = SpanExporter::builder()
         .with_http()
@@ -179,7 +182,90 @@ impl Extractor for Traceparent<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_url;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    use opentelemetry::propagation::Extractor;
+
+    use super::{Traceparent, in_span, init, init_with, redact_url, set_attr};
+
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+        }
+    }
+
+    /// One process, one lifecycle: `ENABLED` and the global provider are
+    /// process-wide, so the off paths run before the opt-in flips them.
+    #[test]
+    fn exports_spans_only_to_a_named_collector() {
+        assert!(init().0.is_none());
+        assert!(init_with(env(&[("GROVE_TELEMETRY", "1")])).0.is_none());
+        assert!(
+            init_with(env(&[
+                ("GROVE_TELEMETRY", "1"),
+                ("GROVE_OTLP_TRACES_ENDPOINT", "not a uri")
+            ]))
+            .0
+            .is_none()
+        );
+        set_attr("grove.slug", "off");
+        assert_eq!(in_span("off", None, || Ok::<_, String>(7)), Ok(7));
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut reader = BufReader::new(stream.unwrap());
+                let mut len = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if let Some((_, v)) = line.to_ascii_lowercase().split_once("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = vec![0; len];
+                reader.read_exact(&mut body).unwrap();
+                tx.send(body).unwrap();
+                reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 0\r\n\r\n")
+                    .unwrap();
+            }
+        });
+        let handle = init_with(env(&[
+            ("GROVE_TELEMETRY", "true"),
+            ("GROVE_OTLP_TRACES_ENDPOINT", endpoint.as_str()),
+        ]));
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let ok = in_span("clone", Some(parent), || {
+            set_attr("grove.slug", "o/r");
+            Ok::<_, String>(())
+        });
+        assert_eq!(ok, Ok(()));
+        assert_eq!(in_span("fetch", None, || Err::<(), _>("boom")), Err("boom"));
+        drop(handle);
+
+        let sent: Vec<u8> = rx.try_iter().flatten().collect();
+        let has = |needle: &[u8]| sent.windows(needle.len()).any(|w| w == needle);
+        for needle in [&b"grove-ops.clone"[..], b"grove-ops.fetch", b"o/r", b"boom"] {
+            assert!(has(needle), "{} missing", String::from_utf8_lossy(needle));
+        }
+        assert!(
+            has(&[0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6]),
+            "parent trace id"
+        );
+        assert_eq!(Traceparent(parent).keys(), ["traceparent"]);
+    }
 
     #[test]
     fn redact_url_strips_embedded_credentials() {
