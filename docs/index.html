@@ -55,7 +55,6 @@
     <a class="pill" href="#engine">engine lanes</a>
     <a class="pill" href="#update">self-update</a>
     <a class="pill" href="#decisions">decisions</a>
-    <a class="pill" href="#ghost">ghost reconcile</a>
     <a class="pill" href="#plan">next</a>
     <a class="pill" href="#findings">open findings</a>
     <a class="pill" href="#shifts">unattended shifts</a>
@@ -154,41 +153,18 @@
       private <code class="code">.bare</code> and <code class="code">.pool</code> sat in every editor
       explorer beside the operator's checkouts, and every rule had to say "except grove's own
       entries".</p>
-  </div>
-</section>
 
-<section class="docs-section" id="ghost" data-component="ghost">
-  <header>
-    <h2 class="h2">Open: a stopped engine must not keep writing the root</h2>
-    <p class="docs-note">Proposed · <a class="link" href="https://github.com/jgeschwendt/grove/issues/2">#2</a>.
-      Target: a stopped engine does no further writes to its root, and status never reports a
-      driver-owned failure over a disk that contradicts it.</p>
-  </header>
-  <div class="stack">
-    <p><code class="code">Engine::stop</code> is deliberately soft: in-flight lane work runs to
-      completion. The engine set's single owner closes the undeclare → redeclare race on the map, not
-      on the lane — a stopped engine's reconcile is still queued or running, still holds a clone
-      permit, and still reaches <code class="code">realize</code>, which repairs a declared-but-missing
-      root by cloning it. Two consequences:</p>
-    <ul>
-      <li><strong>A ghost reconcile re-clones a root being removed.</strong>
-        <code class="code">roots::remove</code> deletes before it undeclares, and between the steps the
-        root is declared and missing — exactly what <code class="code">realize</code> repairs. The
-        clone finishes after the engine stops, and an undeclared code dir reappears after
-        <code class="code">grove clone remove</code> reported it gone.</li>
-      <li><strong><code class="code">degraded</code> over a <code class="code">ready</code> disk is
-        never re-derived.</strong> <code class="code">apply_reconcile</code> maps a
-        <code class="code">failed</code> outcome to <code class="code">degraded</code> without reading
-        disk; under push-only nothing fires the event that would heal it.</li>
-    </ul>
-    <p>Approach: (1) <code class="code">remove</code> undeclares first, so a ghost reads
-      <code class="code">NotDeclared</code> — a transient error, so the engine re-derives — and never reaches <code class="code">realize</code>,
-      refusing or waiting while the cloning marker is held — but this inverts the live invariant
-      <code class="code">※ delete-before-undeclare</code>, so the ordering must be settled first;
-      (2) <code class="code">stop</code> sets a flag the lane job checks before it starts, so a queued
-      job never begins and never takes a permit; (3) a <code class="code">failed</code> outcome over a
-      <code class="code">ready</code> disk publishes the failure on the bus but takes disk for status.
-      Out of scope: cancelling grove-ops work already running, such as a clone mid-transfer.</p>
+    <h3 class="h3">A stopped engine writes nothing new <small>· <a class="link" href="https://github.com/jgeschwendt/grove/issues/2">#2</a></small></h3>
+    <p><code class="code">Engine::stop</code> raises a flag the reconcile lane job reads before
+      its clone-permit try, so a queued reconcile of a stopped engine never begins — no permit, no
+      <code class="code">realize</code>. grove-ops work already running cannot be cancelled: a clone
+      mid-transfer finishes and reports to a mailbox nobody reads. The
+      <code class="code">remove</code> ordering stays <code class="code">※ delete-before-undeclare</code>:
+      undeclaring first would let <code class="code">adopt</code>, which runs off the lane, re-declare
+      the still-present bare, while the window it was to close never reaches reconcile —
+      <code class="code">remove</code> holds the root's lane, and <code class="code">reconcile_one</code>
+      re-reads the declaration under it. Why: a reconcile queued behind a stopped engine (a daemon
+      shutting down) still cloned the root.</p>
   </div>
 </section>
 
@@ -199,32 +175,14 @@
       <code class="code">※</code> anchors, never line numbers.</p>
   </header>
   <ol id="next" class="steps">
-    <li><strong>Settle the <code class="code">remove</code> ordering before touching it.</strong>
-      Undeclare-first inverts <code class="code">※ delete-before-undeclare</code>
-      (<code class="code">roots::remove</code>, claim in <code class="code">crates/grove-ops/AGENTS.md</code>,
-      asserted by <code class="code">crates/grove-daemon/tests/scenario.rs</code>), whose rationale is
-      that undeclaring first lets <code class="code">adopt</code> re-declare a still-present bare. Pick
-      one ordering and rewrite the claim with it; the marker is
-      <code class="code">roots/&lt;slug&gt;/cloning</code> (<code class="code">CLONING_MARKER</code>,
-      flock-held while a clone is live). → <a class="link" href="#ghost">ghost reconcile</a> (1).</li>
-    <li><strong>Cancel a stopped engine's queued work at the lane head.</strong>
-      <code class="code">Engine::stop</code> only sends <code class="code">Msg::Stop</code>, and the
-      reconcile lane job in <code class="code">Driver::dispatch</code> calls
-      <code class="code">reconcile_one</code> with no stop check (a permit is taken only when
-      <code class="code">disk_status</code> is <code class="code">Missing</code>), so a queued ghost
-      still clones a root being removed. → <a class="link" href="#ghost">ghost reconcile</a> (2).</li>
-    <li><strong>Let disk win over a stale <code class="code">failed</code>.</strong>
+    <li><strong>Heal a stale <code class="code">failed</code> by its cause, not by disk.</strong>
       <code class="code">apply_reconcile</code> maps <code class="code">Applied{status: failed}</code>
-      to <code class="code">Degraded</code> without reading disk. A later
-      <code class="code">Derive(Ready)</code> heals it (<code class="code">engine/status.rs</code>
-      <code class="code">next_status</code>), but under push-only nothing fires that event. →
-      <a class="link" href="#ghost">ghost reconcile</a> (3).</li>
-    <li><strong>Land the three ghost-reconcile tests:</strong> a stopped engine's queued reconcile does
-      not clone and frees its permit; <code class="code">remove</code> racing
-      <code class="code">reconcile_one</code> cannot resurrect; <code class="code">failed</code> over a
-      ready disk reports <code class="code">ready</code>. None exists today. Also reword the
-      cancellation paragraph of <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a>
-      to say grove-ops work already running cannot be cancelled.</li>
+      to <code class="code">degraded</code>, and a blanket <code class="code">Derive(disk)</code> there
+      would report <code class="code">ready</code> over a genuine trunk conflict (a trunk moved onto
+      another branch's checkout: <code class="code">disk_status</code> finds a trunk, and the view
+      shows <code class="code">error</code> only while <code class="code">degraded</code>). The stale
+      case is the in-flight back-off <a class="link" href="#findings">finding</a>: make the
+      CLI's clone finishing raise an event the engine already re-derives on.</li>
     <li><strong>Work the <a class="link" href="#findings">open sweep findings</a></strong>, highest
       first.</li>
   </ol>

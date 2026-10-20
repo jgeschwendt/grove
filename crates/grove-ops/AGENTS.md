@@ -11,7 +11,7 @@ invariants:
   - claim: "every op failure carries one of seven stable snake_case codes (not_declared | not_ready | invalid_input | conflict | network | git | io); the daemon's engine reads the category to tell a terminal failure from a transient one"
     anchor: ※ wire-error-codes
     enforced_by: crates/grove-api/tests/wire_vocab.rs
-  - claim: "an explicit root removal deletes on disk BEFORE it undeclares — undeclaring first lets the watcher's adopt re-find the still-present bare and resurrect the root; a partial delete propagates before the undeclare, so the slug stays declared and visibly broken"
+  - claim: "an explicit root removal deletes on disk BEFORE it undeclares, and that ordering is settled: undeclaring first lets the watcher's adopt, which runs off the lane, re-find the still-present bare and resurrect the root, while the declared-but-missing window it would close is invisible to reconcile — remove holds the root's lane throughout, and reconcile_one re-reads the declaration under that lane; a partial delete propagates before the undeclare, so the slug stays declared and visibly broken"
     anchor: ※ delete-before-undeclare
   - claim: "a root removal refuses an UNDECLARED slug before any path reaches remove_dir_all, and refuses a declared one holding uncommitted tracked changes, unpushed commits on any local branch, a stash, or a code-dir entry that is no worktree of its bare unless the caller forces — <home>/code/<slug> is a real directory whether or not grove put it there, and the command that deletes N worktrees at once must not protect less than the one that deletes one"
     anchor: crates/grove-ops/src/roots.rs#unsaved_work

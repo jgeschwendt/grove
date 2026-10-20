@@ -50,6 +50,7 @@ mod status;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grove_api::events::{Event, TaskKind, TaskOutcome};
 use grove_api::policy::{
@@ -155,6 +156,7 @@ impl std::fmt::Debug for Deps {
 pub struct Engine {
     slug: Arc<str>,
     tx: mpsc::UnboundedSender<Msg>,
+    stopped: Arc<AtomicBool>,
 }
 
 /// The driver's mailbox vocabulary.
@@ -207,6 +209,7 @@ impl Engine {
     pub fn start(deps: Deps, slug: impl Into<String>) -> Self {
         let slug: Arc<str> = Arc::from(slug.into());
         let (tx, rx) = mpsc::unbounded_channel();
+        let stopped = Arc::new(AtomicBool::new(false));
         let driver = Driver {
             slug: Arc::clone(&slug),
             deps,
@@ -221,9 +224,10 @@ impl Engine {
             sync_pending: false,
             sync_note: None,
             tx: tx.clone(),
+            stopped: Arc::clone(&stopped),
         };
         tokio::spawn(driver.run(rx));
-        Self { slug, tx }
+        Self { slug, tx, stopped }
     }
 
     /// The root this engine drives.
@@ -271,10 +275,13 @@ impl Engine {
     ///
     /// Explicit rather than "drop the last handle": a background task holds a sender
     /// so it can report its outcome, so an undeclared root would otherwise stay alive
-    /// for the length of its in-flight clone. In-flight work still runs to completion
-    /// on the lane — it simply reports to a mailbox nobody reads.
+    /// for the length of its in-flight clone. A reconcile still queued on the lane
+    /// never begins — it neither takes a clone permit nor reaches `realize` — but
+    /// grove-ops work already running cannot be cancelled: it runs to completion and
+    /// reports to a mailbox nobody reads.
     pub fn stop(&self) {
         let _ = self.tx.send(Msg::Stop);
+        self.stopped.store(true, Ordering::Release);
     }
 
     async fn ask<T>(&self, msg: impl FnOnce(oneshot::Sender<T>) -> Msg) -> Result<T, EngineError> {
@@ -316,6 +323,8 @@ struct Driver {
     sync_pending: bool,
     sync_note: Option<SyncNote>,
     tx: mpsc::UnboundedSender<Msg>,
+    /// Set by [`Engine::stop`], read at the head of the lane by a queued reconcile.
+    stopped: Arc<AtomicBool>,
 }
 
 impl Driver {
@@ -462,6 +471,7 @@ impl Driver {
         let events = self.deps.events.clone();
         let target = self.target;
         let tx = self.tx.clone();
+        let stopped = Arc::clone(&self.stopped);
 
         tokio::spawn(async move {
             let outcome = match kind {
@@ -469,6 +479,11 @@ impl Driver {
                     let job = {
                         let (home, slug, events) = (home.clone(), slug.clone(), events.clone());
                         move || {
+                            // A stopped engine's reconcile never begins: it returns as
+                            // a deferral to a mailbox nobody reads, its poke declined.
+                            if stopped.load(Ordering::Acquire) {
+                                return None;
+                            }
                             // Only a root disk says is unrealized can clone; read here,
                             // under the lane, so no op of this root's moves it after. A
                             // poke this try does not consume is declined before the
