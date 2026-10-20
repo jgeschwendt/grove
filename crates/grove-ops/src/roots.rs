@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 
 use crate::wire::{AdoptStatus, ReconcileStatus};
@@ -294,16 +294,17 @@ pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     let root = declared(home, slug)?;
 
     // One realizer per root for the whole of this call, not only its clone: the
-    // `cloning` marker's lock, once taken — on a crashed clone's leftover here, or by
-    // the clone itself — is held through the worktree and share passes below, and a
-    // marker another realizer holds means its clone, or the passes that follow it,
-    // are still running in this root's git. A free marker is a crashed clone's, and
-    // the claim on it keeps a third realizer out while the root is repaired.
+    // `cloning` marker's lock, once taken — on a crashed clone's leftover here, by a
+    // trunk change, or by the clone itself — is held through the worktree and share
+    // passes below, and a marker another realizer holds means its clone, or the passes
+    // that follow it, are still running in this root's git. A free marker is a crashed
+    // clone's, and the claim on it keeps a third realizer out while the root is repaired.
     let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
-    let claim = match claim_root(&root.slug, &marker, true) {
+    let mut claim = match claim_root(&root.slug, &marker, true) {
         Ok(claim) => claim,
         Err(refused) => return Ok(refused),
     };
+    let leftover = claim.is_some();
 
     // Converge the trunk before realizing: which directory *is* the trunk is a
     // manifest question, and `realize` below reads the answer as settled. A pending
@@ -311,9 +312,19 @@ pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     // checkout is missing while its worktrees are live — the refuse-to-re-clone
     // guard — and report a wedged root for what is an ordinary manifest edit.
     // Skipped when the bare isn't there yet: the clone lays down a converged root.
-    let (applied, claim) = match converge_trunk(home, &root.slug) {
-        Ok(()) => realize(home, &root, claim),
-        Err(e) => (failed(&root.slug, format!("{e:#}")), None),
+    // A failed converge keeps a leftover's marker, and sheds one it laid itself below.
+    // One it laid but did not write under — a racing realizer converged first — is
+    // dropped unremoved for `realize` to reclaim as its own, never read as a leftover.
+    let (applied, claim) = match converge_trunk(home, &root.slug, &mut claim) {
+        Ok(()) => realize(
+            home,
+            &root,
+            claim.filter(|_| leftover || trunk_dir(home, &root.slug).exists()),
+        ),
+        Err(e) => (
+            failed(&root.slug, format!("{e:#}")),
+            claim.filter(|_| !leftover),
+        ),
     };
     // Converge this root's worktrees once it's on disk (create declared-but-
     // missing, adopt undeclared), then materialize the worktree environment
@@ -386,7 +397,12 @@ fn reconcile_warnings(slug: &str, report: &[crate::worktrees::WorktreeOutcome]) 
 /// `HEAD` already names the wanted branch and no declared worktree occupies the
 /// trunk's directory. A trunk that *vanished* is a repair, not a convergence, and the
 /// two answers differ: repair may re-clone, this may not.
-fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
+///
+/// Every write runs under `claim`: with none held, one is taken on a fresh marker and
+/// the look repeated under it — a racing realizer may have converged meanwhile — and
+/// it is left in `claim` for [`reconcile_one`] to hold through its passes. A no-op
+/// converge claims nothing, and a held marker is [`IN_FLIGHT`] with nothing touched.
+fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) -> Result<()> {
     let bare = bare_dir(home, slug);
     if !bare.exists() {
         return Ok(());
@@ -399,6 +415,11 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
         .find(|w| w.name == want.name);
     if head == want.branch && occupant.is_none() {
         return Ok(());
+    }
+    if claim.is_none() {
+        *claim = claim_marker(&root_dir(home, slug).join(CLONING_MARKER))?;
+        ensure!(claim.is_some(), IN_FLIGHT);
+        return converge_trunk(home, slug, claim);
     }
 
     // A declared worktree at the trunk's directory but on a *different* branch is two
@@ -454,9 +475,9 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
 }
 
 /// Bring a declared root onto disk, under the `claim` [`reconcile_one`] took on a
-/// leftover `cloning` marker — or, with none, one of its own before a repair or a
-/// clone writes anything. The claim comes back only with a root made
-/// whole, for `reconcile_one` to hold through its passes and then shed the marker;
+/// leftover `cloning` marker or for a trunk change — or, with none, one of its own
+/// before a repair or a clone writes anything. The claim comes back only with a root
+/// made whole, for `reconcile_one` to hold through its passes and then shed the marker;
 /// a refusal drops it and leaves the marker, so a crashed clone — or a root whose
 /// repair failed under it — stays visibly grove's.
 fn realize(
@@ -643,15 +664,15 @@ fn clone_and_trunk(
     cloned.map(|branch| (branch, claim))
 }
 
-/// Written under `roots/<slug>` for the length of a clone and the passes after it;
-/// see [`clone_and_trunk`] and [`reconcile_one`].
+/// Written under `roots/<slug>` for the length of a clone, a repair or a trunk change
+/// and the passes after it; see [`clone_and_trunk`] and [`reconcile_one`].
 const CLONING_MARKER: &str = "cloning";
 
 /// The refusal a second realizer reports while the marker's lock is held.
 pub const IN_FLIGHT: &str =
-    "a clone of this root is in flight in another realizer; nothing touched";
+    "a clone or trunk change of this root is in flight in another realizer; nothing touched";
 
-/// Block until the clone in flight on `slug` ends — its marker gone, or its lock
+/// Block until the clone or trunk change in flight on `slug` ends — its marker gone, or its lock
 /// released, a free leftover the retry then claims — and answer `true`; `false` at
 /// once only when the marker cannot be opened or locked at all, so a caller retrying
 /// on `true` never spins on a refusal no clone will clear.
@@ -1409,6 +1430,40 @@ mod tests {
         );
     }
 
+    /// A trunk change is a realizer's write like a repair: one that looked before
+    /// another claimed the marker meets the claim at the converge and touches nothing,
+    /// and one that converges unclaimed lays a marker of its own and sheds it.
+    #[test]
+    fn a_trunk_change_converges_under_a_claim() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo_with_canary(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        let manifest = std::fs::read_to_string(manifest_path(&home)).unwrap();
+        let marker = root_dir(&home, "o/r").join(CLONING_MARKER);
+        let held = claim_marker(&marker).unwrap();
+
+        let err = converge_trunk(&home, "o/r", &mut None).unwrap_err();
+        assert_eq!(err.to_string(), IN_FLIGHT);
+        assert_eq!(
+            git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
+            "main"
+        );
+        assert!(!code_dir(&home, "o/r").join("canary").exists());
+        assert_eq!(
+            std::fs::read_to_string(manifest_path(&home)).unwrap(),
+            manifest
+        );
+
+        drop(held);
+        std::fs::remove_file(&marker).unwrap();
+        let applied = reconcile_one(&home, "o/r").unwrap();
+        assert_eq!(applied.status, ReconcileStatus::Present, "{applied:?}");
+        assert!(!marker.exists());
+    }
+
     /// When the branch being promoted to trunk is already checked out as a declared
     /// worktree, that checkout *is* the new trunk: its `worktrees.<name>` entry is
     /// dropped, and the directory (with whatever is in it) is not touched. Leaving the
@@ -1486,6 +1541,7 @@ mod tests {
             "HEAD is left where it was"
         );
         assert!(code.join("main/README.md").is_file(), "so is the trunk");
+        assert!(!root_dir(&home, "o/r").join(CLONING_MARKER).exists());
     }
 
     /// Two checkouts asking for one directory — a declared worktree named exactly for
