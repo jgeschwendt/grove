@@ -15,7 +15,7 @@
 //! The second half answers what no other read can: a root whose bare survived but
 //! whose trunk was deleted, or a worktree quietly sitting on the wrong branch, is
 //! otherwise invisible to the one command whose whole purpose is to find it. The
-//! vocabulary is contract — see `docs/api.md` § Doctor. Findings are
+//! vocabulary is contract — see `docs/api.html#doctor`. Findings are
 //! **report-only** — `--fix` is scoped to shares plus the one legacy-layout
 //! migration, because every other plumbing finding here is either a human's edit to
 //! reconcile with (drift, a bad declaration) or a job the reconciler already owns (a

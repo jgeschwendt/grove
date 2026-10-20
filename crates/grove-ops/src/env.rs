@@ -3,7 +3,7 @@
 //! as a relative link to the canonical source in the trunk checkout (named by its
 //! branch; live, shared), a `copy` as an independent real file seeded once from that
 //! source. The sole owner of share filesystem mutation — nothing else in the codebase
-//! materializes a share. See `docs/worktrees.md`.
+//! materializes a share. See `docs/worktrees.html#environment`.
 //!
 //! **Copy is seed-once.** A `_.copy` share is written into a worktree only when its
 //! slot is empty (or holds a stale *grove-owned* symlink, migrated from a prior
@@ -801,7 +801,7 @@ fn free_backup_name<Fd: AsFd>(dirfd: Fd, leaf: &OsStr) -> Result<OsString> {
 /// warm-pool slot, which lives under the root dir rather than beside the trunk) gets
 /// targets that resolve somewhere else entirely and dangle — materialize into such a
 /// tree only after it moves to canonical sibling depth, or teach this function a
-/// worktree-address axis first. See `docs/worktrees.md` (On-disk layout).
+/// worktree-address axis first. See `docs/worktrees.html#on-disk-layout`.
 fn trunk_relative_target(trunk: &str, p: &Path) -> PathBuf {
     let mut target = PathBuf::new();
     for _ in 0..p.components().count() {

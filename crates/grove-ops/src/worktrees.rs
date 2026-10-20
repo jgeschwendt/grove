@@ -1,7 +1,7 @@
 //! Worktrees: a branch checked out under a root. **Declared** in the manifest (so
 //! it can carry settings git can't hold) and **realized** in git. Reconcile is
 //! two-way *additive* — create declared-but-missing, adopt in-git-but-undeclared
-//! — and never deletes. See `docs/worktrees.md`.
+//! — and never deletes. See `docs/worktrees.html`.
 
 use std::path::{Component, Path, PathBuf};
 

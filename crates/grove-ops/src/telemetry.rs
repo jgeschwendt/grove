@@ -13,7 +13,7 @@
 //! streams). Wiring it up means calling [`init`] and holding the [`Telemetry`] handle
 //! for the process's life — and, in the daemon, replacing the blocking exporter with
 //! a batch one so an export cannot sit on a runtime thread. See
-//! `docs/architecture.md` § Telemetry.
+//! `docs/architecture.html#telemetry`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

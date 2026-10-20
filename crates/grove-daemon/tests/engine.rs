@@ -549,7 +549,7 @@ async fn sync_accepts_immediately_and_announces_its_completion() {
 /// `degraded` is the corner worth pinning rather than `cloning` or `missing`: those
 /// carry a reconcile that will deliver the root to `ready` on its own, while a
 /// degraded root moves only on a dispatched reconcile — so this is where `syncing`
-/// can rest indefinitely, and why `docs/api.md` § Sync tells a UI to read it as
+/// can rest indefinitely, and why `docs/api.html#sync` tells a UI to read it as
 /// "holds a sync request", never as "is fetching".
 #[tokio::test]
 async fn a_sync_accepted_on_a_degraded_root_waits_for_the_recovery() {

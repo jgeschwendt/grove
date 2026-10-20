@@ -59,6 +59,12 @@
     <a class="pill" href="#findings">open findings</a>
     <a class="pill" href="#shifts">unattended shifts</a>
     <a class="pill" href="#reference">reference</a>
+    <a class="pill" href="api.html">api</a>
+    <a class="pill" href="architecture.html">architecture</a>
+    <a class="pill" href="deployment.html">deployment</a>
+    <a class="pill" href="engine.html">engine</a>
+    <a class="pill" href="updates.html">updates</a>
+    <a class="pill" href="worktrees.html">worktrees</a>
   </nav>
 </header>
 
@@ -76,7 +82,7 @@
   <header>
     <h2 class="h2">Engine lanes</h2>
     <p class="docs-note">One engine per declared root drives convergence through that root's lane;
-      the watcher only discovers and announces. Events, never a clock. Detail: <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a>.</p>
+      the watcher only discovers and announces. Events, never a clock. Detail: <a class="link" href="engine.html">engine</a>.</p>
   </header>
   <figure class="figure"><img class="figure-light" src="figures/engine-lanes.png" alt="Triggers (nudge, manifest watch, boot) wake the watcher, which adopts undeclared bares and publishes roots_changed on the EventBus; engine::RootSet starts and stops one engine per declared root; each engine dispatches at most one of reconcile, sync or fill to its root's lane, which runs one git writer per root; an unrealized reconcile takes a ClonePermit; GET /api/events streams bus events and log lines; shutdown drains; grove on and off hold process custody." /><img class="figure-dark" src="figures/engine-lanes-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>Engine lanes. Source: Claude Design canvas <em>grove figures</em>, board engine-lanes.</figcaption></figure>
 </section>
@@ -87,7 +93,7 @@
     <p class="docs-note"><code class="code">grove up</code> installs into an immutable
       <code class="code">versions/&lt;v&gt;/</code> and moves only <code class="code">current</code>. The
       flip lands before the health gate answers, so the verdict it owes is written first, as the
-      <code class="code">pending</code> marker. Detail: <a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/updates.md">updates.md</a>.</p>
+      <code class="code">pending</code> marker. Detail: <a class="link" href="updates.html">updates</a>.</p>
   </header>
   <figure class="figure"><img class="figure-light" src="figures/self-update.png" alt="Six steps: fetch, verify the checksum, install into an immutable versions directory, flip current after writing the pending marker, bounce the daemon, gate on GET /api/health; a healthy gate clears pending and prunes, a rejected one flips back to previous; every grove up first recovers an unproven flip from pending." /><img class="figure-dark" src="figures/self-update-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>Self-update. Source: Claude Design canvas <em>grove figures</em>, board self-update.</figcaption></figure>
 </section>
@@ -272,15 +278,14 @@
   </header>
   <div class="table-wrap">
     <table data-table>
-      <thead><tr><th>doc</th><th>what it covers</th></tr></thead>
+      <thead><tr><th>page</th><th>what it covers</th></tr></thead>
       <tbody>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/api.md">api.md</a></td><td>the HTTP surface the daemon serves</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/architecture.md">architecture.md</a></td><td>crates, desired vs actual state, reconcile</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/deployment.md">deployment.md</a></td><td>requirements, environment, served mode</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/engine.md">engine.md</a></td><td>per-root engines, lanes, status derivation</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/updates.md">updates.md</a></td><td>releases, channels, <code class="code">grove up</code> and rollback</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/worktree-environment.md">worktree-environment.md</a></td><td>shares and the per-worktree environment</td></tr>
-        <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove/blob/main/docs/worktrees.md">worktrees.md</a></td><td>trunk, worktrees, pool, recovery, adoption</td></tr>
+        <tr><td class="table-mono"><a class="link" href="api.html">api</a></td><td>the HTTP surface the daemon serves</td></tr>
+        <tr><td class="table-mono"><a class="link" href="architecture.html">architecture</a></td><td>crates, desired vs actual state, reconcile</td></tr>
+        <tr><td class="table-mono"><a class="link" href="deployment.html">deployment</a></td><td>requirements, environment, served mode</td></tr>
+        <tr><td class="table-mono"><a class="link" href="engine.html">engine</a></td><td>per-root engines, lanes, status derivation</td></tr>
+        <tr><td class="table-mono"><a class="link" href="updates.html">updates</a></td><td>releases, channels, <code class="code">grove up</code> and rollback</td></tr>
+        <tr><td class="table-mono"><a class="link" href="worktrees.html">worktrees</a></td><td>trunk, worktrees, pool, recovery, adoption; shares and the per-worktree environment</td></tr>
         <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove">jgeschwendt/grove</a></td><td>the repository</td></tr>
       </tbody>
     </table>
