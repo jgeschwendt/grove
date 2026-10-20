@@ -133,6 +133,13 @@ is the retry. There is no retry timer, no poll, and no periodic sweep in the eng
 only deadlines in the daemon are the lane's idle reap and the watcher's debounce, and both
 are budgets on an event rather than a cadence.
 
+One failure's next event is not a manifest change. A reconcile that backs off another
+realizer's clone in flight (an offline CLI's, holding the `cloning` marker's lock) degrades
+the root, and the end of that clone touches nothing the watcher sees. So the driver waits on
+the marker itself (`roots::await_clone`, on a detached thread, since the wait spans the
+whole clone) and re-runs `roots_changed` once the lock is released or the marker is gone. A
+marker nobody holds is no clone to wait on, so a refusal that recurs cannot spin.
+
 The operator-facing consequence is that recovery signals matter: `grove doctor` prints
 non-`ready` engine statuses and under-filled pools precisely because a background refill
 that failed retries on the next event, not on a clock.

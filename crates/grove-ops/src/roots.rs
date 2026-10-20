@@ -628,7 +628,22 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
 const CLONING_MARKER: &str = "cloning";
 
 /// The refusal a second realizer reports while the marker's lock is held.
-const IN_FLIGHT: &str = "a clone of this root is in flight in another realizer; nothing touched";
+pub const IN_FLIGHT: &str =
+    "a clone of this root is in flight in another realizer; nothing touched";
+
+/// Block until the clone in flight on `slug` ends — its marker gone, or its lock
+/// released — and answer `true`; `false` at once when no lock is held on it, so a
+/// caller retrying on `true` never spins on a refusal no clone will clear.
+#[must_use]
+pub fn await_clone(home: &Path, slug: &str) -> bool {
+    match std::fs::File::open(root_dir(home, slug).join(CLONING_MARKER)) {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        Ok(marker) => {
+            matches!(marker.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+                && marker.lock().is_ok()
+        }
+    }
+}
 
 /// Create `marker` and take its exclusive flock without blocking: `None` while another
 /// realizer holds it (any lock error reads as held — backing off is the safe answer).
@@ -1852,11 +1867,15 @@ mod tests {
         );
 
         drop(held);
+        assert!(
+            !await_clone(&home, "o/r"),
+            "a free marker is no clone to wait on"
+        );
         assert_eq!(
             reconcile_one(&home, "o/r").unwrap().status,
             ReconcileStatus::Cloned
         );
-        assert!(!root_dir(&home, "o/r").join(CLONING_MARKER).exists());
+        assert!(await_clone(&home, "o/r"), "a gone marker is a clone ended");
     }
 
     #[test]

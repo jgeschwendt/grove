@@ -175,14 +175,6 @@
       <code class="code">※</code> anchors, never line numbers.</p>
   </header>
   <ol id="next" class="steps">
-    <li><strong>Heal a stale <code class="code">failed</code> by its cause, not by disk.</strong>
-      <code class="code">apply_reconcile</code> maps <code class="code">Applied{status: failed}</code>
-      to <code class="code">degraded</code>, and a blanket <code class="code">Derive(disk)</code> there
-      would report <code class="code">ready</code> over a genuine trunk conflict (a trunk moved onto
-      another branch's checkout: <code class="code">disk_status</code> finds a trunk, and the view
-      shows <code class="code">error</code> only while <code class="code">degraded</code>). The stale
-      case is the in-flight back-off <a class="link" href="#findings">finding</a>: make the
-      CLI's clone finishing raise an event the engine already re-derives on.</li>
     <li><strong>Work the <a class="link" href="#findings">open sweep findings</a></strong>, highest
       first.</li>
   </ol>
@@ -201,10 +193,6 @@
     <li><strong><code class="code">grove off</code> checks for any grove daemon, not this
       home's</strong> (plausible, medium). It can shut down another home's daemon on the same
       bind.</li>
-    <li><strong>An in-flight back-off is never retried</strong> (plausible, low). A daemon booting
-      during an offline CLI clone reports <code class="code">failed: … in flight</code>; the CLI
-      finishing raises no watched event, so status stays <code class="code">failed</code> until the
-      next manifest change. Same shape as Next 3.</li>
     <li><strong>Manifest writes don't fsync</strong> (plausible, low). <code class="code">write_doc</code>
       renames <code class="code">manifest.toml.tmp</code> without fsyncing the file or its
       directory.</li>

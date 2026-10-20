@@ -320,6 +320,24 @@ async fn a_degraded_root_recovers_on_the_next_event() {
     settles_on(&engine, RootStatus::Ready).await;
 }
 
+/// A reconcile that backed off another realizer's clone in flight is retried when that
+/// clone ends — its `cloning` marker's lock released is the event, not a manifest
+/// change and not a clock. The held lock stands in for an offline CLI mid-clone.
+#[tokio::test]
+async fn a_back_off_from_a_clone_in_flight_retries_when_it_ends() {
+    let tmp = TempDir::new().unwrap();
+    let (home, _src) = declared_home(&tmp);
+    let dir = grove_ops::roots::root_dir(&home, SLUG);
+    std::fs::create_dir_all(&dir).unwrap();
+    let held = std::fs::File::create(dir.join("cloning")).unwrap();
+    held.lock().unwrap();
+
+    let engine = Room::new(home).start(SLUG);
+    settles_on(&engine, RootStatus::Degraded).await;
+    drop(held);
+    settles_on(&engine, RootStatus::Ready).await;
+}
+
 /// A **terminal** ops fault degrades; a **transient** one re-derives from disk. Same
 /// engine shape, same absence of a retry timer, different resting state — and the
 /// difference is exactly `grove_api::policy::classify_error`.
