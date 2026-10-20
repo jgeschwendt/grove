@@ -198,9 +198,6 @@
       succeeds on the dead inode — fix: after the lock, check the path still names that inode.
       And <code class="code">recover_trunk</code> on a bare with no leftover marker takes no claim, so two
       ungated realizers can both repair one root.</li>
-    <li><strong>Slugs keep their case</strong> (plausible, low). <code class="code">slug_from_url</code>
-      of <code class="code">…/Foo/bar</code> and <code class="code">…/foo/bar</code> mints two manifest
-      keys that share one directory on case-insensitive APFS.</li>
     <li><strong><code class="code">version_key</code> misorders</strong> (plausible, low;
       <code class="code">update/layout.rs</code>). <code class="code">+build</code> metadata folds into
       the core numbers (<code class="code">0.4.0+1</code> &gt; <code class="code">0.4.0</code>) and prereleases compare by number before label
