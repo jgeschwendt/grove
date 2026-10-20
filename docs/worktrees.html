@@ -129,9 +129,10 @@ git-synced manifest, so neither entrance is the only gate.</p>
 </table>
 </div>
 <p class="docs-note">Slugs keep the case they were declared in, and <code class="code">manifest::add_root</code> refuses one
-that differs from a declared slug only in case (<code class="code">Foo/bar</code> beside <code class="code">foo/bar</code>), naming the
+that differs from a declared slug only in ASCII case (<code class="code">Foo/bar</code> beside <code class="code">foo/bar</code>), naming the
 declared one: on a case-insensitive filesystem, APFS's default, the two name one directory.
-Re-declaring in the same case updates the URL.</p>
+Re-declaring a slug already declared updates its URL, even beside a case twin a hand edit
+left.</p>
 <p class="docs-note" id="manifest-dot-rule"><strong>The dot rule.</strong> Git refuses a ref component beginning with a dot, so no branch — and
 therefore no directory <code class="code">worktrees::name_for</code> derives from one — is ever spelled that way.
 A dotted entry in a code dir is somebody else's artefact: grove neither declares nor

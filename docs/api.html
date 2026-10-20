@@ -247,7 +247,7 @@ next reconcile.</p>
 <p class="docs-note"><code class="code">url</code> and <code class="code">error</code> pass through the same userinfo redactor as the log lines below:
 a clone URL can carry a token (<code class="code">https://user:token@host/…</code> travels as
 <code class="code">https://***@host/…</code>), and a failed clone's text quotes it. The manifest keeps the URL whole;
-the wire never carries it. Pinned by <code class="code">a_rows_url_and_error_carry_no_userinfo</code>.</p>
+the snapshot row never carries it. Pinned by <code class="code">a_rows_url_and_error_carry_no_userinfo</code>.</p>
 <p class="docs-note"><code class="code">root</code> and <code class="code">trunk</code> are the root's whole address: <code class="code">roots/&lt;slug&gt;</code>, everything grove owns for
 it — the bare, the warm pool, the in-flight-clone marker — and the checkout of its trunk
 branch inside <code class="code">code/&lt;slug&gt;</code>. Both are absolute, and both travel because a consumer holding
