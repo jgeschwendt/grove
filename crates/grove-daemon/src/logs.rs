@@ -248,12 +248,13 @@ pub fn redact(value: &str) -> String {
     let mut rest = value;
     while let Some(scheme) = rest.find("://") {
         let after = &rest[scheme + 3..];
-        // Userinfo ends at the first `@` before the authority's own delimiters.
+        // Userinfo ends at the last `@` before the authority's own delimiters: a raw
+        // `@` in a password is the userinfo's, not the host's.
         let authority = after
             .find(['/', '?', '#', ' '])
             .map_or(after, |end| &after[..end]);
         out.push_str(&rest[..scheme + 3]);
-        if let Some(at) = authority.find('@') {
+        if let Some(at) = authority.rfind('@') {
             out.push_str("***@");
             rest = &after[at + 1..];
         } else {
@@ -365,6 +366,7 @@ mod tests {
             redact("a https://u:p@x/1 and b https://v:q@y/2"),
             "a https://***@x/1 and b https://***@y/2"
         );
+        assert_eq!(redact("https://u:p@ss@host/o/r"), "https://***@host/o/r");
 
         let ring = ring(DEFAULT_LEVEL);
         let subscriber = tracing_subscriber::registry().with(ring.layer());
