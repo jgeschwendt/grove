@@ -140,7 +140,9 @@ whose restored version comes back healthy is exit 7 (<code class="code">update</
 version <em>also</em> fails to come back is exit 6 (<code class="code">unhealthy</code>) — the box is down, and that must
 not read as a routine rollback. A restart that errors outright is treated as a bad boot and
 rolls back too, rather than stranding <code class="code">current</code>.</p>
-<p class="docs-note">Pruning keeps the three newest version directories, plus whatever <code class="code">current</code> and
+<p class="docs-note">Pruning keeps the three newest version directories — newest by semver precedence:
+<code class="code">+build</code> metadata ignored, a release above its prereleases, <code class="code">-rc.1</code> above
+<code class="code">-canary.10</code> — plus whatever <code class="code">current</code> and
 <code class="code">previous</code> name, and is housekeeping only: a prune
 failure never fails a landed, healthy update.</p>
 <h3 class="h3" id="grove-up-pending-marker">The pending marker</h3>

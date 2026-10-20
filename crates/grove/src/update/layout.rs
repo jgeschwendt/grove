@@ -395,20 +395,35 @@ fn file_name(p: &Path) -> String {
         .to_string()
 }
 
-/// Version-aware sort key. Splits the core from a `-<prerelease>` suffix so a
-/// release outranks its own prereleases: key on (core numbers, is-release, then
-/// prerelease numbers, then the raw string). `is_release` (no `-` suffix) sorts
-/// ABOVE any prerelease of the same core, so `0.4.0` > `0.4.0-canary.9`; equal
-/// cores tie-break on the prerelease number (`…canary.9` > `…canary.2`) and
-/// finally the raw string. Keeps `0.10.0` > `0.9.0` via numeric segments.
-pub(super) fn version_key(v: &str) -> (Vec<u64>, bool, Vec<u64>, String) {
-    let (core, pre) = v.split_once('-').unwrap_or((v, ""));
+/// Version-aware sort key in semver precedence: `+build` metadata is dropped, then
+/// key on (core numbers, is-release, prerelease identifiers, the raw string).
+/// `is_release` (no `-` suffix) sorts ABOVE any prerelease of the same core, so
+/// `0.4.0` > `0.4.0-canary.9`; prereleases compare identifier by identifier, a
+/// numeric one numerically and below any alphanumeric one, so `-canary.10` >
+/// `-canary.9` and `-rc.1` > `-canary.10`; the raw string only breaks a tie
+/// (`0.4.0+1` beside `0.4.0`). Keeps `0.10.0` > `0.9.0` via numeric segments.
+pub(super) fn version_key(v: &str) -> (Vec<u64>, bool, Vec<Ident>, String) {
+    let precedence = v.split_once('+').map_or(v, |(p, _)| p);
+    let (core, pre) = precedence.split_once('-').unwrap_or((precedence, ""));
     (
         numeric_segments(core),
         pre.is_empty(),
-        numeric_segments(pre),
+        pre.split('.')
+            .map(|id| {
+                id.parse()
+                    .map_or_else(|_| Ident::Alpha(id.into()), Ident::Num)
+            })
+            .collect(),
         v.to_string(),
     )
+}
+
+/// One prerelease identifier; the variant order is semver's (numeric below
+/// alphanumeric).
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum Ident {
+    Num(u64),
+    Alpha(String),
 }
 
 /// The `u64` runs in `s`, split on any non-digit (so `0.10.0` → `[0, 10, 0]`).
@@ -623,6 +638,10 @@ mod tests {
             canaries,
             ["0.4.0-canary.1", "0.4.0-canary.2", "0.4.0-canary.10"]
         );
+        // Build metadata never outranks a core, and labels compare before numbers.
+        let mut mixed = vec!["0.4.1", "0.4.0+1", "0.4.0-rc.1", "0.4.0-canary.10"];
+        mixed.sort_by_key(|v| version_key(v));
+        assert_eq!(mixed, ["0.4.0-canary.10", "0.4.0-rc.1", "0.4.0+1", "0.4.1"]);
     }
 
     #[test]
