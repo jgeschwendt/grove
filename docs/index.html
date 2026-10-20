@@ -198,10 +198,6 @@
       succeeds on the dead inode — fix: after the lock, check the path still names that inode.
       And <code class="code">recover_trunk</code> on a bare with no leftover marker takes no claim, so two
       ungated realizers can both repair one root.</li>
-    <li><strong><code class="code">logs::redact</code> cuts at the first <code class="code">@</code></strong>
-      (plausible, low; <code class="code">grove-daemon/src/logs.rs</code>),
-      <code class="code">telemetry::redact_url</code> at the last, so a raw <code class="code">@</code>
-      in a password leaves its tail in the ring.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
