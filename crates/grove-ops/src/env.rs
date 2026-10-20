@@ -205,13 +205,15 @@ pub(crate) fn carry(home: &Path, slug: &str, prev_trunk: &str) -> Vec<ShareOutco
 }
 
 /// The per-root constants every row of a pass carries: the slug it reports under, the
-/// name of the trunk directory its links point through, and the previous trunk — the
-/// trunk itself except in [`carry`]. Bundled so the row helpers keep a readable arity.
+/// name of the trunk directory its links point through, the previous trunk — the
+/// trunk itself except in [`carry`] — and whether a trunk change is pending outside
+/// it. Bundled so the row helpers keep a readable arity.
 #[derive(Clone, Copy)]
 struct Pass<'a> {
     slug: &'a str,
     trunk_name: &'a str,
     prev_trunk: &'a str,
+    pending: bool,
 }
 
 impl Pass<'_> {
@@ -252,6 +254,12 @@ fn run_root(
         slug,
         trunk_name: &trunk.name,
         prev_trunk: prev_trunk.unwrap_or(&trunk.name),
+        // `HEAD` off the declared trunk: a change only [`carry`] can make, so a source
+        // missing here is its to seed, never this pass's to create empty. Detection only —
+        // ownership is still `trunk_name`/`prev_trunk`'s.
+        pending: prev_trunk.is_none()
+            && crate::git::default_branch(&roots::bare_dir(home, slug))
+                .is_ok_and(|head| head != trunk.branch),
     };
 
     let root_fd = match open_dir(&root) {
@@ -305,7 +313,7 @@ fn run_root(
 /// Source row: classify `<trunk>/<p>`, create it when missing (materialize) — seeded
 /// from the previous trunk's `<p>` across a trunk change, so a link repointed onto
 /// the new trunk reads the same bytes; empty only when that source is absent too, and
-/// an `Error` row, nothing created, when it cannot be read.
+/// an `Error` row, nothing created, when it cannot be read or the change is pending.
 fn source_outcome<Fd: AsFd>(
     pass: Pass,
     action: Action,
@@ -319,6 +327,9 @@ fn source_outcome<Fd: AsFd>(
             None => Ok(ShareStatus::Created), // parent missing, diagnose → would-create
             Some((parent_fd, leaf)) => match classify_leaf(&parent_fd, &leaf)? {
                 LeafState::Absent => {
+                    if pass.pending {
+                        bail!("trunk change pending; reconcile carries it");
+                    }
                     if action.mutates() {
                         match prev_fd
                             .map(|fd| read_present(fd, rel))
