@@ -158,7 +158,7 @@ directory carries everything grove owns.</p>
     └── owner/name/                        # the root — everything grove owns for it
         ├── bare/                          # the bare clone
         ├── pool/slot-0/                   # warm slots, detached at the trunk tip
-        └── cloning                        # the marker, only while a clone is in flight
+        └── cloning                        # the marker, while a clone and its passes run
 </code></pre>
 <p class="docs-note">The install layout — <code class="code">versions/</code>, <code class="code">current</code>, <code class="code">previous</code>, <code class="code">channel</code>, <code class="code">pending</code> and
 <code class="code">update.lock</code> — is a separate tree under <code class="code">$GROVE_INSTALL</code> (<a class="link" href="deployment.html"><code class="code">deployment.html</code></a>). The
@@ -319,7 +319,7 @@ owns nothing here. The legacy check comes first, and that order is load-bearing:
 legacy root's own entries would trip the occupancy check too, and "holds <code class="code">.git</code>" is the
 less useful of the two answers.</li>
 <li id="root-realization-re-add-the-trunk"><strong>Re-add the trunk</strong> when the bare is there and its checkout is gone — it vanished out
-of band (a stray <code class="code">rm</code>, a <code class="code">git worktree prune</code>); grove never produces this state itself.
+of band (a stray <code class="code">rm</code>, a <code class="code">git worktree prune</code>), or a clone crashed between the bare and the trunk.
 Prune, then <code class="code">git worktree add</code> from the bare that is already there: a checkout, not a
 repository, is what went missing, so this is the whole of the real repair and it touches
 nothing else under the root. It is <strong>refused</strong> when the bare carries other live
@@ -343,17 +343,18 @@ daemon degrades that root, where it waits for an operator rather than a retry cl
 <code class="code">grove doctor --fix</code> is what clears a legacy root — it migrates the layout in place, and
 the engine re-derives the root as <code class="code">ready</code> from disk on the next event.</p>
 <p class="docs-note">A clone in flight writes a <code class="code">cloning</code> marker at <code class="code">roots/&lt;slug&gt;/cloning</code> for the length of
-the network fetch: <code class="code">gix</code> materializes the bare with its <code class="code">origin</code> before a byte of the
+the clone and the worktree and share passes after it: <code class="code">gix</code> materializes the bare with its <code class="code">origin</code> before a byte of the
 transfer lands, and adoption must not read that as a discovery — otherwise an operator's
 undeclare is silently undone and the root re-cloned on the next manifest event. It sits
 beside the bare rather than in the code dir, which holds checkouts and nothing else; a
-crashed clone leaves it behind on purpose, so the leftover is visibly grove's. The clone
-holds an exclusive <code class="code">flock</code> on the marker for its whole length, and a lock dies with its
+crashed clone leaves it behind on purpose, so the leftover is visibly grove's. The realizer
+holds an exclusive <code class="code">flock</code> on the marker for all of that, and a lock dies with its
 process — that is what tells a live clone from a crashed one. A second realizer (another
-offline CLI, a daemon booted mid-clone) that finds the lock held touches nothing: the
-outcome is <code class="code">failed</code> with "a clone of this root is in flight". A free lock on a leftover
-marker is a crashed clone's, and the recovery above proceeds under it, removing the
-marker once the root is whole.</p>
+offline CLI, a daemon booted mid-clone) that finds the lock held touches nothing, even on a
+root already whole: the outcome is <code class="code">failed</code> with "a clone of this root is in flight". A
+free lock on a leftover marker is a crashed clone's, and the reconcile proceeds under it,
+removing the marker once the root is whole; a marker grove cannot open is
+<code class="code">failed</code> naming the file.</p>
 <p class="docs-note">Worktree reconcile and share materialization are best-effort inside <code class="code">reconcile_one</code> — a
 share hiccup must not fail the root — but a worktree the reconcile <em>cannot</em> recreate is
 surfaced on stderr, which is grove-ops' operator channel (the CLI prints it, the daemon's
@@ -376,8 +377,8 @@ already declared. It:</p>
 operator's eyes only — a U+FFFD-laced slug would not round-trip to the real directory,
 so it is never minted;</li>
 <li>skips a repo with no <code class="code">origin</code> (no URL to record);</li>
-<li>skips a clone in flight or crashed short of a whole root, which the <code class="code">cloning</code> marker
-names, lock held or not;</li>
+<li>skips a root whose <code class="code">cloning</code> marker is there, lock held or not — a clone in flight, its
+passes, or either crashed;</li>
 <li id="adoption-never-overwrites-a-declared-url"><strong>never overwrites a declared URL</strong>;</li>
 <li>is best-effort per repo — one failure does not abort the rest;</li>
 <li>canonicalizes the manifest at the end, so a pure hand-edit reorder is normalized even

@@ -215,11 +215,10 @@ realizer's clone in flight (an offline CLI's, holding the <code class="code">clo
 clone and the worktree and share passes after it) degrades
 the root, and the end of that clone touches nothing the watcher sees. So the driver waits on
 the marker itself (<code class="code">roots::await_clone</code>, on a detached thread, since the wait spans the
-whole clone) and re-runs <code class="code">roots_changed</code> once the lock is released or the marker is gone. A
+whole clone and its passes) and re-runs <code class="code">roots_changed</code> once the lock is released or the marker is gone. A
 marker nobody holds is no clone to wait on, so a refusal that recurs cannot spin — and a CLI
 that crashes before the wait opens the marker leaves it free, so that root waits for the next
-event, as any crashed clone does. The lock spans the clone, not the CLI's whole pass: the
-retry can overlap the CLI's own worktree and env passes on that root.</p>
+event, as any crashed clone does.</p>
 <p class="docs-note">The operator-facing consequence is that recovery signals matter: <code class="code">grove doctor</code> prints
 non-<code class="code">ready</code> engine statuses and under-filled pools precisely because a background refill
 that failed retries on the next event, not on a clock.</p>

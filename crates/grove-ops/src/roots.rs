@@ -300,9 +300,9 @@ pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     // are still running in this root's git. A free marker is a crashed clone's, and
     // the claim on it keeps a third realizer out while the root is repaired.
     let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
-    let claim = match marker.exists().then(|| claim_marker(&marker)) {
-        Some(Ok(None) | Err(_)) => return Ok(failed(&root.slug, IN_FLIGHT.into())),
-        claim => claim.and_then(Result::ok).flatten(),
+    let claim = match claim_leftover(&root.slug, &marker) {
+        Ok(claim) => claim,
+        Err(refused) => return Ok(refused),
     };
 
     // Converge the trunk before realizing: which directory *is* the trunk is a
@@ -486,6 +486,15 @@ fn realize(
     //    that names it. The root dir goes with it — it is grove's alone, and the bare
     //    inside it is the thing being replaced.
     if bare.exists() {
+        // Look again when `reconcile_one` found no marker: a clone that began since
+        // claimed its marker before writing this bare, so a bare seen here has its
+        // marker beside it — and recovery wipes a clone in flight without this look.
+        if claim.is_none() {
+            match claim_leftover(&root.slug, &root_dir(home, &root.slug).join(CLONING_MARKER)) {
+                Ok(leftover) => claim = leftover,
+                Err(refused) => return (refused, None),
+            }
+        }
         if has_live_worktrees(home, &root.slug, &bare) {
             return (
                 failed(
@@ -589,16 +598,16 @@ fn clone_and_trunk(
 
     // A marker for the whole of the network clone, so `adopt` does not declare the
     // half-materialized bare a clone in flight has already written (gix creates the
-    // bare with its `origin` before a byte of the transfer lands). Its flock, held
-    // until this returns, is what tells that clone from a crashed one: a lock dies
-    // with its process, so a second realizer — another CLI, a daemon booted mid-clone
-    // — finds it held only while the clone is live, and backs off. Removed on both
-    // exits: a *crashed* clone leaves it behind on purpose — the leftover is then
-    // visibly grove's, and undeclaring the root keeps it undeclared instead of adopt
-    // resurrecting it on the next manifest event, until `realize` makes the root
-    // whole. It lives beside the bare rather than in the code dir, which holds
-    // checkouts and nothing else. A successful clone hands its claim back, still
-    // held, for `reconcile_one` to carry through the passes that follow.
+    // bare with its `origin` before a byte of the transfer lands). Its flock is what
+    // tells that clone from a crashed one: a lock dies with its process, so a second
+    // realizer — another CLI, a daemon booted mid-clone — finds it held only while
+    // the clone is live, and backs off. A failed clone removes it here; a successful
+    // one hands the claim back still held, and `reconcile_one` removes the marker
+    // after the passes that follow. A *crashed* clone leaves it behind on purpose —
+    // the leftover is then visibly grove's, and undeclaring the root keeps it
+    // undeclared instead of adopt resurrecting it on the next manifest event, until
+    // `reconcile_one` makes the root whole. It lives beside the bare rather than in
+    // the code dir, which holds checkouts and nothing else.
     let marker = dir.join(CLONING_MARKER);
     let Some(claim) = claim.map_or_else(|| claim_marker(&marker), |c| Ok(Some(c)))? else {
         bail!(IN_FLIGHT);
@@ -639,6 +648,18 @@ pub fn await_clone(home: &Path, slug: &str) -> bool {
             matches!(marker.try_lock(), Err(std::fs::TryLockError::WouldBlock))
                 && marker.lock().is_ok()
         }
+    }
+}
+
+/// Claim a leftover marker, if any: `Ok(None)` when there is none, and the refusal to
+/// report while another realizer holds it — or, naming the file, when it cannot be
+/// opened, which no other realizer's exit will clear.
+fn claim_leftover(slug: &str, marker: &Path) -> Result<Option<std::fs::File>, Applied> {
+    match marker.exists().then(|| claim_marker(marker)) {
+        None => Ok(None),
+        Some(Ok(Some(claim))) => Ok(Some(claim)),
+        Some(Ok(None)) => Err(failed(slug, IN_FLIGHT.into())),
+        Some(Err(e)) => Err(failed(slug, format!("{e:#}"))),
     }
 }
 
@@ -918,7 +939,7 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
             // may have just undeclared, and the engine then re-clones what they
             // asked to be rid of — so the marker `clone_and_trunk` writes is a
             // "not mine to discover" sign whether or not its lock is held: a crashed
-            // clone's leftover stays undeclared until `realize` makes it whole.
+            // clone's leftover stays undeclared until `reconcile_one` makes it whole.
             if root_dir(home, &slug).join(CLONING_MARKER).exists() {
                 continue;
             }
@@ -1876,6 +1897,9 @@ mod tests {
         crate::testfix::git(&bare, &["remote", "add", "origin", src.to_str().unwrap()]);
         std::fs::write(bare.join("IN_FLIGHT"), "the holder's pack").unwrap();
         in_flight(&home);
+        // A realizer that looked before the clone claimed its marker meets it at the bare.
+        let (raced, _) = realize(&home, &declared(&home, "o/r").unwrap(), None);
+        assert_eq!(raced.error.as_deref(), Some(IN_FLIGHT), "{raced:?}");
         assert!(
             bare.join("IN_FLIGHT").exists(),
             "the half-written bare is not wiped"
@@ -1963,6 +1987,13 @@ mod tests {
         );
         assert!(trunk_dir(&home, "o/r").join(".env").exists());
         assert!(!marker.exists(), "a free marker on a whole root is shed");
+
+        // A marker grove cannot open is no clone in flight: the refusal names the file.
+        std::fs::write(&marker, "").unwrap();
+        let read_only = std::os::unix::fs::PermissionsExt::from_mode(0o444);
+        std::fs::set_permissions(&marker, read_only).unwrap();
+        let out = reconcile_one(&home, "o/r").unwrap();
+        assert!(out.error.unwrap().contains(&marker.display().to_string()));
     }
 
     #[test]
