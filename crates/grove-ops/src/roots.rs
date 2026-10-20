@@ -300,7 +300,7 @@ pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     // are still running in this root's git. A free marker is a crashed clone's, and
     // the claim on it keeps a third realizer out while the root is repaired.
     let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
-    let claim = match claim_leftover(&root.slug, &marker) {
+    let claim = match claim_root(&root.slug, &marker, true) {
         Ok(claim) => claim,
         Err(refused) => return Ok(refused),
     };
@@ -454,9 +454,11 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
 }
 
 /// Bring a declared root onto disk, under the `claim` [`reconcile_one`] took on a
-/// leftover `cloning` marker (if any). The claim comes back only with a root made
+/// leftover `cloning` marker — or, with none, one of its own before a repair or a
+/// clone writes anything. The claim comes back only with a root made
 /// whole, for `reconcile_one` to hold through its passes and then shed the marker;
-/// a refusal drops it and leaves the marker, so a crashed clone stays visibly grove's.
+/// a refusal drops it and leaves the marker, so a crashed clone — or a root whose
+/// repair failed under it — stays visibly grove's.
 fn realize(
     home: &Path,
     root: &manifest::Root,
@@ -486,16 +488,23 @@ fn realize(
     //    that names it. The root dir goes with it — it is grove's alone, and the bare
     //    inside it is the thing being replaced.
     if bare.exists() {
-        // Look again when `reconcile_one` found no marker: a clone that began since
-        // claimed its marker before writing this bare, so a bare seen here has its
-        // marker beside it — and recovery wipes a clone in flight without this look.
-        if claim.is_none() {
-            match claim_leftover(&root.slug, &root_dir(home, &root.slug).join(CLONING_MARKER)) {
-                Ok(leftover) => claim = leftover,
+        // Claim the root before reading it, on a fresh marker when `reconcile_one`
+        // found none: a clone that began since claimed its marker before writing this
+        // bare, and two realizers that both found the trunk missing would both prune
+        // and re-add it — the loser re-cloning over the winner's repair.
+        let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
+        let fresh = claim.is_none();
+        if fresh {
+            match claim_root(&root.slug, &marker, false) {
+                Ok(held) => claim = held,
                 Err(refused) => return (refused, None),
             }
         }
         if has_live_worktrees(home, &root.slug, &bare) {
+            // A human's checkouts are no clone's leftover: a marker this call laid goes.
+            if fresh {
+                let _ = std::fs::remove_file(&marker);
+            }
             return (
                 failed(
                     &root.slug,
@@ -651,11 +660,11 @@ pub fn await_clone(home: &Path, slug: &str) -> bool {
     }
 }
 
-/// Claim a leftover marker, if any: `Ok(None)` when there is none, and the refusal to
-/// report while another realizer holds it — or, naming the file, when it cannot be
-/// opened, which no other realizer's exit will clear.
-fn claim_leftover(slug: &str, marker: &Path) -> Result<Option<std::fs::File>, Applied> {
-    match marker.exists().then(|| claim_marker(marker)) {
+/// Claim the marker — only a leftover one when `leftover`, answering `Ok(None)` when
+/// there is none — or the refusal to report while another realizer holds it, or,
+/// naming the file, when it cannot be opened, which no other realizer's exit will clear.
+fn claim_root(slug: &str, marker: &Path, leftover: bool) -> Result<Option<std::fs::File>, Applied> {
+    match (!leftover || marker.exists()).then(|| claim_marker(marker)) {
         None => Ok(None),
         Some(Ok(Some(claim))) => Ok(Some(claim)),
         Some(Ok(None)) => Err(failed(slug, IN_FLIGHT.into())),
@@ -666,11 +675,24 @@ fn claim_leftover(slug: &str, marker: &Path) -> Result<Option<std::fs::File>, Ap
 /// Create `marker` and take its exclusive flock without blocking: `None` while another
 /// realizer holds it (any lock error reads as held — backing off is the safe answer).
 /// The lock lives as long as the returned handle, and std opens it `O_CLOEXEC`, so no
-/// spawned git outlives it holding the lock.
+/// spawned git outlives it holding the lock. A lock on an inode the holder unlinked
+/// between our open and our lock is no claim: the next realizer creates a fresh marker
+/// and locks that, so the lock counts only while `marker` still names it.
 fn claim_marker(marker: &Path) -> Result<Option<std::fs::File>> {
     let file =
         std::fs::File::create(marker).with_context(|| format!("create {}", marker.display()))?;
-    Ok(file.try_lock().ok().map(|()| file))
+    Ok(file
+        .try_lock()
+        .ok()
+        .filter(|()| names(marker, &file))
+        .map(|()| file))
+}
+
+/// Does `path` still name the inode `file` has open?
+fn names(path: &Path, file: &std::fs::File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    matches!((path.metadata(), file.metadata()),
+        (Ok(p), Ok(f)) if (p.dev(), p.ino()) == (f.dev(), f.ino()))
 }
 
 /// Re-add the missing trunk checkout from the bare that is already on disk — the
@@ -1870,6 +1892,42 @@ mod tests {
         );
     }
 
+    /// With no marker left over, the repair still runs under one: a second realizer
+    /// that also found the trunk missing meets the claim instead of repairing beside it.
+    #[test]
+    fn realize_claims_a_trunk_repair_without_a_leftover_marker() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
+
+        let (applied, claim) = realize(&home, &declared(&home, "o/r").unwrap(), None);
+
+        assert_eq!(applied.status, ReconcileStatus::Cloned, "{applied:?}");
+        assert!(claim.is_some());
+        let marker = std::fs::File::open(root_dir(&home, "o/r").join(CLONING_MARKER)).unwrap();
+        assert!(matches!(
+            marker.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+    }
+
+    /// A lock counts only while the marker still names its inode: one taken on a
+    /// marker its holder unlinked is on a file the next realizer never sees.
+    #[test]
+    fn a_marker_names_only_the_inode_it_still_points_at() {
+        let tmp = TempDir::new().unwrap();
+        let marker = tmp.path().join(CLONING_MARKER);
+        let file = std::fs::File::create(&marker).unwrap();
+        assert!(names(&marker, &file));
+        std::fs::remove_file(&marker).unwrap();
+        assert!(!names(&marker, &file), "unlinked");
+        std::fs::write(&marker, "").unwrap();
+        assert!(!names(&marker, &file), "replaced by a fresh marker");
+    }
+
     /// One realizer, ever: a clone another process is running holds the marker's
     /// flock, and a second realizer — before the bare lands, or after gix has laid down
     /// a half-written one — touches nothing. Once the holder is gone the marker is
@@ -2086,6 +2144,10 @@ mod tests {
             "the refusal names what it would have destroyed: {applied:?}"
         );
         assert!(code.join("scratch-notes.md").exists());
+        assert!(
+            root_dir(&home, "o/r").join(CLONING_MARKER).exists(),
+            "the refused repair's marker stays, visibly grove's"
+        );
 
         // An empty code dir: the re-clone proceeds.
         std::fs::remove_file(code.join("scratch-notes.md")).unwrap();
@@ -2140,6 +2202,10 @@ mod tests {
         );
         assert!(home.join("code/o/r/feat/UNCOMMITTED").exists());
         assert!(bare_dir(&home, "o/r").exists());
+        assert!(
+            !root_dir(&home, "o/r").join(CLONING_MARKER).exists(),
+            "a refusal over a human's checkouts claims nothing"
+        );
     }
 
     #[test]

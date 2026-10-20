@@ -196,11 +196,6 @@
       s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong>The <code class="code">cloning</code> claim has two narrow gaps</strong> (plausible, low;
-      s-20261020T0250Z review). A lock taken on a marker another realizer has just unlinked
-      succeeds on the dead inode — fix: after the lock, check the path still names that inode.
-      And <code class="code">recover_trunk</code> on a bare with no leftover marker takes no claim, so two
-      ungated realizers can both repair one root.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
