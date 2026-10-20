@@ -195,10 +195,6 @@
       s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong><code class="code">install_bundle</code> is not atomic</strong> (confirmed, low). It
-      runs <code class="code">remove_dir_all(versions/&lt;v&gt;)</code> then extracts in place, even
-      when <code class="code">&lt;v&gt;</code> is the version <code class="code">current</code> points
-      at.</li>
     <li><strong><code class="code">is_under_trunk</code> forgets the old trunk</strong> (confirmed,
       low). After a trunk change (main → canary), share links laid through
       <code class="code">../main/</code> read as foreign.</li>
