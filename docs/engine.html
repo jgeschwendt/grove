@@ -211,7 +211,8 @@ is the retry. There is no retry timer, no poll, and no periodic sweep in the eng
 only deadlines in the daemon are the lane's idle reap and the watcher's debounce, and both
 are budgets on an event rather than a cadence.</p>
 <p class="docs-note">One failure's next event is not a manifest change. A reconcile that backs off another
-realizer's clone in flight (an offline CLI's, holding the <code class="code">cloning</code> marker's lock) degrades
+realizer's clone in flight (an offline CLI's, holding the <code class="code">cloning</code> marker's lock through the
+clone and the worktree and share passes after it) degrades
 the root, and the end of that clone touches nothing the watcher sees. So the driver waits on
 the marker itself (<code class="code">roots::await_clone</code>, on a detached thread, since the wait spans the
 whole clone) and re-runs <code class="code">roots_changed</code> once the lock is released or the marker is gone. A

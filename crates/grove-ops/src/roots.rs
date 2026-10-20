@@ -293,20 +293,27 @@ fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
 pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     let root = declared(home, slug)?;
 
+    // One realizer per root for the whole of this call, not only its clone: the
+    // `cloning` marker's lock, once taken — on a crashed clone's leftover here, or by
+    // the clone itself — is held through the worktree and share passes below, and a
+    // marker another realizer holds means its clone, or the passes that follow it,
+    // are still running in this root's git. A free marker is a crashed clone's, and
+    // the claim on it keeps a third realizer out while the root is repaired.
+    let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
+    let claim = match marker.exists().then(|| claim_marker(&marker)) {
+        Some(Ok(None) | Err(_)) => return Ok(failed(&root.slug, IN_FLIGHT.into())),
+        claim => claim.and_then(Result::ok).flatten(),
+    };
+
     // Converge the trunk before realizing: which directory *is* the trunk is a
     // manifest question, and `realize` below reads the answer as settled. A pending
     // trunk change left unapplied would make `realize` see a root whose trunk
     // checkout is missing while its worktrees are live — the refuse-to-re-clone
     // guard — and report a wedged root for what is an ordinary manifest edit.
     // Skipped when the bare isn't there yet: the clone lays down a converged root.
-    let applied = match converge_trunk(home, &root.slug) {
-        Ok(()) => realize(home, &root),
-        Err(e) => Applied {
-            slug: root.slug.clone(),
-            status: ReconcileStatus::Failed,
-            default_branch: None,
-            error: Some(format!("{e:#}")),
-        },
+    let (applied, claim) = match converge_trunk(home, &root.slug) {
+        Ok(()) => realize(home, &root, claim),
+        Err(e) => (failed(&root.slug, format!("{e:#}")), None),
     };
     // Converge this root's worktrees once it's on disk (create declared-but-
     // missing, adopt undeclared), then materialize the worktree environment
@@ -326,6 +333,11 @@ pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
             Err(e) => eprintln!("grove-ops WARN reconcile: failed for slug={slug}: {e:#}"),
         }
         let _ = crate::env::materialize(home, Some(slug), crate::env::Fix::Safe);
+    }
+    // The root is whole, so the marker goes — before the lock, which drops with
+    // `claim`, so a realizer waiting on it wakes to a root with no marker at all.
+    if claim.is_some() {
+        let _ = std::fs::remove_file(&marker);
     }
     Ok(applied)
 }
@@ -441,16 +453,24 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
     Ok(())
 }
 
-fn realize(home: &Path, root: &manifest::Root) -> Applied {
+/// Bring a declared root onto disk, under the `claim` [`reconcile_one`] took on a
+/// leftover `cloning` marker (if any). The claim comes back only with a root made
+/// whole, for `reconcile_one` to hold through its passes and then shed the marker;
+/// a refusal drops it and leaves the marker, so a crashed clone stays visibly grove's.
+fn realize(
+    home: &Path,
+    root: &manifest::Root,
+    mut claim: Option<std::fs::File>,
+) -> (Applied, Option<std::fs::File>) {
     let bare = bare_dir(home, &root.slug);
     let trunk = trunk_dir(home, &root.slug);
 
     if bare.exists() && trunk.exists() {
-        return present(&root.slug);
+        return (present(&root.slug), claim);
     }
 
     // The trunk checkout is gone but the bare is here — it vanished out-of-band (a
-    // stray `rm`, a `git worktree prune`); grove never produces this state itself.
+    // stray `rm`, a `git worktree prune`), or a clone crashed between the two.
     //
     // Three answers, cheapest and least destructive first:
     //
@@ -465,64 +485,40 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
     //    path a human also writes into is how carried law 5 fails on the one code path
     //    that names it. The root dir goes with it — it is grove's alone, and the bare
     //    inside it is the thing being replaced.
-    //
-    // All three wait on a clone in flight: a bare with no trunk is also what another
-    // realizer's clone looks like mid-transfer, and that one holds the `cloning`
-    // marker's lock. Held → nothing here is ours to touch; free → the marker is a
-    // crashed clone's, and the claim taken on it keeps a third realizer out while the
-    // root is repaired.
     if bare.exists() {
-        let marker = root_dir(home, &root.slug).join(CLONING_MARKER);
-        let _claim = match marker.exists().then(|| claim_marker(&marker)) {
-            Some(Ok(None) | Err(_)) => {
-                return Applied {
-                    slug: root.slug.clone(),
-                    status: ReconcileStatus::Failed,
-                    default_branch: None,
-                    error: Some(IN_FLIGHT.into()),
-                };
-            }
-            claim => claim,
-        };
         if has_live_worktrees(home, &root.slug, &bare) {
-            return Applied {
-                slug: root.slug.clone(),
-                status: ReconcileStatus::Failed,
-                default_branch: None,
-                error: Some(
+            return (
+                failed(
+                    &root.slug,
                     "root has live worktrees but its trunk checkout is missing; refusing \
                      to re-clone (recreate it, or `grove clone remove` the root)"
                         .into(),
                 ),
-            };
+                None,
+            );
         }
         match recover_trunk(home, &root.slug, &bare) {
-            Ok(branch) => {
-                let _ = std::fs::remove_file(&marker);
-                return Applied {
-                    slug: root.slug.clone(),
-                    status: ReconcileStatus::Cloned,
-                    default_branch: Some(branch),
-                    error: None,
-                };
-            }
+            Ok(branch) => return (cloned(&root.slug, branch), claim),
             Err(e) => {
                 let foreign = foreign_entries(&code_dir(home, &root.slug));
                 if !foreign.is_empty() {
-                    return Applied {
-                        slug: root.slug.clone(),
-                        status: ReconcileStatus::Failed,
-                        default_branch: None,
-                        error: Some(format!(
-                            "could not recreate the trunk ({e:#}), and re-cloning would \
-                             delete {} under the code dir; move it aside, or \
-                             `grove clone remove` the root",
-                            foreign.join(", ")
-                        )),
-                    };
+                    return (
+                        failed(
+                            &root.slug,
+                            format!(
+                                "could not recreate the trunk ({e:#}), and re-cloning would \
+                                 delete {} under the code dir; move it aside, or \
+                                 `grove clone remove` the root",
+                                foreign.join(", ")
+                            ),
+                        ),
+                        None,
+                    );
                 }
                 let _ = std::fs::remove_dir_all(code_dir(home, &root.slug));
                 let _ = std::fs::remove_dir_all(root_dir(home, &root.slug));
+                // The marker went with the root dir; the clone claims a fresh one.
+                claim = None;
             }
         }
     }
@@ -544,50 +540,47 @@ fn realize(home: &Path, root: &manifest::Root) -> Applied {
     // migration is `grove doctor --fix`'s, where the operator asked for it.
     let dir = code_dir(home, &root.slug);
     if let Some(legacy) = crate::layout::legacy(home, &root.slug) {
-        return Applied {
-            slug: root.slug.clone(),
-            status: ReconcileStatus::Failed,
-            default_branch: None,
-            error: Some(format!(
-                "root is in the legacy layout ({legacy}): run `grove doctor --fix` to \
-                 migrate it in place"
-            )),
-        };
+        return (
+            failed(
+                &root.slug,
+                format!(
+                    "root is in the legacy layout ({legacy}): run `grove doctor --fix` to \
+                     migrate it in place"
+                ),
+            ),
+            None,
+        );
     }
     let foreign = foreign_entries(&dir);
     if !foreign.is_empty() {
-        return Applied {
-            slug: root.slug.clone(),
-            status: ReconcileStatus::Failed,
-            default_branch: None,
-            error: Some(format!(
-                "code directory holds {}; refusing to clone into it (remove them, or \
-                 `grove clone remove` the root)",
-                foreign.join(", ")
-            )),
-        };
+        return (
+            failed(
+                &root.slug,
+                format!(
+                    "code directory holds {}; refusing to clone into it (remove them, or \
+                     `grove clone remove` the root)",
+                    foreign.join(", ")
+                ),
+            ),
+            None,
+        );
     }
 
-    match clone_and_trunk(home, root, &bare) {
-        Ok(branch) => Applied {
-            slug: root.slug.clone(),
-            status: ReconcileStatus::Cloned,
-            default_branch: Some(branch),
-            error: None,
-        },
-        Err(e) => Applied {
-            slug: root.slug.clone(),
-            status: ReconcileStatus::Failed,
-            default_branch: None,
-            error: Some(format!("{e:#}")),
-        },
+    match clone_and_trunk(home, root, &bare, claim) {
+        Ok((branch, claim)) => (cloned(&root.slug, branch), Some(claim)),
+        Err(e) => (failed(&root.slug, format!("{e:#}")), None),
     }
 }
 
 /// Lay both halves of a root down: the bare under `roots/<slug>`, the trunk checkout
 /// under `code/<slug>`. Both directories are created here, because a root that exists
 /// at all exists in both trees.
-fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<String> {
+fn clone_and_trunk(
+    home: &Path,
+    root: &manifest::Root,
+    bare: &Path,
+    claim: Option<std::fs::File>,
+) -> Result<(String, std::fs::File)> {
     let dir = root_dir(home, &root.slug);
     let code = code_dir(home, &root.slug);
     for d in [&dir, &code] {
@@ -604,9 +597,10 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
     // visibly grove's, and undeclaring the root keeps it undeclared instead of adopt
     // resurrecting it on the next manifest event, until `realize` makes the root
     // whole. It lives beside the bare rather than in the code dir, which holds
-    // checkouts and nothing else.
+    // checkouts and nothing else. A successful clone hands its claim back, still
+    // held, for `reconcile_one` to carry through the passes that follow.
     let marker = dir.join(CLONING_MARKER);
-    let Some(_claim) = claim_marker(&marker)? else {
+    let Some(claim) = claim.map_or_else(|| claim_marker(&marker), |c| Ok(Some(c)))? else {
         bail!(IN_FLIGHT);
     };
     let cloned = git::clone_bare(&root.url, bare).and_then(|cloned_onto| {
@@ -620,11 +614,14 @@ fn clone_and_trunk(home: &Path, root: &manifest::Root, bare: &Path) -> Result<St
         let trunk = code.join(crate::worktrees::name_for(&branch));
         git::worktree_add(bare, &trunk, &branch, None).map(|()| branch)
     });
-    let _ = std::fs::remove_file(&marker);
-    cloned
+    if cloned.is_err() {
+        let _ = std::fs::remove_file(&marker);
+    }
+    cloned.map(|branch| (branch, claim))
 }
 
-/// Written under `roots/<slug>` for the length of a clone; see [`clone_and_trunk`].
+/// Written under `roots/<slug>` for the length of a clone and the passes after it;
+/// see [`clone_and_trunk`] and [`reconcile_one`].
 const CLONING_MARKER: &str = "cloning";
 
 /// The refusal a second realizer reports while the marker's lock is held.
@@ -722,6 +719,24 @@ fn has_live_worktrees(home: &Path, slug: &str, bare: &Path) -> bool {
             !is_trunk && !crate::worktrees::under_pool(home, slug, &wt.path)
         }),
         Err(_) => true,
+    }
+}
+
+fn cloned(slug: &str, branch: String) -> Applied {
+    Applied {
+        slug: slug.to_string(),
+        status: ReconcileStatus::Cloned,
+        default_branch: Some(branch),
+        error: None,
+    }
+}
+
+fn failed(slug: &str, error: String) -> Applied {
+    Applied {
+        slug: slug.to_string(),
+        status: ReconcileStatus::Failed,
+        default_branch: None,
+        error: Some(error),
     }
 }
 
@@ -1876,6 +1891,78 @@ mod tests {
             ReconcileStatus::Cloned
         );
         assert!(await_clone(&home, "o/r"), "a gone marker is a clone ended");
+    }
+
+    /// The clone's claim outlives the clone: `realize` hands it back still locked, for
+    /// `reconcile_one` to hold through the worktree and share passes — or a realizer
+    /// woken by the lock's release would run those passes in the same git beside it.
+    #[test]
+    fn realize_hands_back_the_clone_claim_still_held() {
+        let tmp = TempDir::new().unwrap();
+        let home = declared_unrealized(&tmp);
+        let marker = root_dir(&home, "o/r").join(CLONING_MARKER);
+
+        let root = declared(&home, "o/r").unwrap();
+
+        let (applied, claim) = realize(&home, &root, None);
+
+        assert_eq!(applied.status, ReconcileStatus::Cloned, "{applied:?}");
+        assert!(claim.is_some());
+        assert!(matches!(
+            std::fs::File::open(&marker).unwrap().try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        // A realizer that passed `reconcile_one`'s check just before the claim was
+        // taken still meets it at the clone.
+        let raced = clone_and_trunk(&home, &root, &bare_dir(&home, "o/r"), None);
+        assert!(raced.unwrap_err().to_string().contains("in flight"));
+    }
+
+    /// A clone that died before its bare landed leaves only the marker. The claim the
+    /// reconcile took on it is the clone's own — a second claim would meet the first.
+    #[test]
+    fn reconcile_one_clones_under_a_crashed_clones_marker() {
+        let tmp = TempDir::new().unwrap();
+        let home = declared_unrealized(&tmp);
+        let marker = root_dir(&home, "o/r").join(CLONING_MARKER);
+        std::fs::create_dir_all(root_dir(&home, "o/r")).unwrap();
+        std::fs::write(&marker, "").unwrap();
+
+        let applied = reconcile_one(&home, "o/r").unwrap();
+
+        assert_eq!(applied.status, ReconcileStatus::Cloned, "{applied:?}");
+        assert!(!marker.exists());
+    }
+
+    /// A held marker on a whole root is another realizer's post-clone passes: this one
+    /// runs none of its own beside them. Once free, the marker is a leftover, and the
+    /// reconcile sheds it.
+    #[test]
+    fn reconcile_one_runs_no_passes_beside_a_held_marker() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".env"]).unwrap();
+        let marker = root_dir(&home, "o/r").join(CLONING_MARKER);
+        let held = std::fs::File::create(&marker).unwrap();
+        held.lock().unwrap();
+
+        let out = reconcile_one(&home, "o/r").unwrap();
+        assert_eq!(out.error.as_deref(), Some(IN_FLIGHT), "{out:?}");
+        assert!(
+            !trunk_dir(&home, "o/r").join(".env").exists(),
+            "no share pass"
+        );
+
+        drop(held);
+        assert_eq!(
+            reconcile_one(&home, "o/r").unwrap().status,
+            ReconcileStatus::Present
+        );
+        assert!(trunk_dir(&home, "o/r").join(".env").exists());
+        assert!(!marker.exists(), "a free marker on a whole root is shed");
     }
 
     #[test]
