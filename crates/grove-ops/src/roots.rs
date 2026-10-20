@@ -1137,21 +1137,25 @@ mod tests {
         );
     }
 
-    /// An old-trunk source the pass cannot read is an error, not an absent source: the
-    /// new trunk gets no empty stand-in — not from an ordinary pass in between either —
-    /// and `HEAD` stays put so the next event retries.
+    /// An old-trunk source the pass cannot read is an error, not an absent source, and
+    /// it holds the whole carry: no share is seeded and no link repointed — not by an
+    /// ordinary pass in between either — and `HEAD` stays put so the next event retries.
     #[test]
     fn an_unreadable_old_source_holds_the_trunk_change() {
         let tmp = TempDir::new().unwrap();
         let (home, code) = shared_root(&tmp);
-        std::fs::remove_file(code.join("main/.env")).unwrap();
-        std::os::unix::fs::symlink("README.md", code.join("main/.env")).unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".other"]).unwrap();
+        std::fs::create_dir(code.join("main/.other")).unwrap();
         declare_trunk(&home, "o/r", "canary");
         let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
-        assert!(error.contains(".env"), "{error}");
+        assert!(error.contains(".other"), "{error}");
         crate::env::materialize(&home, Some("o/r"), crate::env::Fix::Safe).unwrap();
         assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
         assert!(std::fs::symlink_metadata(code.join("canary/.env")).is_err());
+        assert_eq!(
+            std::fs::read_link(code.join("feat/.env")).unwrap(),
+            Path::new("../main/.env")
+        );
         assert_eq!(
             git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
             "main"
@@ -1159,12 +1163,16 @@ mod tests {
     }
 
     /// A share link laid through the old trunk is grove's own: the trunk change moves
-    /// it, and the source it reads, onto the new trunk rather than leaving a conflict.
+    /// it, and the source it reads, onto the new trunk rather than leaving a conflict —
+    /// a symlink source, the user's own choice, as the same link.
     #[test]
     fn a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk() {
         let tmp = TempDir::new().unwrap();
         let (home, code) = shared_root(&tmp);
         std::fs::write(code.join("main/.env"), "SECRET").unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".key"]).unwrap();
+        std::fs::write(code.join("secret.key"), "KEY").unwrap();
+        std::os::unix::fs::symlink("../secret.key", code.join("main/.key")).unwrap();
 
         declare_trunk(&home, "o/r", "canary");
         reconcile_one(&home, "o/r").unwrap();
@@ -1182,6 +1190,14 @@ mod tests {
             std::fs::read_to_string(code.join("feat/.env")).unwrap(),
             "SECRET",
             "the new trunk's source is seeded from the old one"
+        );
+        assert_eq!(
+            std::fs::read_link(code.join("canary/.key")).unwrap(),
+            Path::new("../secret.key")
+        );
+        assert_eq!(
+            std::fs::read_to_string(code.join("feat/.key")).unwrap(),
+            "KEY"
         );
     }
 

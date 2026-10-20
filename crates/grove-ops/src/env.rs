@@ -280,15 +280,24 @@ fn run_root(
         Err(e) => return out.push(err(slug, None, "", &format!("read shares: {e:#}"))),
     };
 
-    // 1. Source pass — ensure each `<trunk>/<p>` exists.
-    for share in &declared {
-        out.push(source_outcome(
-            pass,
-            action,
-            &trunk_fd,
-            prev_fd.as_ref(),
-            share,
-        ));
+    // 1. Source pass — ensure each `<trunk>/<p>` exists. A carry is all-or-nothing: a
+    // dry run first, so a source it cannot seed holds it before any seed is written, and
+    // a failed row returns before a link is moved off the trunk `HEAD` has not left.
+    let sources = |action| -> Vec<_> {
+        declared
+            .iter()
+            .map(|share| source_outcome(pass, action, &trunk_fd, prev_fd.as_ref(), share))
+            .collect()
+    };
+    let failed = |rows: &[ShareOutcome]| rows.iter().any(|o| o.status.is_error());
+    let rows = prev_trunk
+        .map(|_| sources(Action::Diagnose))
+        .filter(|dry| failed(dry))
+        .unwrap_or_else(|| sources(action));
+    let held = prev_trunk.is_some() && failed(&rows);
+    out.extend(rows);
+    if held {
+        return;
     }
 
     // 2/3. Link + GC pass, per present worktree (never the trunk/reserved dirs).
@@ -312,8 +321,10 @@ fn run_root(
 
 /// Source row: classify `<trunk>/<p>`, create it when missing (materialize) — seeded
 /// from the previous trunk's `<p>` across a trunk change, so a link repointed onto
-/// the new trunk reads the same bytes; empty only when that source is absent too, and
-/// an `Error` row, nothing created, when it cannot be read or the change is pending.
+/// the new trunk reads the same bytes (a symlink source as the same link); empty only
+/// when that source is absent too, and an `Error` row, nothing created, when it cannot
+/// be read or the change is pending. The seed is read on a dry run too, so a carry's
+/// dry run fails exactly where its real pass would.
 fn source_outcome<Fd: AsFd>(
     pass: Pass,
     action: Action,
@@ -322,21 +333,28 @@ fn source_outcome<Fd: AsFd>(
     share: &Share,
 ) -> ShareOutcome {
     let rel = Path::new(&share.path);
+    let seed = || -> Result<_> {
+        Ok(prev_fd
+            .map(|fd| read_present(fd, rel))
+            .transpose()?
+            .flatten())
+    };
     let result = (|| -> Result<ShareStatus> {
         match descend_parent(&trunk_fd, rel, action.mutates())? {
-            None => Ok(ShareStatus::Created), // parent missing, diagnose → would-create
+            // parent missing, diagnose → would-create
+            None => seed().map(|_| ShareStatus::Created),
             Some((parent_fd, leaf)) => match classify_leaf(&parent_fd, &leaf)? {
                 LeafState::Absent => {
                     if pass.pending {
                         bail!("trunk change pending; reconcile carries it");
                     }
+                    let seed = seed()?;
                     if action.mutates() {
-                        match prev_fd
-                            .map(|fd| read_present(fd, rel))
-                            .transpose()?
-                            .flatten()
-                        {
-                            Some((bytes, mode)) => write_file(&parent_fd, &leaf, &bytes, mode)?,
+                        match seed {
+                            Some(Seed::File(bytes, mode)) => {
+                                write_file(&parent_fd, &leaf, &bytes, mode)?;
+                            }
+                            Some(Seed::Link(target)) => link_leaf(&parent_fd, &leaf, &target)?,
                             None => create_empty(&parent_fd, &leaf)?,
                         }
                     }
@@ -640,12 +658,23 @@ fn create_empty<Fd: AsFd>(dirfd: Fd, leaf: &OsStr) -> Result<()> {
 /// so a source that is (or became) a symlink/dir is refused rather than followed.
 /// The source pass guarantees a regular-file source exists before any worktree copy.
 fn read_source<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<(Vec<u8>, Mode)> {
-    read_present(trunk_fd, rel)?.context("copy source missing under the trunk")
+    match read_present(trunk_fd, rel)?.context("copy source missing under the trunk")? {
+        Seed::File(bytes, mode) => Ok((bytes, mode)),
+        Seed::Link(_) => bail!("copy source is not a regular file"),
+    }
+}
+
+/// A present source, as a trunk change seeds the new trunk's from it: a file's bytes and
+/// perm bits, or a symlink's target — the user's own choice of source, carried as is.
+enum Seed {
+    File(Vec<u8>, Mode),
+    Link(PathBuf),
 }
 
 /// [`read_source`], with an absent source an `Ok(None)` rather than an error — the
-/// one failure a trunk change may answer by creating the new source empty.
-fn read_present<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<Option<(Vec<u8>, Mode)>> {
+/// one failure a trunk change may answer by creating the new source empty — and a
+/// symlink source its target, never followed.
+fn read_present<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<Option<Seed>> {
     let Some((parent_fd, leaf)) = descend_parent(&trunk_fd, rel, false)? else {
         return Ok(None);
     };
@@ -653,7 +682,8 @@ fn read_present<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<Option<(Vec<u8>, M
         LeafState::RealFile => {}
         LeafState::Dir => bail!("copy source is a directory; only files are supported"),
         LeafState::Absent => return Ok(None),
-        LeafState::Symlink { .. } | LeafState::Other => bail!("copy source is not a regular file"),
+        LeafState::Symlink { target } => return Ok(Some(Seed::Link(target))),
+        LeafState::Other => bail!("copy source is not a regular file"),
     }
     let stat = statat(&parent_fd, &leaf, AtFlags::SYMLINK_NOFOLLOW)
         .with_context(|| format!("stat source {}", leaf.display()))?;
@@ -668,7 +698,10 @@ fn read_present<Fd: AsFd>(trunk_fd: Fd, rel: &Path) -> Result<Option<(Vec<u8>, M
     std::fs::File::from(fd)
         .read_to_end(&mut bytes)
         .with_context(|| format!("read source {}", leaf.display()))?;
-    Ok(Some((bytes, Mode::from_bits_truncate(stat.st_mode))))
+    Ok(Some(Seed::File(
+        bytes,
+        Mode::from_bits_truncate(stat.st_mode),
+    )))
 }
 
 /// Write a `_.copy` leaf atomically: a temp sibling created `CREATE|EXCL|WRONLY|
