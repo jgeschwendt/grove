@@ -122,12 +122,16 @@ repoints it onto the branch-named trunk rather than reading it as a stranger's a
 it (`materialize_repoints_a_legacy_trunk_link`). That is the share half of what
 `grove doctor --fix` migrates, and the only reason the name appears in this module.
 
-And one more: the checkout the bare's `HEAD` names, which is the trunk itself except while
-a `trunk` edit awaits `converge_trunk`. Converge runs a share pass before it moves `HEAD`,
-so links through the old trunk are repointed while they are still recognizably grove's,
-and each source missing from the new trunk is seeded from the old trunk's rather than
-created empty — a repointed link reads the same bytes
-(`a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk`).
+And one more, in one pass only: the old trunk, in the share pass `converge_trunk` runs
+before it moves `HEAD`, so links through the old trunk are repointed while they are still
+recognizably grove's, and each source missing from the new trunk is seeded from the old
+trunk's rather than created empty — a repointed link reads the same bytes
+(`a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk`). An old source that
+cannot be read is an error row, nothing is created, and `HEAD` stays put for the next
+event to retry (`an_unreadable_old_source_holds_the_trunk_change`). Every other pass knows
+only the declared trunk, so while a trunk change is refused a link through the old trunk
+is a `conflict`, never repointed into whatever occupies the new trunk's directory
+(`a_refused_trunk_change_leaves_links_through_the_old_trunk_alone`).
 
 A real file, a directory, or a foreign symlink is reported as `conflict` and left exactly
 as it was. `grove doctor` exits **5** on any unresolved conflict, which makes it a usable
