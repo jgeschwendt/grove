@@ -694,7 +694,7 @@ async fn slow_a_lowered_pool_target_reclaims_its_slots() {
     let engine = room.start(SLUG);
     settles_on(&engine, RootStatus::Ready).await;
     until("the pool to reach its target", async || {
-        (grove_ops::worktrees::pool_count(&home, SLUG).unwrap() == 2).then_some(())
+        (grove_ops::worktrees::pool_count(&home, SLUG).ok() == Some(2)).then_some(())
     })
     .await;
 
@@ -702,7 +702,7 @@ async fn slow_a_lowered_pool_target_reclaims_its_slots() {
     engine.roots_changed();
 
     until("the pool to drain to the new target", async || {
-        (grove_ops::worktrees::pool_count(&home, SLUG).unwrap() == 0).then_some(())
+        (grove_ops::worktrees::pool_count(&home, SLUG).ok() == Some(0)).then_some(())
     })
     .await;
 }
