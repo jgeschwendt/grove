@@ -126,7 +126,8 @@ And one more, in one pass only: the old trunk, in the share pass `converge_trunk
 before it moves `HEAD`, so links through the old trunk are repointed while they are still
 recognizably grove's, and each source missing from the new trunk is seeded from the old
 trunk's rather than created empty — a repointed link reads the same bytes, and a symlink
-source is carried as the same link
+source is carried as the same link — unless its relative target stays inside the trunk,
+where it would dangle, an error row asking for it to be re-created in the new trunk
 (`a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk`). The pass is
 all-or-nothing: a dry run reads every seed first, so an old source that cannot be read is
 an error row with nothing seeded and no link moved, and `HEAD` stays put for the next

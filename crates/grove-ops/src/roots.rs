@@ -1137,29 +1137,46 @@ mod tests {
         );
     }
 
-    /// An old-trunk source the pass cannot read is an error, not an absent source, and
-    /// it holds the whole carry: no share is seeded and no link repointed — not by an
-    /// ordinary pass in between either — and `HEAD` stays put so the next event retries.
+    /// An old-trunk source the pass cannot read — or a symlink source pointing inside the
+    /// old trunk, which carried verbatim would dangle — is an error, not an absent source,
+    /// and it holds the whole carry: no share is seeded and no link repointed or laid —
+    /// not by an ordinary pass in between either — and `HEAD` stays put so the next event
+    /// retries.
     #[test]
     fn an_unreadable_old_source_holds_the_trunk_change() {
-        let tmp = TempDir::new().unwrap();
-        let (home, code) = shared_root(&tmp);
-        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".other"]).unwrap();
-        std::fs::create_dir(code.join("main/.other")).unwrap();
-        declare_trunk(&home, "o/r", "canary");
-        let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
-        assert!(error.contains(".other"), "{error}");
-        crate::env::materialize(&home, Some("o/r"), crate::env::Fix::Safe).unwrap();
-        assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
-        assert!(std::fs::symlink_metadata(code.join("canary/.env")).is_err());
-        assert_eq!(
-            std::fs::read_link(code.join("feat/.env")).unwrap(),
-            Path::new("../main/.env")
-        );
-        assert_eq!(
-            git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
-            "main"
-        );
+        for share in [".other", ".k1"] {
+            let tmp = TempDir::new().unwrap();
+            let (home, code) = shared_root(&tmp);
+            manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[share]).unwrap();
+            if share == ".k1" {
+                std::fs::write(code.join("main/.real"), "K").unwrap();
+                std::os::unix::fs::symlink(".real", code.join("main/.k1")).unwrap();
+            } else {
+                std::fs::create_dir(code.join("main/.other")).unwrap();
+            }
+            crate::env::materialize(&home, Some("o/r"), crate::env::Fix::Safe).unwrap();
+            declare_trunk(&home, "o/r", "canary");
+            let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
+            assert!(error.contains(share), "{error}");
+            crate::worktrees::create(&home, "o/r", "late", "feature/z", Some("main")).unwrap();
+            assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
+            for absent in ["canary/.env", "late/.env", &format!("canary/{share}")] {
+                assert!(
+                    std::fs::symlink_metadata(code.join(absent)).is_err(),
+                    "{absent}"
+                );
+            }
+            for p in [".env", share] {
+                assert_eq!(
+                    std::fs::read_link(code.join("feat").join(p)).unwrap(),
+                    Path::new("../main").join(p)
+                );
+            }
+            assert_eq!(
+                git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
+                "main"
+            );
+        }
     }
 
     /// A share link laid through the old trunk is grove's own: the trunk change moves
