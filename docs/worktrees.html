@@ -357,9 +357,13 @@ holds an exclusive <code class="code">flock</code> on the marker for all of that
 process — that is what tells a live clone from a crashed one. A second realizer (another
 offline CLI, a daemon booted mid-clone) that finds the lock held touches nothing, even on a
 root already whole: the outcome is <code class="code">failed</code> with "a clone of this root is in flight". A
-free lock on a leftover marker is a crashed clone's, and the reconcile proceeds under it,
+free lock on a leftover marker is a crashed clone's (or a trunk repair's that was refused
+over a human's files in the code dir), and the reconcile proceeds under it,
 removing the marker once the root is whole; a marker grove cannot open is
-<code class="code">failed</code> naming the file.</p>
+<code class="code">failed</code> naming the file. Re-adding a missing trunk claims a fresh marker when
+none is left over, so two realizers never repair one root together, and a lock counts
+only while the marker's path still names the inode it was taken on — one taken on a
+marker its holder just unlinked backs off as in flight.</p>
 <p class="docs-note">Worktree reconcile and share materialization are best-effort inside <code class="code">reconcile_one</code> — a
 share hiccup must not fail the root — but a worktree the reconcile <em>cannot</em> recreate is
 surfaced on stderr, which is grove-ops' operator channel (the CLI prints it, the daemon's
