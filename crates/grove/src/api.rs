@@ -157,20 +157,22 @@ impl ApiClient {
     /// proven different", which keeps the answer `Up` and leaves the single-realizer
     /// gate exactly as it was.
     fn serves_another_home(&self, response: reqwest::blocking::Response) -> bool {
-        let Some(mine) = self.home.as_deref() else {
-            return false;
-        };
-        if !response.status().is_success() {
-            return false;
-        }
-        let Ok(Envelope::Ok(data)) = response.json::<Envelope<HealthData>>() else {
-            return false;
-        };
-        let theirs = std::path::PathBuf::from(&data.home);
+        response.status().is_success()
+            && matches!(
+                response.json::<Envelope<HealthData>>(),
+                Ok(Envelope::Ok(data)) if self.is_another_home(&data.home)
+            )
+    }
+
+    /// Whether `theirs` names a home other than the one this client was pointed at;
+    /// never, for a client pointed at none.
+    fn is_another_home(&self, theirs: &str) -> bool {
         // Canonicalized, because `/tmp` and `/private/tmp` are the same home and a
         // string compare would call a daemon a stranger over a symlink.
         let resolve = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        resolve(&theirs) != resolve(mine)
+        self.home
+            .as_deref()
+            .is_some_and(|mine| resolve(std::path::Path::new(theirs)) != resolve(mine))
     }
 
     /// `true` when `GET /api/health` returns 2xx within the probe budget — the
@@ -207,18 +209,27 @@ impl ApiClient {
 
     /// `true` when the listener speaks the grove envelope: `/api/health` returns a
     /// JSON object carrying a boolean `ok` at ANY status (a draining daemon 503s but
-    /// still speaks it). This is what keeps `grove off` from aiming a shutdown POST
-    /// at an unrelated service that happens to hold the bind.
+    /// still speaks it) — and does not name a home other than this client's. This is
+    /// what keeps `grove off` from aiming a shutdown POST at an unrelated service that
+    /// happens to hold the bind, or at another home's daemon on it.
     ///
     /// Deliberately shallower than a typed decode: identification must survive a
     /// version skew that a strict `Envelope<HealthData>` decode would reject, and
-    /// `ok` is the one field every envelope on this surface has.
+    /// `ok` is the one field every envelope on this surface has. A body naming no
+    /// home (a draining 503, an older daemon) is not proven another's, as in
+    /// [`reachable`](Self::reachable).
     #[must_use]
     pub fn speaks_grove(&self) -> bool {
         self.get("/api/health", self.probe_timeout)
             .ok()
             .and_then(|r| r.json::<serde_json::Value>().ok())
-            .is_some_and(|v| v.get("ok").is_some_and(serde_json::Value::is_boolean))
+            .is_some_and(|v| {
+                v.get("ok").is_some_and(serde_json::Value::is_boolean)
+                    && !v
+                        .pointer("/data/home")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|theirs| self.is_another_home(theirs))
+            })
     }
 
     /// Ask the daemon to drain and stop itself. `true` only when the request was
@@ -588,6 +599,13 @@ mod tests {
         assert!(!ApiClient::at(server("200 OK", r#"{"status":"ok"}"#), BUDGET).speaks_grove());
         assert!(!ApiClient::at(closed_port(), BUDGET).speaks_grove());
         assert!(!ApiClient::at(closed_port(), BUDGET).health_ok());
+
+        // Nor is another home's daemon on the bind, which `grove off` would stop.
+        let ready =
+            r#"{"ok":true,"data":{"status":"ready","version":"0.1.0","home":"/tmp/theirs"}}"#;
+        let at = |home| ApiClient::at(server("200 OK", ready), BUDGET).for_home(home);
+        assert!(!at("/tmp/mine").speaks_grove());
+        assert!(at("/tmp/theirs").speaks_grove());
     }
 
     // ─── the tri-state, and the three listeners that produce it ──────────────

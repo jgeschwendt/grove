@@ -296,7 +296,8 @@ sides by <code class="code">the_drain_budget_fits_inside_the_cli_stop_grace</cod
 <p class="docs-note">Custody lives in the CLI (<code class="code">grove::server::ServerControl</code>), not the daemon: <code class="code">grove on</code>
 launches the grove binary detached as <code class="code">&lt;launcher&gt; serve</code>, tracks it by
 <code class="code">$GROVE_HOME/grove.pid</code>, and gates readiness on <code class="code">GET /api/health</code>. <code class="code">grove off</code> drains over
-the API, then escalates SIGTERM → SIGKILL. A pid is re-verified before every escalation
+the API, then escalates SIGTERM → SIGKILL; the drain goes only to a listener that speaks
+grove for <em>this</em> home, never to a stranger or to another home's daemon on the bind. A pid is re-verified before every escalation
 signal — liveness plus a start-time identity token — so a recycled pid reads as stale
 rather than as grove still running. A bind held with no pid file refuses the start rather
 than adopting a stranger. <code class="code">grove reboot</code> is off then on.</p>

@@ -452,7 +452,7 @@ impl ServerControl {
     /// An `ApiClient` bound to this server's address with the probe budget — the
     /// one place the readiness/identity HTTP policy (timeout, proxy) is set.
     fn api_client(&self) -> ApiClient {
-        ApiClient::at(self.bind, PROBE_TIMEOUT)
+        ApiClient::at(self.bind, PROBE_TIMEOUT).for_home(&self.home)
     }
 
     /// The command that launches the daemon. Seam: the program/args are fields, so
@@ -1094,31 +1094,44 @@ mod tests {
         sc.off().expect("a pid-less server drains via the API");
     }
 
+    /// An unrelated HTTP service on the bind (no grove envelope), or another home's
+    /// daemon (`GROVE_HOME` overridden alone, `GROVE_BIND` left at its default): `off`
+    /// keeps its "not running → Ok" contract and POSTs no shutdown at either. Counted
+    /// in the main thread: a panic in the listener's fails no test.
     #[test]
     fn off_is_a_no_op_when_a_stranger_holds_the_bind() {
         use std::io::{Read, Write};
-        let home = TempDir::new().unwrap();
-        // An unrelated HTTP service on the bind (no grove envelope): `off` must
-        // keep its "not running → Ok" contract, never POST a shutdown at it.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        thread::spawn(move || {
-            for mut s in listener.incoming().flatten() {
-                let mut buf = [0u8; 1024];
-                let n = s.read(&mut buf).unwrap_or(0);
-                assert!(
-                    !buf[..n].starts_with(b"POST"),
-                    "a stranger must never receive the shutdown POST"
-                );
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello");
-            }
-        });
-        let sc = ServerControl {
-            interface: Interface::Http,
-            ..control(&home, addr)
-        };
-        sc.off()
-            .expect("a foreign listener is a no-op, not an error");
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for body in [
+            "hello",
+            r#"{"ok":true,"data":{"status":"ready","version":"0.1.0","home":"/elsewhere"}}"#,
+        ] {
+            let home = TempDir::new().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let posts = Arc::new(AtomicUsize::new(0));
+            let seen = Arc::clone(&posts);
+            thread::spawn(move || {
+                for mut s in listener.incoming().flatten() {
+                    let mut buf = [0u8; 1024];
+                    let n = s.read(&mut buf).unwrap_or(0);
+                    if buf[..n].starts_with(b"POST") {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
+                    let _ = s.write_all(head.as_bytes());
+                    let _ = s.write_all(body.as_bytes());
+                }
+            });
+            let sc = ServerControl {
+                interface: Interface::Http,
+                ..control(&home, addr)
+            };
+            sc.off()
+                .expect("a foreign listener is a no-op, not an error");
+            assert_eq!(posts.load(Ordering::SeqCst), 0, "{body}");
+        }
     }
 
     /// The pid-ful mirror. A pid file and the bind can disagree — `GROVE_BIND` moved

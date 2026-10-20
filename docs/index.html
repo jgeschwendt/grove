@@ -193,9 +193,6 @@
       s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong><code class="code">grove off</code> checks for any grove daemon, not this
-      home's</strong> (plausible, medium). It can shut down another home's daemon on the same
-      bind.</li>
     <li><strong>The <code class="code">cloning</code> claim has two narrow gaps</strong> (plausible, low;
       s-20261020T0250Z review). A lock taken on a marker another realizer has just unlinked
       succeeds on the dead inode — fix: after the lock, check the path still names that inode.
