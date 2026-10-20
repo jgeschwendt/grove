@@ -57,24 +57,25 @@ fn init_with(var: impl Fn(&str) -> Option<String>) -> Telemetry {
         return Telemetry(None);
     }
 
-    match build(var("GROVE_OTLP_TRACES_ENDPOINT")) {
-        Ok(provider) => {
+    // No default destination. Spans carry `grove.slug` and a redacted `grove.url`,
+    // so a built-in fallback host would make opting telemetry in an opt-in to
+    // exporting repo identity somewhere the operator never named. Unset is a
+    // no-op handle, not an egress — and so is empty, which otlp would otherwise
+    // resolve through OTEL_EXPORTER_OTLP_* to localhost:4318.
+    match var("GROVE_OTLP_TRACES_ENDPOINT")
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(build)
+    {
+        Some(Ok(provider)) => {
             global::set_tracer_provider(provider.clone());
             ENABLED.store(true, Ordering::Relaxed);
             Telemetry(Some(provider))
         }
-        Err(_) => Telemetry(None),
+        _ => Telemetry(None),
     }
 }
 
-fn build(endpoint: Option<String>) -> anyhow::Result<SdkTracerProvider> {
-    // No default destination. Spans carry `grove.slug` and a redacted `grove.url`,
-    // so a built-in fallback host would make opting telemetry in an opt-in to
-    // exporting repo identity somewhere the operator never named. Unset is a
-    // no-op handle, not an egress.
-    let endpoint =
-        endpoint.ok_or_else(|| anyhow::anyhow!("GROVE_OTLP_TRACES_ENDPOINT is unset"))?;
-
+fn build(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
     let exporter = SpanExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -205,14 +206,14 @@ mod tests {
     fn exports_spans_only_to_a_named_collector() {
         assert!(init().0.is_none());
         assert!(init_with(env(&[("GROVE_TELEMETRY", "1")])).0.is_none());
-        assert!(
-            init_with(env(&[
+        // empty is unset too: otlp would fall back to OTEL_* and then localhost:4318
+        for endpoint in ["", "not a uri"] {
+            let pairs = [
                 ("GROVE_TELEMETRY", "1"),
-                ("GROVE_OTLP_TRACES_ENDPOINT", "not a uri")
-            ]))
-            .0
-            .is_none()
-        );
+                ("GROVE_OTLP_TRACES_ENDPOINT", endpoint),
+            ];
+            assert!(init_with(env(&pairs)).0.is_none(), "{endpoint:?}");
+        }
         set_attr("grove.slug", "off");
         assert_eq!(in_span("off", None, || Ok::<_, String>(7)), Ok(7));
 
@@ -242,28 +243,32 @@ mod tests {
                     .unwrap();
             }
         });
-        let handle = init_with(env(&[
+        let _telemetry = init_with(env(&[
             ("GROVE_TELEMETRY", "true"),
             ("GROVE_OTLP_TRACES_ENDPOINT", endpoint.as_str()),
         ]));
         let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-        let ok = in_span("clone", Some(parent), || {
+        let clone = || {
             set_attr("grove.slug", "o/r");
             Ok::<_, String>(())
-        });
-        assert_eq!(ok, Ok(()));
+        };
+        assert_eq!(in_span("clone", Some(parent), clone), Ok(()));
         assert_eq!(in_span("fetch", None, || Err::<(), _>("boom")), Err("boom"));
-        drop(handle);
 
         let sent: Vec<u8> = rx.try_iter().flatten().collect();
         let has = |needle: &[u8]| sent.windows(needle.len()).any(|w| w == needle);
-        for needle in [&b"grove-ops.clone"[..], b"grove-ops.fetch", b"o/r", b"boom"] {
+        // protobuf: key+value of the attribute, message+ERROR code of the status, and
+        // the parent's trace id and span id
+        for needle in [
+            &b"grove-ops.clone"[..],
+            b"grove-ops.fetch",
+            b"\x0a\x0agrove.slug\x12\x05\x0a\x03o/r",
+            b"\x12\x04boom\x18\x02",
+            &[0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6],
+            &[0x00, 0xf0, 0x67, 0xaa, 0x0b, 0xa9, 0x02, 0xb7],
+        ] {
             assert!(has(needle), "{} missing", String::from_utf8_lossy(needle));
         }
-        assert!(
-            has(&[0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6]),
-            "parent trace id"
-        );
         assert_eq!(Traceparent(parent).keys(), ["traceparent"]);
     }
 
