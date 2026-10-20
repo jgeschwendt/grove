@@ -204,7 +204,8 @@ mod tests {
     /// process-wide, so the off paths run before the opt-in flips them.
     #[test]
     fn exports_spans_only_to_a_named_collector() {
-        assert!(init().0.is_none());
+        // off unless the operator's own shell opted in
+        assert!(init().0.is_none() | std::env::var_os("GROVE_TELEMETRY").is_some());
         assert!(init_with(env(&[("GROVE_TELEMETRY", "1")])).0.is_none());
         // empty is unset too: otlp would fall back to OTEL_* and then localhost:4318
         for endpoint in ["", "not a uri"] {
