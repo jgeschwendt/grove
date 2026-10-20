@@ -239,6 +239,13 @@
     <li><strong>A dry run and a real pass disagree on a nested pending source</strong> (plausible, low).
       For <code class="code">config/db.toml</code> with its parent missing in the new trunk, diagnose reports
       would-create while materialize reports the pending error after creating the parent.</li>
+    <li><strong>A carry holds on an in-trunk link whose target the new trunk will have</strong>
+      (plausible, low). <code class="code">.k1 -&gt; .real</code> is held even when <code class="code">.real</code>
+      is tracked or itself a declared share, until the operator re-creates it; the check is lexical.</li>
+    <li><strong><code class="code">verbose_prints_the_root_the_daemon_named</code> flakes under load</strong>
+      (confirmed, low; <code class="code">grove/src/commands.rs</code>). Its stub server missed
+      <code class="code">BUDGET</code> once during a parallel build and the listing fell back to offline;
+      20/20 in isolation.</li>
   </ol>
 </section>
 
