@@ -198,9 +198,6 @@
       succeeds on the dead inode — fix: after the lock, check the path still names that inode.
       And <code class="code">recover_trunk</code> on a bare with no leftover marker takes no claim, so two
       ungated realizers can both repair one root.</li>
-    <li><strong>Manifest writes don't fsync</strong> (plausible, low). <code class="code">write_doc</code>
-      renames <code class="code">manifest.toml.tmp</code> without fsyncing the file or its
-      directory.</li>
     <li><strong>Slugs keep their case</strong> (plausible, low). <code class="code">slug_from_url</code>
       of <code class="code">…/Foo/bar</code> and <code class="code">…/foo/bar</code> mints two manifest
       keys that share one directory on case-insensitive APFS.</li>
