@@ -421,6 +421,9 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
         git::worktree_add(&bare, &want.dir, &want.branch, None)?;
     }
     if head != want.branch {
+        // Shares first, while `HEAD` still names the old trunk: it is the one record of
+        // which links and sources were grove's, and moving it forgets them.
+        let _ = crate::env::materialize(home, Some(slug), crate::env::Fix::Safe);
         git::set_head(&bare, &want.branch)?;
     }
     Ok(())
@@ -1085,6 +1088,39 @@ mod tests {
 
     fn declared_worktrees(home: &Path, slug: &str) -> Vec<manifest::Worktree> {
         manifest::list_worktrees(&manifest_path(home), slug).unwrap()
+    }
+
+    /// A share link laid through the old trunk is grove's own: the trunk change moves
+    /// it, and the source it reads, onto the new trunk rather than leaving a conflict.
+    #[test]
+    fn a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo_with_canary(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".env"]).unwrap();
+        crate::worktrees::create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
+        let code = code_dir(&home, "o/r");
+        std::fs::write(code.join("main/.env"), "SECRET").unwrap();
+
+        declare_trunk(&home, "o/r", "canary");
+        reconcile_one(&home, "o/r").unwrap();
+        let out = crate::env::diagnose(&home, Some("o/r")).unwrap();
+        assert!(
+            !out.iter()
+                .any(|o| o.worktree.as_deref() == Some("feat") && o.status.is_conflict()),
+            "a link through the ex-trunk is grove's own: {out:?}"
+        );
+        assert_eq!(
+            std::fs::read_link(code.join("feat/.env")).unwrap(),
+            Path::new("../canary/.env")
+        );
+        assert_eq!(
+            std::fs::read_to_string(code.join("feat/.env")).unwrap(),
+            "SECRET",
+            "the new trunk's source is seeded from the old one"
+        );
     }
 
     /// Changing the trunk is a manifest edit and reconcile is what makes it disk: the

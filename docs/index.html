@@ -195,9 +195,6 @@
       s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong><code class="code">is_under_trunk</code> forgets the old trunk</strong> (confirmed,
-      low). After a trunk change (main → canary), share links laid through
-      <code class="code">../main/</code> read as foreign.</li>
     <li><strong><code class="code">RootView.url</code> and <code class="code">error</code> are served
       unredacted</strong> (plausible). The Host guard closes the remote read path; local readers still
       see clone URLs, including any embedded credentials.</li>
