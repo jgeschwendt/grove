@@ -48,9 +48,9 @@ hazards:
 - ※ never-clobber → src/env.rs:441
 - ※ promote-attach-before-move → src/pool.rs:164
 - ※ reconcile-additive → src/worktrees.rs:280
-- ※ sync-never-forces → src/roots.rs:822
+- ※ sync-never-forces → src/roots.rs:843
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:757
+- ※ trunk-recovery-guard → src/roots.rs:778
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 

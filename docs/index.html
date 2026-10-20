@@ -194,7 +194,8 @@
     <h2 class="h2">Open sweep findings</h2>
     <p class="docs-note">The s-20261012T0155Z gigasweep confirmed 21 defects by probe and the
       s-20261019T0455Z sweep three more, all fixed on trunk; the s-20261020T0445Z sweep of the 48 commits
-      since confirmed eight, six of them fixed in its own landing, and its review added one. Open, highest first:</p>
+      since confirmed eight, six of them fixed in its own landing and one by s-20261020T0540Z, and its review
+      added one. Open, highest first:</p>
   </header>
   <ol class="steps">
     <li><strong>A link or copy error that predates a trunk change wedges it half-carried</strong>
@@ -209,12 +210,6 @@
       (confirmed, medium; <code class="code">env.rs</code> carry seed). <code class="code">read_present</code>
       bails on a directory, which <code class="code">source_outcome</code> accepts everywhere else. Seeding a
       recursive copy, an empty directory or a clear refusal is the owner's call, on the same proposal.</li>
-    <li><strong>A trunk change converges outside any claim</strong> (plausible, low;
-      <code class="code">roots::converge_trunk</code>). It runs before <code class="code">realize</code>
-      takes a fresh claim, so two offline realizers (two CLIs, or <code class="code">grove apply</code> beside
-      the daemon) can both prune and re-add the new trunk and both carry. The loser fails spuriously, or a
-      prune drops the other's half-written registration. Fix: take the claim in
-      <code class="code">reconcile_one</code> before <code class="code">converge_trunk</code>.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
