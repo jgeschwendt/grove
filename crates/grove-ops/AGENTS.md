@@ -17,7 +17,7 @@ invariants:
     anchor: crates/grove-ops/src/roots.rs#unsaved_work
   - claim: "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone"
     anchor: ※ reconcile-additive
-  - claim: "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
+  - claim: "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk, or the old trunk the bare's HEAD names until a trunk change converges) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
     anchor: ※ never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: ※ sync-never-forces
@@ -44,13 +44,13 @@ hazards:
 - ※ clock-seam → tests/harness_meta.rs:354
 - ※ delete-before-undeclare → src/roots.rs:198
 - ※ files-authoritative → src/manifest.rs:301
-- ※ lane-is-callers → src/env.rs:123
-- ※ never-clobber → src/env.rs:313
+- ※ lane-is-callers → src/env.rs:124
+- ※ never-clobber → src/env.rs:353
 - ※ promote-attach-before-move → src/pool.rs:164
 - ※ reconcile-additive → src/worktrees.rs:280
-- ※ sync-never-forces → src/roots.rs:728
+- ※ sync-never-forces → src/roots.rs:731
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:681
+- ※ trunk-recovery-guard → src/roots.rs:684
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 

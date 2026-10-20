@@ -25,8 +25,9 @@
 //!
 //! **Never clobber.** Only a symlink that is grove's *own* is ever touched: an
 //! exact match (`../…/<trunk>/<p>`) is left alone, a *grove-shaped* link (points
-//! under the trunk — under its branch-derived name, or under the fixed name a
-//! not-yet-migrated root still carries) at the wrong path is repointed (self-heal),
+//! under the trunk — under its branch-derived name, the fixed name a not-yet-migrated
+//! root still carries, or the old trunk a pending trunk change has yet to move `HEAD`
+//! off) at the wrong path is repointed (self-heal),
 //! and an undeclared one is GC'd on the same test. A real file/dir, or a **foreign**
 //! symlink (a user's, pointing outside the trunk), is reported as a `conflict` and
 //! never touched — unless `Fix::Force` backs it up first
@@ -140,6 +141,12 @@ pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
     let root_fd = open_dir(&code_dir(home, slug))?;
     let trunk_fd = open_dir_nofollow(&root_fd, OsStr::new(&trunk.name))?;
     let wt_fd = open_dir_nofollow(&root_fd, OsStr::new(name))?;
+    let head = head_name(home, slug).unwrap_or_default();
+    let pass = Pass {
+        slug,
+        trunk_name: &trunk.name,
+        head_name: &head,
+    };
     let shares = manifest::list_shares(&manifest_path(home), slug)?;
     let paths: Vec<&str> = shares.iter().map(|s| s.path.as_str()).collect();
     let tracked = crate::git::tracked(&code_dir(home, slug).join(name), &paths)?;
@@ -150,7 +157,7 @@ pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
                 return Ok(());
             };
             let ours = match classify_leaf(&parent_fd, &leaf)? {
-                LeafState::Symlink { target } => is_under_trunk(&trunk.name, &target),
+                LeafState::Symlink { target } => pass.owns(&target),
                 LeafState::RealFile => read_source(&trunk_fd, rel)
                     .is_ok_and(|(src, _)| read_source(&wt_fd, rel).is_ok_and(|(b, _)| b == src)),
                 LeafState::Absent | LeafState::Dir | LeafState::Other => false,
@@ -188,13 +195,29 @@ fn run(home: &Path, slug: Option<&str>, action: Action) -> Result<Vec<ShareOutco
     Ok(out)
 }
 
-/// The two per-root constants every row of a pass carries: the slug it reports
-/// under, and the name of the trunk directory its links point through. Bundled
-/// rather than threaded as a pair so the row helpers keep a readable arity.
+/// The per-root constants every row of a pass carries: the slug it reports under, the
+/// name of the trunk directory its links point through, and the checkout the bare's
+/// `HEAD` names — the trunk once converged, the previous trunk while a `trunk` edit
+/// awaits `converge_trunk`, which runs a pass in that window so links through the old
+/// trunk are still grove's own to repoint. Bundled so the row helpers keep a readable
+/// arity.
 #[derive(Clone, Copy)]
 struct Pass<'a> {
     slug: &'a str,
     trunk_name: &'a str,
+    head_name: &'a str,
+}
+
+impl Pass<'_> {
+    fn owns(self, target: &Path) -> bool {
+        is_under_trunk(self.trunk_name, target) || is_under_trunk(self.head_name, target)
+    }
+}
+
+fn head_name(home: &Path, slug: &str) -> Option<String> {
+    crate::git::default_branch(&roots::bare_dir(home, slug))
+        .ok()
+        .map(|b| worktrees::name_for(&b))
 }
 
 fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>) {
@@ -219,9 +242,11 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
         ));
         return;
     }
+    let head = head_name(home, slug).unwrap_or_default();
     let pass = Pass {
         slug,
         trunk_name: &trunk.name,
+        head_name: &head,
     };
 
     let root_fd = match open_dir(&root) {
@@ -234,6 +259,9 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
             return out.push(err(slug, None, "", &format!("open {}: {e:#}", trunk.name)));
         }
     };
+    // `HEAD`'s checkout seeds a missing source; once converged that is the trunk itself,
+    // where an absent source is absent still, so the seed falls through to empty.
+    let prev_fd = open_dir_nofollow(&root_fd, OsStr::new(&head)).ok();
     let declared = match manifest::list_shares(&manifest_path(home), slug) {
         Ok(d) => d,
         Err(e) => return out.push(err(slug, None, "", &format!("read shares: {e:#}"))),
@@ -241,7 +269,13 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
 
     // 1. Source pass — ensure each `<trunk>/<p>` exists.
     for share in &declared {
-        out.push(source_outcome(pass, action, &trunk_fd, share));
+        out.push(source_outcome(
+            pass,
+            action,
+            &trunk_fd,
+            prev_fd.as_ref(),
+            share,
+        ));
     }
 
     // 2/3. Link + GC pass, per present worktree (never the trunk/reserved dirs).
@@ -263,11 +297,14 @@ fn run_root(home: &Path, slug: &str, action: Action, out: &mut Vec<ShareOutcome>
     }
 }
 
-/// Source row: classify `<trunk>/<p>`, create it empty when missing (materialize).
+/// Source row: classify `<trunk>/<p>`, create it when missing (materialize) — seeded
+/// from the previous trunk's `<p>` across a trunk change, so a link repointed onto
+/// the new trunk reads the same bytes; empty otherwise.
 fn source_outcome<Fd: AsFd>(
     pass: Pass,
     action: Action,
     trunk_fd: Fd,
+    prev_fd: Option<&OwnedFd>,
     share: &Share,
 ) -> ShareOutcome {
     let rel = Path::new(&share.path);
@@ -277,7 +314,10 @@ fn source_outcome<Fd: AsFd>(
             Some((parent_fd, leaf)) => match classify_leaf(&parent_fd, &leaf)? {
                 LeafState::Absent => {
                     if action.mutates() {
-                        create_empty(&parent_fd, &leaf)?;
+                        match prev_fd.and_then(|fd| read_source(fd, rel).ok()) {
+                            Some((bytes, mode)) => write_file(&parent_fd, &leaf, &bytes, mode)?,
+                            None => create_empty(&parent_fd, &leaf)?,
+                        }
                     }
                     Ok(ShareStatus::Created)
                 }
@@ -334,7 +374,7 @@ fn link_outcome<Fd: AsFd>(
             LeafState::Symlink { target: cur } if cur == target => Ok(ShareStatus::Ok),
             // A *grove-shaped* link (points under the trunk) but at the wrong path is
             // a stale grove link — self-heal by repointing.
-            LeafState::Symlink { target: cur } if is_under_trunk(pass.trunk_name, &cur) => {
+            LeafState::Symlink { target: cur } if pass.owns(&cur) => {
                 if action.mutates() {
                     repoint_leaf(&parent_fd, &leaf, &target)?;
                 }
@@ -391,7 +431,7 @@ fn copy_outcome<Tf: AsFd, Wf: AsFd>(
             LeafState::Absent => true,
             // A grove-owned symlink (prior `_.symlink` for this path) is data-free —
             // replace it with the seeded copy (symlink→copy migration).
-            LeafState::Symlink { target } if is_under_trunk(pass.trunk_name, &target) => true,
+            LeafState::Symlink { target } if pass.owns(&target) => true,
             // Foreign symlink / real file / dir: the worktree owns it. Leave it.
             LeafState::Symlink { .. } | LeafState::RealFile | LeafState::Dir | LeafState::Other => {
                 false
@@ -443,9 +483,9 @@ fn gc_worktree<Fd: AsFd>(
         // that lets a stale link be repointed lets an undeclared one be collected, so
         // a link laid through the legacy trunk name is GC'd rather than stranded.
         let gc = if action.mutates() {
-            gc_leaf(&wt_fd, &name, pass.trunk_name)
+            gc_leaf(&wt_fd, &name, pass)
         } else {
-            is_grove_link(&wt_fd, &name, pass.trunk_name)
+            is_grove_link(&wt_fd, &name, pass)
         };
         if let Ok(true) = gc {
             out.push(ok(pass.slug, Some(wt), name_str, ShareStatus::Gc));
@@ -625,11 +665,11 @@ fn write_file<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, bytes: &[u8], mode: Mode) -> Re
         .with_context(|| format!("rename {} -> {}", tmp.display(), leaf.display()))
 }
 
-/// GC a leaf IFF it is a symlink grove's own — one pointing through `trunk`. A real
+/// GC a leaf IFF it is a symlink grove's own — one [`Pass::owns`]. A real
 /// file or foreign-target symlink is left untouched. `unlinkat` removes the LINK,
 /// never its target.
-fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, trunk: &str) -> Result<bool> {
-    if is_grove_link(&dirfd, leaf, trunk)? {
+fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
+    if is_grove_link(&dirfd, leaf, pass)? {
         unlinkat(&dirfd, leaf, AtFlags::empty())
             .with_context(|| format!("gc {}", leaf.display()))?;
         Ok(true)
@@ -638,11 +678,8 @@ fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, trunk: &str) -> Result<bool> {
     }
 }
 
-fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, trunk: &str) -> Result<bool> {
-    Ok(
-        matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target }
-            if is_under_trunk(trunk, &target)),
-    )
+fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
+    Ok(matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target } if pass.owns(&target)))
 }
 
 /// Back up a real-file conflict (`Fix::Force`): rename the real file to a
