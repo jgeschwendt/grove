@@ -41,7 +41,7 @@ pub struct Worktree {
 /// A declared static share under `[roots."<slug>".env]` — a file the root shares
 /// into every worktree, as a live `_.symlink` (link to the trunk's copy) or a
 /// seeded `_.copy` (an independent real file). `_.setup` (a per-worktree setup
-/// command) is reserved for a later slice. See `docs/worktrees.md`.
+/// command) is reserved for a later slice. See `docs/worktrees.html#environment-declaring`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Share {
     pub path: String,
