@@ -173,7 +173,8 @@ a no-op once it has run:
   from the bare;
 - `HEAD` is **moved** onto the trunk branch, so actual state answers the declaration —
   after a share pass, since `HEAD` is the one record of which links went through the old
-  trunk (`docs/worktree-environment.md` § Never clobber).
+  trunk, and only once that pass carried every share without an error
+  (`docs/worktree-environment.md` § Never clobber).
 
 **No trunk is ever deleted by a trunk change.** The previous trunk stays checked out where
 it is, and the worktree reconcile that follows adopts it into `worktrees.<name>` — an

@@ -247,12 +247,16 @@ impl Layout {
     /// place — so reinstalling the version `current` points at never leaves it naming a
     /// half-tree. `rename(2)` cannot replace a non-empty dir, so a prior tree is moved
     /// aside first: between those two renames `versions/<v>` is briefly absent (a crash
-    /// there leaves the old tree in `.<v>.old`, cleared by the next install of `<v>`).
+    /// there leaves the old tree in `.<v>.old`, restored by the next install of `<v>`
+    /// before anything else touches it).
     pub fn install_bundle(&self, v: &str, tar_gz: &[u8]) -> Result<(), CliError> {
         let dest = self.version_path(v);
         let stage = self.versions_dir().join(format!(".{v}.tmp"));
         let old = self.versions_dir().join(format!(".{v}.old"));
         let _ = fs::remove_dir_all(&stage);
+        if !dest.exists() {
+            let _ = fs::rename(&old, &dest);
+        }
         let _ = fs::remove_dir_all(&old);
         fs::create_dir_all(&stage)
             .map_err(|e| CliError::Update(format!("create {}: {e}", stage.display())))?;
@@ -728,6 +732,25 @@ mod tests {
             "grove 0.4.0-again"
         );
         assert_eq!(fs::read_dir(layout.versions_dir()).unwrap().count(), 1);
+    }
+
+    /// A crash between the two renames leaves the only good tree in `.<v>.old`; the
+    /// next install restores it rather than clearing it, refused bundle or not.
+    #[test]
+    fn an_install_after_a_mid_swap_crash_restores_the_old_tree() {
+        let home = TempDir::new().unwrap();
+        let layout = Layout::new(home.path());
+        layout
+            .install_bundle("0.4.0", &fake_bundle("0.4.0"))
+            .unwrap();
+        let dest = layout.version_path("0.4.0");
+        fs::rename(&dest, layout.versions_dir().join(".0.4.0.old")).unwrap();
+
+        let err = layout
+            .install_bundle("0.4.0", &bundle("README", "hello\n"))
+            .unwrap_err();
+        assert!(err.to_string().contains("no bin/grove"), "{err}");
+        assert!(dest.join("bin/grove").is_file());
     }
 
     #[test]

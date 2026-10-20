@@ -65,7 +65,9 @@ into a dot-prefixed staging dir (`versions/.<v>.tmp`, never listed or accepted a
 asserts the binary is there and fsyncs the tree, and only then renames it into
 `versions/<v>` — moving any prior tree aside first, since `rename(2)` cannot replace a
 non-empty dir — so reinstalling the version `current` points at never strands it on a
-half-tree. A refused bundle leaves only the staging dir, which is removed. The
+half-tree. A refused bundle leaves only the staging dir, which is removed; a crash between
+the two renames leaves the prior tree in `versions/.<v>.old`, restored by the next install
+of `<v>` before anything else touches it. The
 health gate cannot cover this: it is skipped whenever no server is running — the state of
 every first install, and of `install.sh`'s hand-off on a clean machine — so a mis-packed
 release flipped `current` onto an empty tree, exited 0, and left the operator's PATH

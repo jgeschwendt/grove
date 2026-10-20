@@ -422,8 +422,17 @@ fn converge_trunk(home: &Path, slug: &str) -> Result<()> {
     }
     if head != want.branch {
         // Shares first, while `HEAD` still names the old trunk: it is the one record of
-        // which links and sources were grove's, and moving it forgets them.
-        let _ = crate::env::materialize(home, Some(slug), crate::env::Fix::Safe);
+        // which links and sources were grove's, and moving it forgets them — so a pass
+        // with an error row leaves `HEAD` where it is, for the next event to retry.
+        if crate::env::carry(home, slug, &crate::worktrees::name_for(&head))
+            .iter()
+            .any(|o| o.status.is_error())
+        {
+            bail!(
+                "cannot move the trunk of {slug} to `{}`: a share failed to carry",
+                want.branch
+            );
+        }
         git::set_head(&bare, &want.branch)?;
     }
     Ok(())
@@ -1090,11 +1099,8 @@ mod tests {
         manifest::list_worktrees(&manifest_path(home), slug).unwrap()
     }
 
-    /// A share link laid through the old trunk is grove's own: the trunk change moves
-    /// it, and the source it reads, onto the new trunk rather than leaving a conflict.
-    #[test]
-    fn a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk() {
-        let tmp = TempDir::new().unwrap();
+    /// A root on `main` sharing `.env` into worktree `feat`, a link through `../main/`.
+    fn shared_root(tmp: &TempDir) -> (PathBuf, PathBuf) {
         let home = tmp.path().join("home");
         let src = tmp.path().join("src");
         fixture_repo_with_canary(&src);
@@ -1102,6 +1108,55 @@ mod tests {
         manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".env"]).unwrap();
         crate::worktrees::create(&home, "o/r", "feat", "feature/x", Some("main")).unwrap();
         let code = code_dir(&home, "o/r");
+        (home, code)
+    }
+
+    /// While a trunk change is refused, an ordinary share pass knows only the declared
+    /// trunk: a link through the old one is a conflict, never repointed into the
+    /// checkout occupying the new trunk's directory.
+    #[test]
+    fn a_refused_trunk_change_leaves_links_through_the_old_trunk_alone() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
+        crate::worktrees::create(&home, "o/r", "canary", "feature/y", Some("main")).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
+
+        let out = crate::env::materialize(&home, Some("o/r"), crate::env::Fix::Safe).unwrap();
+        assert!(
+            out.iter()
+                .any(|o| o.worktree.as_deref() == Some("feat") && o.status.is_conflict()),
+            "{out:?}"
+        );
+        assert_eq!(
+            std::fs::read_link(code.join("feat/.env")).unwrap(),
+            Path::new("../main/.env")
+        );
+    }
+
+    /// An old-trunk source the pass cannot read is an error, not an absent source: the
+    /// new trunk gets no empty stand-in, and `HEAD` stays put so the next event retries.
+    #[test]
+    fn an_unreadable_old_source_holds_the_trunk_change() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
+        std::fs::remove_file(code.join("main/.env")).unwrap();
+        std::os::unix::fs::symlink("README.md", code.join("main/.env")).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
+        assert!(std::fs::symlink_metadata(code.join("canary/.env")).is_err());
+        assert_eq!(
+            git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
+            "main"
+        );
+    }
+
+    /// A share link laid through the old trunk is grove's own: the trunk change moves
+    /// it, and the source it reads, onto the new trunk rather than leaving a conflict.
+    #[test]
+    fn a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
         std::fs::write(code.join("main/.env"), "SECRET").unwrap();
 
         declare_trunk(&home, "o/r", "canary");
