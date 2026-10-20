@@ -161,6 +161,7 @@ impl Layout {
                 .filter_map(Result::ok)
                 .filter(|e| e.path().is_dir())
                 .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|v| !v.starts_with('.'))
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -239,43 +240,62 @@ impl Layout {
     }
 
     /// Extract a `.tar.gz` bundle into `versions/<v>/` (replacing any prior dir).
+    ///
+    /// The bundle lands in a dot-prefixed sibling (`versions/.<v>.tmp`), which neither
+    /// [`installed_versions`](Self::installed_versions) nor [`valid_version`] will ever
+    /// read as a release, and only a fully checked and persisted tree is renamed into
+    /// place — so reinstalling the version `current` points at never leaves it naming a
+    /// half-tree. `rename(2)` cannot replace a non-empty dir, so a prior tree is moved
+    /// aside first: between those two renames `versions/<v>` is briefly absent (a crash
+    /// there leaves the old tree in `.<v>.old`, cleared by the next install of `<v>`).
     pub fn install_bundle(&self, v: &str, tar_gz: &[u8]) -> Result<(), CliError> {
         let dest = self.version_path(v);
-        if dest.exists() {
-            fs::remove_dir_all(&dest)
-                .map_err(|e| CliError::Update(format!("clear {}: {e}", dest.display())))?;
-        }
-        fs::create_dir_all(&dest)
-            .map_err(|e| CliError::Update(format!("create {}: {e}", dest.display())))?;
+        let stage = self.versions_dir().join(format!(".{v}.tmp"));
+        let old = self.versions_dir().join(format!(".{v}.old"));
+        let _ = fs::remove_dir_all(&stage);
+        let _ = fs::remove_dir_all(&old);
+        fs::create_dir_all(&stage)
+            .map_err(|e| CliError::Update(format!("create {}: {e}", stage.display())))?;
+        (|| {
+            let decoder = flate2::read::GzDecoder::new(tar_gz);
+            tar::Archive::new(decoder)
+                .unpack(&stage)
+                .map_err(|e| CliError::Update(format!("extract {v}: {e}")))?;
 
-        let decoder = flate2::read::GzDecoder::new(tar_gz);
-        tar::Archive::new(decoder)
-            .unpack(&dest)
-            .map_err(|e| CliError::Update(format!("extract {v}: {e}")))?;
+            // A bundle without the binary it is supposed to carry is not an install.
+            // Nothing downstream would notice: the health gate that would catch it is
+            // skipped whenever no daemon is running — the state of every first install
+            // and of the hand-off `install.sh` makes — so `current` flipped onto an empty
+            // tree, `grove up` exited 0, and the operator's PATH symlink
+            // (`current/bin/grove`) dangled, leaving no `grove` to roll back with. The
+            // module's promise is that a broken release never becomes `current`; this is
+            // what keeps it true on the path with no live daemon to prove it.
+            if !stage.join("bin/grove").is_file() {
+                return Err(CliError::Update(format!(
+                    "bundle for {v} carries no bin/grove; refusing to install it"
+                )));
+            }
 
-        // A bundle without the binary it is supposed to carry is not an install.
-        // Nothing downstream would notice: the health gate that would catch it is
-        // skipped whenever no daemon is running — the state of every first install
-        // and of the hand-off `install.sh` makes — so `current` flipped onto an empty
-        // tree, `grove up` exited 0, and the operator's PATH symlink
-        // (`current/bin/grove`) dangled, leaving no `grove` to roll back with. The
-        // module's promise is that a broken release never becomes `current`; this is
-        // what keeps it true on the path with no live daemon to prove it.
-        let binary = dest.join("bin/grove");
-        if !binary.is_file() {
-            let _ = fs::remove_dir_all(&dest);
-            return Err(CliError::Update(format!(
-                "bundle for {v} carries no bin/grove; refusing to install it"
-            )));
-        }
-
-        // Persist the extracted tree before it can become `current`. Without this
-        // a crash between the flip and writeback could leave `current` pointing at
-        // a version dir whose files were lost or truncated — a rename(2) outliving
-        // the data it names. fsync every file + dir, then the versions dir so the
-        // new dir entry itself is durable.
-        fsync_tree(&dest)?;
+            // Persist the extracted tree before it can become `current`. Without this
+            // a crash between the flip and writeback could leave `current` pointing at
+            // a version dir whose files were lost or truncated — a rename(2) outliving
+            // the data it names. fsync every file + dir, then the versions dir so the
+            // renamed-in dir entry itself is durable.
+            fsync_tree(&stage)?;
+            if dest.exists() {
+                fs::rename(&dest, &old)
+                    .map_err(|e| CliError::Update(format!("clear {}: {e}", dest.display())))?;
+            }
+            fs::rename(&stage, &dest)
+                .map_err(|e| CliError::Update(format!("install {}: {e}", dest.display())))
+        })()
+        .inspect_err(|_| {
+            // A no-op unless the prior tree was already moved aside.
+            let _ = fs::rename(&old, &dest);
+            let _ = fs::remove_dir_all(&stage);
+        })?;
         fsync_dir(&self.versions_dir());
+        let _ = fs::remove_dir_all(&old);
         Ok(())
     }
 
@@ -396,13 +416,13 @@ fn numeric_segments(s: &str) -> Vec<u64> {
 }
 
 /// A version names a `versions/<v>` directory and the symlink target, so it must
-/// be a single safe path component: no `/`, never `.`/`..`. Guards against a
-/// crafted `--version` or `latest` channel value escaping `versions/`.
+/// be a single safe path component: no `/`, no leading `.` (so never `.`/`..`, nor
+/// one of `install_bundle`'s staging dirs). Guards against a crafted `--version` or
+/// `latest` channel value escaping `versions/`.
 pub(super) fn valid_version(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 64
-        && v != "."
-        && v != ".."
+        && !v.starts_with('.')
         && v.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
 }
@@ -420,21 +440,22 @@ mod tests {
         fs::write(dir.join("bin/grove"), v).unwrap();
     }
 
-    /// A `.tar.gz` containing `bin/grove` whose contents name the version.
-    fn fake_bundle(v: &str) -> Vec<u8> {
+    /// A `.tar.gz` holding one file, `path`, containing `body`.
+    fn bundle(path: &str, body: &str) -> Vec<u8> {
         let mut tar = tar::Builder::new(Vec::new());
-        let body = format!("grove {v}");
         let mut header = tar::Header::new_gnu();
         header.set_size(body.len() as u64);
         header.set_mode(0o755);
         header.set_cksum();
-        tar.append_data(&mut header, "bin/grove", body.as_bytes())
-            .unwrap();
-        let tar_bytes = tar.into_inner().unwrap();
-
+        tar.append_data(&mut header, path, body.as_bytes()).unwrap();
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        enc.write_all(&tar_bytes).unwrap();
+        enc.write_all(&tar.into_inner().unwrap()).unwrap();
         enc.finish().unwrap()
+    }
+
+    /// A `.tar.gz` containing `bin/grove` whose contents name the version.
+    fn fake_bundle(v: &str) -> Vec<u8> {
+        bundle("bin/grove", &format!("grove {v}"))
     }
 
     #[test]
@@ -619,7 +640,7 @@ mod tests {
     fn installed_versions_sort_by_version_not_lexically() {
         let home = TempDir::new().unwrap();
         let layout = Layout::new(home.path());
-        for v in ["0.9.0", "0.10.0", "0.2.0"] {
+        for v in ["0.9.0", "0.10.0", "0.2.0", ".0.11.0.tmp"] {
             install(&layout, v);
         }
         assert_eq!(layout.installed_versions(), ["0.2.0", "0.9.0", "0.10.0"]);
@@ -665,19 +686,9 @@ mod tests {
     fn install_bundle_refuses_a_bundle_with_no_binary() {
         let home = TempDir::new().unwrap();
         let layout = Layout::new(home.path());
-
-        let mut tar = tar::Builder::new(Vec::new());
-        let mut header = tar::Header::new_gnu();
-        header.set_size(6);
-        header.set_mode(0o644);
-        header.set_cksum();
-        tar.append_data(&mut header, "README", &b"hello\n"[..])
-            .unwrap();
-        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        enc.write_all(&tar.into_inner().unwrap()).unwrap();
-        let bundle = enc.finish().unwrap();
-
-        let err = layout.install_bundle("7.0.0", &bundle).unwrap_err();
+        let err = layout
+            .install_bundle("7.0.0", &bundle("README", "hello\n"))
+            .unwrap_err();
         assert_eq!(err.exit_code(), 7);
         assert!(err.to_string().contains("no bin/grove"), "{err}");
         assert!(
@@ -686,10 +697,43 @@ mod tests {
         );
     }
 
+    /// Reinstalling the version `current` points at must never pass through a state
+    /// where that tree is gone: a refused (or crashed) extract leaves the installed
+    /// tree, and the operator's `current/bin/grove`, exactly as they were — and leaves
+    /// no staging dir behind for `installed_versions` to mistake for a release.
+    #[test]
+    fn reinstalling_current_with_a_bad_bundle_leaves_it_intact() {
+        let home = TempDir::new().unwrap();
+        let layout = Layout::new(home.path());
+        layout
+            .install_bundle("0.4.0", &fake_bundle("0.4.0"))
+            .unwrap();
+        layout.flip_to("0.4.0").unwrap();
+
+        let err = layout
+            .install_bundle("0.4.0", &bundle("README", "hello\n"))
+            .unwrap_err();
+        assert!(err.to_string().contains("no bin/grove"), "{err}");
+        assert_eq!(
+            fs::read_to_string(home.path().join("current/bin/grove")).unwrap(),
+            "grove 0.4.0"
+        );
+        assert_eq!(fs::read_dir(layout.versions_dir()).unwrap().count(), 1);
+
+        layout
+            .install_bundle("0.4.0", &fake_bundle("0.4.0-again"))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(home.path().join("current/bin/grove")).unwrap(),
+            "grove 0.4.0-again"
+        );
+        assert_eq!(fs::read_dir(layout.versions_dir()).unwrap().count(), 1);
+    }
+
     #[test]
     fn valid_version_rejects_traversal() {
         assert!(valid_version("0.4.0") && valid_version("0.1.0-smoke") && valid_version("1.2.3+b"));
-        for bad in ["", ".", "..", "../x", "a/b", "x\0y", "a b"] {
+        for bad in ["", ".", "..", ".0.4.0.tmp", "../x", "a/b", "x\0y", "a b"] {
             assert!(!valid_version(bad), "should reject {bad:?}");
         }
     }
