@@ -193,6 +193,12 @@
     <li><strong><code class="code">grove off</code> checks for any grove daemon, not this
       home's</strong> (plausible, medium). It can shut down another home's daemon on the same
       bind.</li>
+    <li><strong>The in-flight retry can overlap the CLI's post-clone passes</strong> (plausible,
+      medium; 9d15976). The <code class="code">cloning</code> marker's lock spans
+      <code class="code">clone_and_trunk</code> only, so the daemon's retry fires while the CLI's
+      <code class="code">reconcile_one</code> still runs its worktree and env passes on that root —
+      two realizers in one root's git. Fix: hold the claim across the rest of
+      <code class="code">reconcile_one</code> on the clone path.</li>
     <li><strong>Manifest writes don't fsync</strong> (plausible, low). <code class="code">write_doc</code>
       renames <code class="code">manifest.toml.tmp</code> without fsyncing the file or its
       directory.</li>
