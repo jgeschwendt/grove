@@ -198,11 +198,6 @@
       succeeds on the dead inode — fix: after the lock, check the path still names that inode.
       And <code class="code">recover_trunk</code> on a bare with no leftover marker takes no claim, so two
       ungated realizers can both repair one root.</li>
-    <li><strong><code class="code">version_key</code> misorders</strong> (plausible, low;
-      <code class="code">update/layout.rs</code>). <code class="code">+build</code> metadata folds into
-      the core numbers (<code class="code">0.4.0+1</code> &gt; <code class="code">0.4.0</code>) and prereleases compare by number before label
-      (<code class="code">-canary.10</code> &gt; <code class="code">-rc.1</code>). Pruning order only:
-      <code class="code">current</code> and <code class="code">previous</code> are protected.</li>
     <li><strong><code class="code">logs::redact</code> cuts at the first <code class="code">@</code></strong>
       (plausible, low; <code class="code">grove-daemon/src/logs.rs</code>),
       <code class="code">telemetry::redact_url</code> at the last, so a raw <code class="code">@</code>
