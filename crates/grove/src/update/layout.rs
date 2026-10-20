@@ -303,7 +303,7 @@ impl Layout {
 
     /// Put back the tree a crash between [`install_bundle`](Self::install_bundle)'s two
     /// renames left in `.<v>.old`; a no-op while `versions/<v>` exists. `up` and
-    /// `--rollback` run it for `current` under the lock before anything reads it, and
+    /// `--rollback` run it for `current` and `previous` under the lock before anything reads them, and
     /// `install_bundle` for its own `<v>` — `current_version` is a bare readlink, so a
     /// dangling `current` otherwise reads as "already on <v>" to every later `up`.
     pub(super) fn restore_aside(&self, v: &str) {
