@@ -247,16 +247,14 @@ impl Layout {
     /// place — so reinstalling the version `current` points at never leaves it naming a
     /// half-tree. `rename(2)` cannot replace a non-empty dir, so a prior tree is moved
     /// aside first: between those two renames `versions/<v>` is briefly absent (a crash
-    /// there leaves the old tree in `.<v>.old`, restored by the next install of `<v>`
-    /// before anything else touches it).
+    /// there leaves the old tree in `.<v>.old`, for [`restore_aside`](Self::restore_aside)
+    /// to put back).
     pub fn install_bundle(&self, v: &str, tar_gz: &[u8]) -> Result<(), CliError> {
         let dest = self.version_path(v);
         let stage = self.versions_dir().join(format!(".{v}.tmp"));
         let old = self.versions_dir().join(format!(".{v}.old"));
         let _ = fs::remove_dir_all(&stage);
-        if !dest.exists() {
-            let _ = fs::rename(&old, &dest);
-        }
+        self.restore_aside(v);
         let _ = fs::remove_dir_all(&old);
         fs::create_dir_all(&stage)
             .map_err(|e| CliError::Update(format!("create {}: {e}", stage.display())))?;
@@ -301,6 +299,20 @@ impl Layout {
         fsync_dir(&self.versions_dir());
         let _ = fs::remove_dir_all(&old);
         Ok(())
+    }
+
+    /// Put back the tree a crash between [`install_bundle`](Self::install_bundle)'s two
+    /// renames left in `.<v>.old`; a no-op while `versions/<v>` exists. `up` and
+    /// `--rollback` run it for `current` under the lock before anything reads it, and
+    /// `install_bundle` for its own `<v>` — `current_version` is a bare readlink, so a
+    /// dangling `current` otherwise reads as "already on <v>" to every later `up`.
+    pub(super) fn restore_aside(&self, v: &str) {
+        let dest = self.version_path(v);
+        if !dest.exists()
+            && fs::rename(self.versions_dir().join(format!(".{v}.old")), &dest).is_ok()
+        {
+            fsync_dir(&self.versions_dir());
+        }
     }
 
     /// Exclusive advisory lock serializing `grove up`/`--rollback` on this
