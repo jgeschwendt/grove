@@ -194,7 +194,7 @@
     <h2 class="h2">Open sweep findings</h2>
     <p class="docs-note">The s-20261012T0155Z gigasweep confirmed 21 defects by probe and the
       s-20261019T0455Z sweep three more, all fixed on trunk; the s-20261020T0445Z sweep of the 48 commits
-      since confirmed eight, five of them fixed in its own landing, and its review added one. Open, highest first:</p>
+      since confirmed eight, six of them fixed in its own landing, and its review added one. Open, highest first:</p>
   </header>
   <ol class="steps">
     <li><strong>A link or copy error that predates a trunk change wedges it half-carried</strong>
@@ -215,11 +215,6 @@
       the daemon) can both prune and re-add the new trunk and both carry. The loser fails spuriously, or a
       prune drops the other's half-written registration. Fix: take the claim in
       <code class="code">reconcile_one</code> before <code class="code">converge_trunk</code>.</li>
-    <li><strong>Reinstalling the current version can strand <code class="code">current</code></strong>
-      (confirmed, low; <code class="code">update/layout.rs</code>). <code class="code">versions/&lt;v&gt;</code>
-      is renamed aside to <code class="code">.&lt;v&gt;.old</code> before the staged tree goes in. A crash
-      between the two renames leaves <code class="code">current/bin/grove</code> dangling, and nothing restores
-      the aside tree. Fix: <code class="code">up</code> and <code class="code">rollback</code> heal it under the lock.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,

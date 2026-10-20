@@ -247,6 +247,7 @@ impl Updater {
     // ※ self-update-flip
     pub fn up(&self, version: Option<&str>) -> Result<(), CliError> {
         let _lock = self.layout.lock()?; // serialize concurrent `grove up`
+        self.restore_current();
         // Before anything else, and inside the lock: an update that died between its
         // flip and its gate left `current` on an unproven version, and going forward
         // from there would stack a second unproven flip on top of it.
@@ -444,6 +445,7 @@ impl Updater {
     /// rolling back twice would land on the unproven version it exists to escape.
     pub fn rollback(&self) -> Result<(), CliError> {
         let _lock = self.layout.lock()?; // serialize against a concurrent `grove up`
+        self.restore_current();
         let restored = self.layout.rollback()?; // marks the flip pending
         // The flip already happened. A running server that boots unhealthy on the
         // restored version — or whose restart errors outright — must be a non-zero
@@ -461,6 +463,12 @@ impl Updater {
                 println!("grove rolled back to {restored}");
                 Ok(())
             }
+        }
+    }
+
+    fn restore_current(&self) {
+        if let Some(v) = self.layout.current_version() {
+            self.layout.restore_aside(&v);
         }
     }
 
@@ -1068,6 +1076,32 @@ mod tests {
         next.up(Some("0.3.1")).unwrap();
         assert_eq!(*probe.calls.borrow(), [("0.3.1".to_string(), false)]);
         assert!(layout.pending_version().is_none());
+    }
+
+    /// A crash between `install_bundle`'s two renames leaves a version's only tree in
+    /// `.<v>.old` and no pending marker. `up` and `--rollback` both restore it first —
+    /// `up` would otherwise report "already on <v>" over a dangling `current` forever.
+    #[test]
+    fn a_tree_a_mid_swap_crash_left_aside_is_restored() {
+        let home = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (up, _p) = updater(&home, &src, Bounce::Healthy);
+        up.up(Some("0.3.1")).unwrap();
+        up.up(Some("0.4.0")).unwrap();
+        let aside = |v: &str| {
+            let versions = home.path().join("versions");
+            fs::rename(versions.join(v), versions.join(format!(".{v}.old"))).unwrap();
+        };
+
+        aside("0.4.0");
+        up.rollback().unwrap();
+        assert!(home.path().join("previous/bin/grove").is_file());
+        aside("0.3.1");
+        up.up(Some("0.3.1")).unwrap();
+        assert_eq!(
+            fs::read_to_string(home.path().join("current/bin/grove")).unwrap(),
+            "grove 0.3.1"
+        );
     }
 
     /// The hazard v1 shipped: a crash between the flip and the gate strands `current`
