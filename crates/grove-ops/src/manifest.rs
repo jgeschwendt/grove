@@ -333,6 +333,18 @@ pub fn add_root(path: &Path, slug: &str, url: &str) -> Result<()> {
             .context("`roots` is not a table")?;
         roots.set_implicit(true); // emit only [roots."slug"], not a bare [roots]
 
+        // Two slugs differing only in case name one directory on a case-insensitive
+        // filesystem (APFS's default), so the second would realize into the first's root.
+        if let Some((taken, _)) = roots
+            .iter()
+            .find(|(k, _)| *k != slug && k.eq_ignore_ascii_case(slug))
+        {
+            bail!(
+                "root `{slug}` differs from declared root `{taken}` only in case, and both \
+                 would name one directory; declare it as `{taken}`"
+            );
+        }
+
         // Update url in place — don't replace the table, or nested worktrees vanish.
         let root = roots
             .entry(slug)
@@ -1238,6 +1250,13 @@ mod tests {
         }
         // a literal dotted name is fine (not traversal)
         assert!(add_root(&path, "a/..foo", "u").is_ok());
+
+        // One directory on a case-insensitive filesystem, so one key: a re-declare in
+        // the same case updates it, another case is refused naming the declared one.
+        add_root(&path, "Foo/bar", "u").unwrap();
+        add_root(&path, "Foo/bar", "u2").unwrap();
+        let err = add_root(&path, "foo/bar", "u").unwrap_err().to_string();
+        assert!(err.contains("`Foo/bar`"), "{err}");
     }
 
     #[test]
