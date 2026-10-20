@@ -193,9 +193,6 @@
       s-20261019T0455Z sweep three more, all fixed on trunk. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong><code class="code">RootView.url</code> and <code class="code">error</code> are served
-      unredacted</strong> (plausible). The Host guard closes the remote read path; local readers still
-      see clone URLs, including any embedded credentials.</li>
     <li><strong><code class="code">grove off</code> checks for any grove daemon, not this
       home's</strong> (plausible, medium). It can shut down another home's daemon on the same
       bind.</li>

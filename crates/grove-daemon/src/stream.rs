@@ -287,6 +287,9 @@ struct Reads {
 
 async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
     let slug = root.slug;
+    // A clone URL can carry a token, and this row is served to whatever reaches the
+    // port; the manifest keeps the URL whole, the wire never does.
+    let url = crate::logs::redact(&root.url);
     let engine = match state.engines.get() {
         Some(engines) => engines.engine(&slug).await,
         None => None,
@@ -317,7 +320,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
     match reads {
         Some(Ok(reads)) => RootView {
             slug,
-            url: root.url,
+            url,
             status: state_of.status,
             error: state_of.error,
             pool: reads.pool,
@@ -345,7 +348,7 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
             );
             RootView {
                 slug,
-                url: root.url,
+                url,
                 status: RootStatus::Unavailable,
                 // Not the engine's degrade text: the row no longer reports the
                 // status that text explains, and a reason printed beside
