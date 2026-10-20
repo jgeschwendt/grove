@@ -975,7 +975,9 @@ async fn a_stopped_engines_queued_reconcile_neither_clones_nor_takes_a_permit() 
 }
 
 /// A remove queued on the lane ahead of a reconcile cannot be undone by it: the
-/// reconcile re-reads the declaration under the lane and finds none.
+/// reconcile re-reads the declaration under the lane and finds none. "Ahead" is lane
+/// priority: the remove queues second and runs first because foreground drains
+/// before background.
 #[tokio::test]
 async fn a_remove_ahead_of_a_queued_reconcile_is_not_resurrected() {
     let tmp = TempDir::new().unwrap();
