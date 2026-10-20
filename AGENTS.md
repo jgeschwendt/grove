@@ -23,6 +23,12 @@ invariants:
     anchor: ※ single-realizer
 ```
 
+## Working here
+
+- Run `mise run setup` first in every fresh clone or worktree: the pre-commit and pre-push hooks do not exist until its `hk install --mise` writes them.
+- An edit anywhere inside an anchored claim's region stales that claim, not only near the anchor line: re-read it, satisfy yourself it still holds, then `stele build` and commit `.stele/graph.lock` with the change. Neither the hook nor CI ever runs `build`, which would launder staleness into a pass.
+- Name an `enforced_by:` target only where a distinct test target guards the claim, since naming one turns digest staling off. A claim proved by the inline `mod tests` beside its own anchor names nothing: the digest is the only thing watching it.
+
 <!-- @stele -->
 
 ## Hazards (5 active)

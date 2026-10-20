@@ -448,7 +448,7 @@ impl Updater {
         // The flip already happened. A running server that boots unhealthy on the
         // restored version — or whose restart errors outright — must be a non-zero
         // exit: reporting success over a dead server is what `up` guards against.
-        // Both map to Unhealthy (exit 6, the README contract), not the raw bounce
+        // Both map to Unhealthy (exit 6, the `error::exit_code` contract), not the raw bounce
         // error's code. `NotRunning`/`Healthy` (incl. offline rollback) stay success.
         match self.gate(&restored, false) {
             Ok(Bounce::Unhealthy) => Err(CliError::Unhealthy(format!(
