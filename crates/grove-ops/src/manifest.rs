@@ -335,9 +335,10 @@ pub fn add_root(path: &Path, slug: &str, url: &str) -> Result<()> {
 
         // Two slugs differing only in case name one directory on a case-insensitive
         // filesystem (APFS's default), so the second would realize into the first's root.
-        if let Some((taken, _)) = roots
-            .iter()
-            .find(|(k, _)| *k != slug && k.eq_ignore_ascii_case(slug))
+        // A slug already declared is updated as it stands, whatever else a hand edit
+        // put beside it.
+        if !roots.contains_key(slug)
+            && let Some((taken, _)) = roots.iter().find(|(k, _)| k.eq_ignore_ascii_case(slug))
         {
             bail!(
                 "root `{slug}` differs from declared root `{taken}` only in case, and both \
@@ -761,7 +762,9 @@ fn write_doc(path: &Path, doc: &mut DocumentMut) -> Result<()> {
 
 /// Swap `text` in as the manifest, atomically and durably: the temp file is synced
 /// before the rename, so a crash cannot leave the new name over unwritten blocks, and
-/// the directory after it, so the rename itself survives one.
+/// the directory after it, so the rename itself survives one — best-effort, as
+/// `update`'s `fsync_dir` is: some filesystems refuse a directory sync, and the
+/// rename has already landed by then.
 fn replace(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("toml.tmp");
@@ -770,10 +773,8 @@ fn replace(path: &Path, text: &str) -> Result<()> {
         .and_then(|()| file.sync_all())
         .context("write manifest")?;
     std::fs::rename(&tmp, path).context("atomic rename manifest")?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::File::open(dir)
-        .and_then(|d| d.sync_all())
-        .context("sync manifest dir")
+    let _ = std::fs::File::open(path.with_file_name("")).and_then(|d| d.sync_all());
+    Ok(())
 }
 
 /// The canonical on-disk text for a (sorted) document: `toml_edit`'s render with
@@ -1257,6 +1258,9 @@ mod tests {
         add_root(&path, "Foo/bar", "u2").unwrap();
         let err = add_root(&path, "foo/bar", "u").unwrap_err().to_string();
         assert!(err.contains("`Foo/bar`"), "{err}");
+        let both = std::fs::read_to_string(&path).unwrap() + "[roots.\"foo/bar\"]\nurl = \"u\"\n";
+        std::fs::write(&path, both).unwrap();
+        add_root(&path, "foo/bar", "u3").unwrap();
     }
 
     #[test]
