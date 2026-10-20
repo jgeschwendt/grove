@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>grove — engine</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M8 3v10M8 7l-3-2M8 9l3-2' stroke='white' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body data-page="engine">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.810,87.810,0,0,1,16,10.54V195.830a87.810,87.810,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.090,103.090,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+<symbol id="ph-tree" viewBox="0 0 256 256" fill="currentColor"><path d="M198.1,62.6a76,76,0,0,0-140.2,0A72.27,72.27,0,0,0,16,127.8C15.89,166.62,47.36,199,86.14,200A71.68,71.68,0,0,0,120,192.49V232a8,8,0,0,0,16,0V192.49A71.45,71.45,0,0,0,168,200l1.86,0c38.78-1,70.25-33.36,70.14-72.18A72.26,72.26,0,0,0,198.1,62.6ZM169.45,184a55.61,55.61,0,0,1-32.52-9.4q-.47-.3-.93-.57V132.94l43.58-21.78a8,8,0,1,0-7.16-14.32L136,115.06V88a8,8,0,0,0-16,0v51.06L83.58,120.84a8,8,0,1,0-7.16,14.32L120,156.94V174q-.47.27-.93.57A55.7,55.7,0,0,1,86.55,184a56,56,0,0,1-22-106.86,15.9,15.9,0,0,0,8.05-8.33,60,60,0,0,1,110.7,0,15.9,15.9,0,0,0,8.05,8.33,56,56,0,0,1-22,106.86Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-tree" /></svg>
+    grove <small>· engine</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">The engine</p>
+  <p class="lead docs-lead">One driver task per declared root (<code class="code">crates/grove-daemon/src/engine/</code>), owning that root's
+status cache, its single background slot, and its warm-pool hint. <code class="code">engine::RootSet</code> owns
+the map from declared slug to running engine and reconciles it on every <code class="code">roots_changed</code>.</p>
+  <p class="docs-note">The engine is the only resident part of grove that knows something disk cannot say. Status
+is otherwise a cache — never persisted, re-derived from the filesystem on restart. What a
+<em>running</em> engine adds is the transient: <code class="code">cloning</code> and <code class="code">degraded</code> are facts about work in
+flight or a failure just recorded, and only the process driving the root has them.</p>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#status">status</a>
+    <a class="pill" href="#transition-table">transition table</a>
+    <a class="pill" href="#one-background-slot">one background slot</a>
+    <a class="pill" href="#no-timers">no timers</a>
+    <a class="pill" href="#terminal-vs-transient">terminal vs transient</a>
+    <a class="pill" href="#clone-bound">clone bound</a>
+    <a class="pill" href="#sync">sync</a>
+    <a class="pill" href="#promote">promote</a>
+    <a class="pill" href="#nothing-blocking-runs-in-the-driver">nothing blocking runs in the driver</a>
+    <a class="pill" href="#engine-set">engine set</a>
+    <a class="pill" href="#tests">tests</a>
+    <a class="pill" href="index.html">design</a>
+    <a class="pill" href="api.html">api</a>
+    <a class="pill" href="architecture.html">architecture</a>
+    <a class="pill" href="deployment.html">deployment</a>
+    <a class="pill" href="updates.html">updates</a>
+    <a class="pill" href="worktrees.html">worktrees</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="status">
+<header>
+<h2 class="h2">Status</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">grove_api::RootStatus</code>, pinned in <code class="code">contracts/wire-vocab.json</code> as <code class="code">root_status</code>:</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>status</th><th>means</th></tr></thead>
+<tbody>
+<tr><td><code class="code">ready</code></td><td>the bare clone <strong>and</strong> the trunk checkout are both on disk, no failure recorded</td></tr>
+<tr><td><code class="code">cloning</code></td><td>a reconcile has been dispatched for a root not yet on disk</td></tr>
+<tr><td><code class="code">degraded</code></td><td>a terminal failure stopped the engine; it waits for an operator or a change</td></tr>
+<tr><td><code class="code">missing</code></td><td>declared, nothing on disk yet</td></tr>
+<tr><td><code class="code">unknown</code></td><td>no engine has run for this root yet — the cache has nothing to say</td></tr>
+<tr><td><code class="code">unavailable</code></td><td><strong>a reader's verdict</strong>, never a state an engine enters</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note"><code class="code">unavailable</code> is what a <em>reader</em> says when the engine or the lane did not answer inside
+the reader's budget. Three readers produce it, each for the same reason and none of them
+the engine:</p>
+<ul class="claims stack" role="list">
+<li><code class="code">stream::view</code> — a root whose one lane job of git reads missed <code class="code">SNAPSHOT_BUDGET</code> (3 s),
+or whose read the lane shed. The row still stands, because a UI must see the root, but
+it reports <code class="code">unavailable</code> rather than the engine's status: "ready" beside an empty
+worktree list is a lie a client cannot detect, and this root's reads are exactly what
+did not happen.</li>
+<li><code class="code">engine::set</code> — a status read that did not answer inside <code class="code">STATUS_BUDGET</code> (5 s). A driver
+only ever awaits its mailbox, so this should never fire; it is the belt to that braces,
+and it is what keeps a whole-home doctor from hanging on one bad engine.</li>
+<li>the CLI — <code class="code">grove tree list</code> reads an <code class="code">unavailable</code> row as <em>no answer</em> and falls through
+to the disk (<code class="code">commands::tree_list</code>).</li>
+</ul>
+<p class="docs-note">The transition table itself can only ever <em>preserve</em> <code class="code">unavailable</code>; it never introduces
+it.</p>
+</div>
+</section>
+
+<section class="docs-section" id="transition-table">
+<header>
+<h2 class="h2">The transition table</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Every status change goes through one function, <code class="code">engine::status::next_status(current, transition)</code>. The question it answers is always the same: <em>preserve the transient the
+driver owns, or trust disk?</em> Getting it wrong in either direction is a real defect — trust
+disk too eagerly and a root mid-clone reads <code class="code">missing</code>, so the next event dispatches a
+second clone; preserve too eagerly and a finished clone stays <code class="code">cloning</code> forever.</p>
+<p class="docs-note"><code class="code">disk_status(home, slug)</code> is the engine's one filesystem read: <code class="code">Ready</code> when the root's
+bare (<code class="code">roots::bare_dir</code>, <code class="code">roots/&lt;slug&gt;/bare</code>) <strong>and</strong> the trunk checkout
+(<code class="code">roots::trunk_dir</code>, so whichever directory under <code class="code">code/&lt;slug&gt;</code> this root's trunk branch
+names) are both directories, else <code class="code">Missing</code>. It reads one directory from each of the root's
+two trees, which is the whole of what "realized" means — and both, not either: a bare with
+no trunk checkout is exactly the half-realized state reconcile exists to finish.</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>current ↓ / transition →</th><th><code class="code">ReconcileDispatched</code></th><th><code class="code">Derive(Ready)</code></th><th><code class="code">Derive(Missing)</code></th><th><code class="code">ReconcileError(Ready)</code></th><th><code class="code">ReconcileError(Missing)</code></th></tr></thead>
+<tbody>
+<tr><td><code class="code">unknown</code></td><td><code class="code">cloning</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td></tr>
+<tr><td><code class="code">missing</code></td><td><code class="code">cloning</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td></tr>
+<tr><td><code class="code">cloning</code></td><td><code class="code">cloning</code></td><td><code class="code">ready</code></td><td><strong><code class="code">cloning</code></strong></td><td><code class="code">ready</code></td><td><strong><code class="code">missing</code></strong></td></tr>
+<tr><td><code class="code">ready</code></td><td><code class="code">ready</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td></tr>
+<tr><td><code class="code">degraded</code></td><td><code class="code">cloning</code></td><td><code class="code">ready</code></td><td><strong><code class="code">degraded</code></strong></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td></tr>
+<tr><td><code class="code">unavailable</code></td><td><code class="code">unavailable</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td><td><code class="code">ready</code></td><td><code class="code">missing</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">Read as three clauses:</p>
+<ul class="claims stack" role="list">
+<li id="transition-table-reconciledispatched"><strong><code class="code">ReconcileDispatched</code></strong> — a root not yet on disk (<code class="code">missing</code>, <code class="code">unknown</code>, or a
+<code class="code">degraded</code> root retrying its clone) surfaces <code class="code">cloning</code>; anything else is unchanged.
+Disk is deliberately not consulted: the dispatch precedes any read, and the point is to
+surface the <em>intent</em> to clone.</li>
+<li id="transition-table-derive"><strong><code class="code">Derive</code></strong> — disk <code class="code">ready</code> always wins upward, because a completed clone is
+authoritative. Otherwise a driver-owned transient (<code class="code">cloning</code>, <code class="code">degraded</code>) is preserved
+rather than masked as <code class="code">missing</code>, and everything else takes the honest disk verdict.</li>
+<li id="transition-table-reconcileerror"><strong><code class="code">ReconcileError</code></strong> — the attempt is over, so trust disk <em>plainly</em>. <code class="code">cloning</code> is <strong>not</strong>
+preserved here, unlike under <code class="code">Derive</code>; that asymmetry is the whole reason there are two
+events instead of one. Preserving it would strand a transient nothing is going to clear.</li>
+</ul>
+<p class="docs-note">Properties the tests pin (<code class="code">engine/status.rs</code>): the table is total over the whole cross
+product and never leaves the published vocabulary; it never returns <code class="code">unknown</code> (an entry
+state only); it never <em>invents</em> <code class="code">unavailable</code>; and re-deriving against an unchanged disk
+is a fixed point, which is what makes a burst of manifest events cost nothing.</p>
+</div>
+</section>
+
+<section class="docs-section" id="one-background-slot">
+<header>
+<h2 class="h2">One background slot</h2>
+</header>
+<div class="stack">
+<p class="docs-note">At most one of reconcile / sync / fill is in flight per root, chosen in that priority
+order. Every condition is level-triggered state, re-evaluated on each completion
+(<code class="code">Driver::drive</code>):</p>
+<ol class="steps">
+<li>a background op is in flight ⇒ do nothing; the next op is picked when this one lands;</li>
+<li><code class="code">reconcile_pending</code> ⇒ mark <code class="code">ReconcileDispatched</code> and dispatch <code class="code">reconcile</code>;</li>
+<li><code class="code">sync_pending</code> <strong>and</strong> status is <code class="code">ready</code> ⇒ dispatch <code class="code">sync</code>;</li>
+<li>status is <code class="code">ready</code> and the pool hint is off the declared target ⇒ dispatch <code class="code">fill</code>,
+which adds a slot below target and reclaims the highest one above it. Convergence
+runs both ways: an add-only pool left a target lowered to zero holding its checkouts
+forever, with <code class="code">doctor</code> reporting <code class="code">n/0</code> and no command that could fix it. A converge
+that <em>fails</em> latches (<code class="code">fill_blocked</code>) until the next real event, because the level
+condition it failed on is still true — without the latch the root re-dispatches into
+the same failure as fast as git can run.</li>
+</ol>
+<p class="docs-note">The slot is taken <em>synchronously in <code class="code">dispatch</code></em>, before the task that will do the work
+exists. That is what makes the coalescing airtight: a second trigger arriving one line
+later already sees the slot occupied. It is not a lock, not a de-dupe cache, and a double
+clone is unrepresentable rather than merely unlikely.</p>
+<p class="docs-note"><code class="code">reconcile_pending</code> is set at start and on every <code class="code">roots_changed</code>, and a reconcile is
+re-dispatched on every manifest change even for a realized root — the op is idempotent and
+worktrees may have changed out of band. Syncing an unrealized root is meaningless, so
+<code class="code">sync_pending</code> simply waits for a later drive to find the root ready.</p>
+<p class="docs-note">A reconcile folds the pool read — the declared <code class="code">pool.size</code> <strong>and</strong> the observed slot
+count — into the same lane job as <code class="code">roots::reconcile_one</code>, so the manifest read never
+queues separately behind the clone it follows. The <code class="code">Applied</code> outcome and the pool read are
+applied separately, so a read that succeeded still lands when the reconcile beside it
+errored. The observed count is taken as truth rather than adjusted by a delta: a reconcile
+is where a declared worktree <em>claims</em> a slot (<code class="code">worktrees::create</code>/<code class="code">reconcile</code> promote one
+when the pool has any), so a hint that only ever counted fills would sit stale-high and
+starve the refill that should follow.</p>
+<p class="docs-note"><code class="code">task_started</code> is published from <em>inside</em> the lane job, once the work actually begins —
+so neither a reconcile queued behind its own root's lane nor one deferred for want of a
+clone permit is reported as running. The signal that a queued reconcile exists is the root's
+own <code class="code">cloning</code> status. <code class="code">task_finished</code> is published by the driver when the outcome lands.
+Both name one of the three background kinds (<code class="code">reconcile | sync | fill</code>) and a coarse
+outcome (<code class="code">ok | failed</code>); foreground work — remove, doctor — answers on its own request and
+produces no frame.</p>
+</div>
+</section>
+
+<section class="docs-section" id="no-timers">
+<header>
+<h2 class="h2">No timers</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Convergence is push-based. A failure degrades one root, logs, and waits — the next event
+is the retry. There is no retry timer, no poll, and no periodic sweep in the engine. The
+only deadlines in the daemon are the lane's idle reap and the watcher's debounce, and both
+are budgets on an event rather than a cadence.</p>
+<p class="docs-note">One failure's next event is not a manifest change. A reconcile that backs off another
+realizer's clone in flight (an offline CLI's, holding the <code class="code">cloning</code> marker's lock) degrades
+the root, and the end of that clone touches nothing the watcher sees. So the driver waits on
+the marker itself (<code class="code">roots::await_clone</code>, on a detached thread, since the wait spans the
+whole clone) and re-runs <code class="code">roots_changed</code> once the lock is released or the marker is gone. A
+marker nobody holds is no clone to wait on, so a refusal that recurs cannot spin — and a CLI
+that crashes before the wait opens the marker leaves it free, so that root waits for the next
+event, as any crashed clone does. The lock spans the clone, not the CLI's whole pass: the
+retry can overlap the CLI's own worktree and env passes on that root.</p>
+<p class="docs-note">The operator-facing consequence is that recovery signals matter: <code class="code">grove doctor</code> prints
+non-<code class="code">ready</code> engine statuses and under-filled pools precisely because a background refill
+that failed retries on the next event, not on a clock.</p>
+</div>
+</section>
+
+<section class="docs-section" id="terminal-vs-transient">
+<header>
+<h2 class="h2">Terminal vs transient</h2>
+</header>
+<div class="stack">
+<p class="docs-note">An op failure carries one of seven stable codes from <code class="code">grove_ops::Error::code</code>
+(<code class="code">stele:landmark wire-error-codes</code>): <code class="code">not_declared</code>, <code class="code">not_ready</code>, <code class="code">invalid_input</code>,
+<code class="code">conflict</code>, <code class="code">network</code>, <code class="code">git</code>, <code class="code">io</code>. <code class="code">grove_api::policy::classify_error</code> partitions them:</p>
+<ul class="claims stack" role="list">
+<li id="terminal-vs-transient-terminal"><strong>Terminal</strong> — <code class="code">conflict</code>, <code class="code">invalid_input</code>. Retrying cannot help: a would-clobber
+conflict or a malformed declaration is stuck until a human edits the manifest, and that
+edit is itself the event that re-drives the engine. So the root goes <code class="code">degraded</code>, where
+doctor can see it, instead of re-deriving to <code class="code">cloning</code> and retrying forever.</li>
+<li id="terminal-vs-transient-transient"><strong>Transient</strong> — <code class="code">not_declared</code>, <code class="code">not_ready</code>, <code class="code">network</code>, <code class="code">git</code>, <code class="code">io</code>. The attempt is
+over, so the engine takes <code class="code">ReconcileError(disk)</code> — trusting disk plainly rather than
+stranding a stale <code class="code">cloning</code> — and waits for the next event.</li>
+</ul>
+<p class="docs-note">The classifier is a total match on the <code class="code">Error</code> enum, so a new category stops the build
+until it is classified. <code class="code">policy::terminal_error_codes()</code> reads its wire strings off real
+<code class="code">Error</code> values, so a rename in <code class="code">Error::code</code> travels rather than leaving a stale literal.</p>
+<p class="docs-note">Note the deliberate asymmetry: <code class="code">invalid_input</code>/<code class="code">conflict</code> are the engine's terminal pair,
+while the CLI's exit-code map groups <code class="code">invalid_input</code> with <code class="code">network</code>/<code class="code">git</code>/<code class="code">io</code> and pairs
+<code class="code">conflict</code> with <code class="code">not_ready</code>. Two unrelated partitions over one taxonomy; both are contract.</p>
+<p class="docs-note">A genuine clone <em>failure</em> does not arrive as an <code class="code">Err</code> at all — it arrives as
+<code class="code">Applied { status: Failed }</code>, which <code class="code">policy::classify_reconcile</code> maps to <code class="code">degraded</code>
+(<code class="code">cloned</code>/<code class="code">present</code> map to <code class="code">ready</code>). That partition is total by construction: the match has
+no catch-all, so a new <code class="code">ReconcileStatus</code> stops the build.</p>
+<p class="docs-note">A background task that returns nothing at all (<code class="code">BgOutcome::Crashed</code>) is a third case: a
+reconcile crash degrades <strong>that root only</strong>, a sync crash leaves a <code class="code">failed</code> sync note, a
+fill crash is logged and forgotten.</p>
+</div>
+</section>
+
+<section class="docs-section" id="clone-bound">
+<header>
+<h2 class="h2">The clone bound</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">Deps::clones</code> is a global <code class="code">ClonePermits</code> with <code class="code">DEFAULT_CLONE_LIMIT = 4</code> permits
+(<code class="code">GROVE_CLONE_LIMIT</code>), bounding how many roots may hold a clone at once. Without it a
+daemon booting a home with N declared roots fans out N concurrent network fetches.</p>
+<p class="docs-note">Only a reconcile of a root disk says is unrealized takes a permit, read under the root's
+lane: a realized root's reconcile cannot clone, and since every manifest event re-arms
+reconcile on every root ahead of sync and fill, a ready root that needed a permit would
+starve its syncs and fills behind other roots' clones.
+<code class="code">a_ready_roots_reconcile_and_sync_run_while_other_clones_hold_every_permit</code> pins that.</p>
+<p class="docs-note">The permit is <strong>tried at the head of the root's own lane, and never waited for there</strong>.
+Two failure modes have to be avoided at once, and only this ordering avoids both.</p>
+<p class="docs-note">Acquiring dispatch-side and <em>then</em> awaiting lane admission inverts the bound: a reconcile
+doing nothing at all — merely waiting out a foreground op on its own root — would hold one
+of the four permits against roots whose lanes are completely free. A whole-home doctor
+takes every root's foreground lane at once, so four such reconciles would stall home-wide
+convergence for the length of the pass.
+<code class="code">a_reconcile_parked_on_a_busy_lane_holds_no_clone_permit</code> pins that.</p>
+<p class="docs-note"><em>Blocking</em> for a permit inside the lane job is worse, because the job holds the lane while
+it waits. Once the permits are all held by clones that have stalled — a peer that accepts
+the connection and then goes silent, a dropped VPN, a slept laptop's half-open socket —
+every other root's reconcile parks on the bound holding its own lane, and those roots'
+snapshot reads shed as <code class="code">unavailable</code>. The whole home then reports unavailable and converges
+nothing while <code class="code">/api/health</code> still answers <code class="code">ready</code>: damage meant to be local to a busy root
+becomes the daemon's.</p>
+<p class="docs-note">So the lane job only <em>tries</em> for a permit and, failing, returns immediately — the lane is
+released, reads answer again, and the reconcile is re-armed. The driver, having freed its
+slot, parks its mailbox in <code class="code">ClonePermits</code>' one shared registry, holding nothing. No timer,
+and no permit is ever held by something that is not cloning.
+<code class="code">a_reconcile_without_a_clone_permit_frees_its_lane_and_resumes_when_one_lands</code> pins it.</p>
+<p class="docs-note">A freed permit <strong>pokes</strong> the driver at the front of the registry, and the driver
+re-dispatches into the same try carrying the poke. The poke is a wake-up, not a claim, so a
+re-dispatched reconcile still waiting out its own lane holds no permit. Each poke ends
+exactly once — consumed by that try, or declined by being dropped (the driver is gone,
+busy, or its root no longer needs a clone) — and a decline pokes the next parked driver.
+Pokes in flight never fall below free permits while a driver is parked, so a release wakes
+exactly one driver rather than every waiter. In general a release costs one poke and each
+steal (below) one more. <code class="code">slow_a_cold_boot_contending_for_one_permit_pokes_once_per_release</code>
+pins the bound for its own scenario: forty missing roots against one permit converge with at
+most 2×ROOTS pokes in total. <code class="code">a_poke_a_driver_cannot_use_is_declined_to_the_next_parked_root</code>
+pins the decline path: a poke dropped unused, in the lane job or after the re-drive, wakes
+the next parked root.</p>
+<p class="docs-note">The registry is not a fair queue. A fresh dispatch, one not poked, may take a free permit
+ahead of the poked driver it was freed for; that driver's try then fails and it parks again
+at the back — one re-park per steal. The driver parks when the deferral lands rather than
+inside the lane job, so a poke can never reach it while its slot still reads busy and be
+declined as unwanted, and a permit freed between the failed try and the park is poked for
+by the park itself. A driver already parked keeps its one entry: a re-dispatch that defers
+again while it is still queued adds none.</p>
+<p class="docs-note">Wake-up order can also lag the permit. A poked reconcile queued behind foreground work on
+its own lane carries its poke until the lane admits it, so while that op runs the next
+parked root is not woken — even though the permit is free for any fresh try meanwhile.</p>
+<p class="docs-note">The permit travels back to the driver with the result and is dropped <em>after</em>
+<code class="code">task_finished</code> is published, so a cloning reconcile's started/finished pair brackets a
+held permit exactly —
+which is what makes the bound observable from the event stream rather than merely true.</p>
+<p class="docs-note">The root's status stays honest while it waits: <code class="code">cloning</code> is set when the reconcile is
+dispatched, not when it reaches a permit.</p>
+</div>
+</section>
+
+<section class="docs-section" id="sync">
+<header>
+<h2 class="h2">Sync</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">Engine::sync</code> is <strong>accept-only</strong>: it returns as soon as the request is recorded, never
+when the fetch finishes, and a re-request while one is pending or in flight coalesces into
+it. <code class="code">root_sync_changed</code> is broadcast on <em>accept</em>, so every attached view shows the in-flight
+state immediately — not only the client that asked — and again on completion.</p>
+<p class="docs-note">The accept records the request; the driver decides when it runs, and only from <code class="code">ready</code>
+(above). So the second broadcast follows a root the driver can dispatch on — from <code class="code">cloning</code>
+or <code class="code">missing</code>, on the drive after its reconcile lands — while a <code class="code">degraded</code> root, which the
+engine leaves only on a dispatched reconcile, holds <code class="code">syncing: true</code> until one arrives. That
+is the level-triggered latch working as written, not a lost request, but it is why
+<code class="code">syncing</code> means "holds a sync request" rather than "is fetching".</p>
+<p class="docs-note"><code class="code">POST /api/roots/sync {slug}</code> is the one caller (<code class="code">grove sync &lt;slug&gt;</code> behind it), and it
+carries that semantics onto the wire unchanged: <code class="code">{"sync": "accepted"}</code>, never a report.
+The route takes no lane of its own — the engine owns the dispatch, so a burst of requests
+coalesces into one fetch through the background slot rather than queueing a lane job each —
+and it answers 503 <code class="code">unavailable</code> for a declared root no engine is driving, because nothing
+would record the request. See <a class="link" href="api.html#sync"><code class="code">api.html</code> § Sync</a> for the full contract.</p>
+<p class="docs-note"><code class="code">roots::sync</code> fetches the trunk branch (bounded, single-refspec), fast-forwards the trunk
+checkout onto the tracking ref, and prunes any warm-pool slot stranded at a pre-sync tip. It never
+forces. A trunk carrying local commits or dirty tracked files is <em>reported</em>:
+<code class="code">SyncNote::of</code> maps <code class="code">git::FastForward</code> to the note the snapshot publishes beside <code class="code">syncing</code>
+— <code class="code">diverged</code>, <code class="code">dirty</code>, or nothing for <code class="code">updated</code>/<code class="code">already_current</code>. <code class="code">SyncNote::Failed</code> is
+the synthetic member: a sync that errored, or whose task never returned, leaves it. The
+next clean sync clears the note.</p>
+<p class="docs-note">Pruned slots leave the pool hint stale-high, which would starve the refill guard, so the
+driver decrements it by what the report says was pruned.</p>
+</div>
+</section>
+
+<section class="docs-section" id="promote">
+<header>
+<h2 class="h2">Promote</h2>
+</header>
+<div class="stack">
+<p class="docs-note">There is no promote <em>route</em> and no engine-level promote call. Claiming a warm slot is a
+step inside realizing a declared worktree, so it lives in the realizer that every path
+reaches: <code class="code">worktrees::create</code> (the offline <code class="code">grove tree add</code>) and <code class="code">worktrees::reconcile</code>
+(what the engine runs after a declare-and-nudge, and after a hand-edited manifest). A
+promote wired to one caller is a pool that is filled and never redeemed — paid for on
+every clone, reported as <code class="code">pool n/n</code> readiness, and claimed by nothing.</p>
+<p class="docs-note">A <code class="code">Promotion::Cold</code> is not a failure — it is the signal to cold-create, distinguishing an
+empty pool (<code class="code">Empty</code>) from a name collision (<code class="code">Conflict</code>) — so the warm and cold paths are
+interchangeable and the caller does not choose between them. The engine learns what the
+claim cost from the next reconcile's pool read, and refills toward the target from there.</p>
+</div>
+</section>
+
+<section class="docs-section" id="nothing-blocking-runs-in-the-driver">
+<header>
+<h2 class="h2">Nothing blocking runs in the driver</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Every <code class="code">grove-ops</code> call leaves the driver as a task, runs on the root's lane, and comes back
+as a message. The driver's own loop only ever awaits its mailbox, so <code class="code">status</code> keeps
+answering while a clone drags on for minutes.</p>
+<p class="docs-note"><code class="code">Engine::stop</code> is explicit rather than "drop the last handle": a background task holds a
+sender so it can report its outcome, so an undeclared root would otherwise stay alive for
+the length of its in-flight clone. <code class="code">stop</code> also raises a flag a queued reconcile reads at
+the head of the lane, so one that has not begun never does: it takes no clone permit and
+never reaches <code class="code">realize</code>. grove-ops work already running cannot be cancelled — a clone
+mid-transfer runs to completion and reports to a mailbox nobody reads.</p>
+</div>
+</section>
+
+<section class="docs-section" id="engine-set">
+<header>
+<h2 class="h2">The engine set</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">RootSet</code> is one task owning the slug → engine map, so "start the declared-minus-running,
+stop the running-minus-declared" is an ordinary set difference rather than a concurrency
+problem. That single ownership is also what closes the undeclare → redeclare race: a slug
+stopped in one pass is already out of the map before the next pass reads it, because both
+passes are the same task.</p>
+<p class="docs-note">It cold-boots by reading the declared set itself rather than waiting for the first
+broadcast — the boot-time announcement can be published before the task subscribes, and a
+set that waited for it would sit empty until the next manifest change. It is driven by the
+event bus, never by the watcher directly.</p>
+</div>
+</section>
+
+<section class="docs-section" id="tests">
+<header>
+<h2 class="h2">Tests</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">crates/grove-daemon/tests/engine.rs</code> is the behavioural gate. Named highlights: a
+declared root clones and reports ready; a burst of manifest events collapses into one
+reconcile; a failed reconcile degrades and stops; a degraded root recovers on the next
+event; a stopped engine's queued reconcile neither clones nor takes a permit; a remove
+ahead of a queued reconcile is not resurrected; a terminal fault degrades where a transient
+one re-derives; the sync note is set by a diverged trunk and cleared by a clean sync; sync accepts immediately and announces its
+completion; a sync accepted on a degraded root latches — <code class="code">syncing</code> true, nothing dispatched,
+one broadcast — and rides the drive that follows the recovery; a sync requested over HTTP is
+accepted, announced on the stream and settles on the fetched commit (<code class="code">tests/observe.rs</code>,
+<code class="code">tests/http_contract.rs</code>); the pool fills to target
+and a declared worktree claims a warm slot; the same
+declaration is cold-created when the pool is empty; a lowered pool target reclaims its
+slots; the clone bound limits concurrent cloning reconciles; a cold boot contending for one permit pokes once per release; a reconcile without a permit frees
+its lane and resumes when one lands; a ready root's reconcile and sync run while other clones
+hold every permit; a restarted engine re-derives its status from disk;
+the engine set mirrors the declared roots; an unreadable manifest leaves every engine
+running; a reconcile parked on a busy lane holds no clone permit.</p>
+<p class="docs-note">The transition table's own tests live beside it in <code class="code">engine/status.rs</code>, and the whole-flow
+scenario — declare → realize → claim a warm slot → sync → remove — is
+<code class="code">crates/grove-daemon/tests/scenario.rs</code>.</p>
+</div>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>
