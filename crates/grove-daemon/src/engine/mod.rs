@@ -633,7 +633,8 @@ impl Driver {
                 // Backed off another realizer's clone in flight: nothing this engine
                 // watches fires when it ends, so its marker's lock is the event. A
                 // detached thread, not a lane job or a blocking task — the wait spans
-                // the whole clone, and neither the lane nor runtime shutdown may.
+                // the whole clone and its passes, and neither the lane nor runtime
+                // shutdown may.
                 if applied.error.as_deref() == Some(grove_ops::roots::IN_FLIGHT) {
                     let (home, slug, tx) =
                         (self.deps.home.clone(), self.slug.clone(), self.tx.clone());
