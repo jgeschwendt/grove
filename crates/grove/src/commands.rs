@@ -657,7 +657,10 @@ mod tests {
         ApiClient::at(envelope_server(r#"{"ok":true,"data":{}}"#), BUDGET)
     }
 
-    const BUDGET: Duration = Duration::from_secs(2);
+    /// The probe budget for stubs that must answer. Only a failing test ever spends
+    /// it, so it is sized for a loaded machine: at 2 s a parallel build starved a stub
+    /// past it, the probe read `Busy`, and the listing fell back to disk.
+    const BUDGET: Duration = Duration::from_secs(30);
 
     fn envelope_server(body: &'static str) -> SocketAddr {
         status_server("200 OK", body)
