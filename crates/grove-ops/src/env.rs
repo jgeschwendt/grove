@@ -282,7 +282,8 @@ fn run_root(
 
     // 1. Source pass — ensure each `<trunk>/<p>` exists. A carry is all-or-nothing: a
     // dry run first, so a source it cannot seed holds it before any seed is written, and
-    // a failed row returns before a link is moved off the trunk `HEAD` has not left.
+    // a failed row returns before a link is moved off the trunk `HEAD` has not left — or,
+    // while a change is pending, laid onto the new trunk's still-missing source.
     let sources = |action| -> Vec<_> {
         declared
             .iter()
@@ -294,7 +295,7 @@ fn run_root(
         .map(|_| sources(Action::Diagnose))
         .filter(|dry| failed(dry))
         .unwrap_or_else(|| sources(action));
-    let held = prev_trunk.is_some() && failed(&rows);
+    let held = (prev_trunk.is_some() || pass.pending) && failed(&rows);
     out.extend(rows);
     if held {
         return;
@@ -334,10 +335,30 @@ fn source_outcome<Fd: AsFd>(
 ) -> ShareOutcome {
     let rel = Path::new(&share.path);
     let seed = || -> Result<_> {
-        Ok(prev_fd
+        let seed = prev_fd
             .map(|fd| read_present(fd, rel))
             .transpose()?
-            .flatten())
+            .flatten();
+        // A relative target that never climbs out of the trunk names the old trunk's own
+        // file: carried verbatim it would dangle in the new one.
+        if let Some(Seed::Link(target)) = &seed
+            && target.is_relative()
+            && rel
+                .with_file_name(target)
+                .components()
+                .try_fold(0, |depth: u32, c| match c {
+                    Component::ParentDir => depth.checked_sub(1),
+                    Component::Normal(_) => Some(depth + 1),
+                    _ => Some(depth),
+                })
+                .is_some()
+        {
+            bail!(
+                "symlink source points inside the old trunk; re-create it in {}",
+                pass.trunk_name
+            );
+        }
+        Ok(seed)
     };
     let result = (|| -> Result<ShareStatus> {
         match descend_parent(&trunk_fd, rel, action.mutates())? {
