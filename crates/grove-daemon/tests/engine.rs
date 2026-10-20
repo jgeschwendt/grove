@@ -334,6 +334,9 @@ async fn a_back_off_from_a_clone_in_flight_retries_when_it_ends() {
 
     let engine = Room::new(home).start(SLUG);
     settles_on(&engine, RootStatus::Degraded).await;
+    // A clone ending unlinks its marker before the lock drops; a waiter that opens it
+    // only afterwards must still wake, not read a crash's leftover.
+    std::fs::remove_file(dir.join("cloning")).unwrap();
     drop(held);
     settles_on(&engine, RootStatus::Ready).await;
 }
