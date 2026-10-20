@@ -630,6 +630,19 @@ impl Driver {
                     );
                 }
                 self.status = status;
+                // Backed off another realizer's clone in flight: nothing this engine
+                // watches fires when it ends, so its marker's lock is the event. A
+                // detached thread, not a lane job or a blocking task — the wait spans
+                // the whole clone, and neither the lane nor runtime shutdown may.
+                if applied.error.as_deref() == Some(grove_ops::roots::IN_FLIGHT) {
+                    let (home, slug, tx) =
+                        (self.deps.home.clone(), self.slug.clone(), self.tx.clone());
+                    std::thread::spawn(move || {
+                        if grove_ops::roots::await_clone(&home, &slug) {
+                            let _ = tx.send(Msg::RootsChanged);
+                        }
+                    });
+                }
                 // The op's own sentence, verbatim: `realize` writes the remedy into
                 // it (`grove doctor --fix` for a legacy root, which entries to move
                 // for an occupied one), and anything this end composed instead would
