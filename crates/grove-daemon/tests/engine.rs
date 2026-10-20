@@ -928,6 +928,98 @@ async fn a_stopped_engine_stops_answering() {
     .await;
 }
 
+/// Hold `SLUG`'s lane with a foreground job until the returned sender fires, and
+/// return once the job is accepted.
+async fn hold(lanes: &Arc<Lanes>) -> oneshot::Sender<()> {
+    let (release, held) = oneshot::channel::<()>();
+    let holder = Arc::clone(lanes);
+    tokio::spawn(async move {
+        holder
+            .run(SLUG, Priority::Foreground, move || {
+                let _ = held.blocking_recv();
+            })
+            .await
+    });
+    until("the holder to be accepted", async || {
+        (lanes.inflight() > 0).then_some(())
+    })
+    .await;
+    release
+}
+
+/// A stopped engine's reconcile still queued on the lane never begins: it neither
+/// clones the root — still declared, as across a daemon's shutdown — nor takes a
+/// clone permit on the way.
+#[tokio::test]
+async fn a_stopped_engines_queued_reconcile_neither_clones_nor_takes_a_permit() {
+    let tmp = TempDir::new().unwrap();
+    let (home, _src) = declared_home(&tmp);
+    let room = Room::with_clone_limit(home.clone(), 1);
+    let lanes = Arc::clone(&room.deps.lanes);
+    let release = hold(&lanes).await;
+
+    let engine = room.start(SLUG);
+    until("the reconcile to queue", async || {
+        (lanes.inflight() == 2).then_some(())
+    })
+    .await;
+    engine.stop();
+    release.send(()).unwrap();
+    lanes.quiesced().await;
+
+    assert!(
+        !grove_ops::roots::bare_dir(&home, SLUG).exists(),
+        "a stopped engine's queued reconcile cloned the root"
+    );
+    assert_eq!(room.deps.clones.available(), 1, "…or kept a permit");
+}
+
+/// A remove queued on the lane ahead of a reconcile cannot be undone by it: the
+/// reconcile re-reads the declaration under the lane and finds none.
+#[tokio::test]
+async fn a_remove_ahead_of_a_queued_reconcile_is_not_resurrected() {
+    let tmp = TempDir::new().unwrap();
+    let (home, _src) = declared_home(&tmp);
+    let room = Room::new(home.clone());
+    let lanes = Arc::clone(&room.deps.lanes);
+    let engine = room.start(SLUG);
+    settles_on(&engine, RootStatus::Ready).await;
+    lanes.quiesced().await;
+    let release = hold(&lanes).await;
+
+    engine.roots_changed();
+    until("the reconcile to queue", async || {
+        (lanes.inflight() == 2).then_some(())
+    })
+    .await;
+    let remove = tokio::spawn({
+        let (lanes, home) = (Arc::clone(&lanes), home.clone());
+        async move {
+            lanes
+                .run(SLUG, Priority::Foreground, move || {
+                    grove_ops::roots::remove(&home, SLUG, grove_ops::roots::Removal::Forced)
+                })
+                .await
+        }
+    });
+    until("the remove to queue", async || {
+        (lanes.inflight() == 3).then_some(())
+    })
+    .await;
+    release.send(()).unwrap();
+    remove.await.unwrap().unwrap().unwrap();
+    lanes.quiesced().await;
+
+    assert!(
+        !grove_ops::roots::root_dir(&home, SLUG).exists(),
+        "resurrected"
+    );
+    assert!(
+        !grove_ops::roots::code_dir(&home, SLUG).exists(),
+        "resurrected"
+    );
+}
+
 // ── the engine set ──────────────────────────────────────────────────────────────
 
 /// The set mirrors the declared roots: start what is declared and not running, stop

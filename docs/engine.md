@@ -291,8 +291,10 @@ answering while a clone drags on for minutes.
 
 `Engine::stop` is explicit rather than "drop the last handle": a background task holds a
 sender so it can report its outcome, so an undeclared root would otherwise stay alive for
-the length of its in-flight clone. In-flight work still runs to completion on the lane — it
-simply reports to a mailbox nobody reads.
+the length of its in-flight clone. `stop` also raises a flag a queued reconcile reads at
+the head of the lane, so one that has not begun never does: it takes no clone permit and
+never reaches `realize`. grove-ops work already running cannot be cancelled — a clone
+mid-transfer runs to completion and reports to a mailbox nobody reads.
 
 ## The engine set
 
@@ -311,8 +313,9 @@ event bus, never by the watcher directly.
 
 `crates/grove-daemon/tests/engine.rs` is the behavioural gate. Named highlights: a
 declared root clones and reports ready; a burst of manifest events collapses into one
-reconcile; a failed reconcile degrades and stops; a degraded root recovers on the next
-event; a terminal fault degrades where a transient one re-derives; the sync note is set by
+reconcile; a failed reconcile degrades and stops; a
+degraded root recovers on the next event; a stopped engine's queued reconcile neither clones
+nor takes a permit; a remove ahead of a queued reconcile is not resurrected; a terminal fault degrades where a transient one re-derives; the sync note is set by
 a diverged trunk and cleared by a clean sync; sync accepts immediately and announces its
 completion; a sync accepted on a degraded root latches — `syncing` true, nothing dispatched,
 one broadcast — and rides the drive that follows the recovery; a sync requested over HTTP is
