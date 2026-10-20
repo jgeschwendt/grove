@@ -744,10 +744,24 @@ fn write_doc(path: &Path, doc: &mut DocumentMut) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("create manifest dir")?;
     }
+    replace(path, &render(doc))
+}
+
+/// Swap `text` in as the manifest, atomically and durably: the temp file is synced
+/// before the rename, so a crash cannot leave the new name over unwritten blocks, and
+/// the directory after it, so the rename itself survives one.
+fn replace(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, render(doc)).context("write manifest")?;
+    let mut file = std::fs::File::create(&tmp).context("write manifest")?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .context("write manifest")?;
     std::fs::rename(&tmp, path).context("atomic rename manifest")?;
-    Ok(())
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .context("sync manifest dir")
 }
 
 /// The canonical on-disk text for a (sorted) document: `toml_edit`'s render with
@@ -901,9 +915,7 @@ pub fn canonicalize(path: &Path) -> Result<bool> {
         if !settled || current == original {
             return Ok(false);
         }
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &current).context("write manifest")?;
-        std::fs::rename(&tmp, path).context("atomic rename manifest")?;
+        replace(path, &current)?;
         Ok(true)
     })
 }
