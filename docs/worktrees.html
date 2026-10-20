@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>grove — worktrees</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M8 3v10M8 7l-3-2M8 9l3-2' stroke='white' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body data-page="worktrees">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.810,87.810,0,0,1,16,10.54V195.830a87.810,87.810,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.090,103.090,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+<symbol id="ph-tree" viewBox="0 0 256 256" fill="currentColor"><path d="M198.1,62.6a76,76,0,0,0-140.2,0A72.27,72.27,0,0,0,16,127.8C15.89,166.62,47.36,199,86.14,200A71.68,71.68,0,0,0,120,192.49V232a8,8,0,0,0,16,0V192.49A71.45,71.45,0,0,0,168,200l1.86,0c38.78-1,70.25-33.36,70.14-72.18A72.26,72.26,0,0,0,198.1,62.6ZM169.45,184a55.61,55.61,0,0,1-32.52-9.4q-.47-.3-.93-.57V132.94l43.58-21.78a8,8,0,1,0-7.16-14.32L136,115.06V88a8,8,0,0,0-16,0v51.06L83.58,120.84a8,8,0,1,0-7.16,14.32L120,156.94V174q-.47.27-.93.57A55.7,55.7,0,0,1,86.55,184a56,56,0,0,1-22-106.86,15.9,15.9,0,0,0,8.05-8.33,60,60,0,0,1,110.7,0,15.9,15.9,0,0,0,8.05,8.33,56,56,0,0,1-22,106.86Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-tree" /></svg>
+    grove <small>· worktrees</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">Roots and worktrees</p>
+  <p class="lead docs-lead">A <strong>root</strong> is a declared repository: <code class="code">[roots."owner/name"]</code> in the manifest, and
+<code class="code">roots/owner/name/</code> on disk — the directory holding everything grove owns for it. Its
+<strong>code dir</strong> is <code class="code">code/owner/name/</code>, which holds checkouts and only checkouts. A
+<strong>worktree</strong> is a branch of that root checked out in the code dir, a direct sibling of
+the trunk. Roots and worktrees are <em>declared</em> in <code class="code">manifest.toml</code> and <em>realized</em> in git,
+and convergence between the two is two-way and additive.</p>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#manifest">manifest</a>
+    <a class="pill" href="#on-disk-layout">on-disk layout</a>
+    <a class="pill" href="#trunk">trunk</a>
+    <a class="pill" href="#reconcile-is-two-way-and-additive">reconcile is two-way and additive</a>
+    <a class="pill" href="#root-realization">root realization</a>
+    <a class="pill" href="#adoption">adoption</a>
+    <a class="pill" href="#removal-declared-first-then-delete-on-disk-then-undeclare">removal</a>
+    <a class="pill" href="#sync">sync</a>
+    <a class="pill" href="#warm-pool">warm pool</a>
+    <a class="pill" href="#serialization">serialization</a>
+    <a class="pill" href="#where-this-is-exercised">where this is exercised</a>
+    <a class="pill" href="#environment">worktree environment</a>
+    <a class="pill" href="index.html">design</a>
+    <a class="pill" href="api.html">api</a>
+    <a class="pill" href="architecture.html">architecture</a>
+    <a class="pill" href="deployment.html">deployment</a>
+    <a class="pill" href="engine.html">engine</a>
+    <a class="pill" href="updates.html">updates</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="manifest">
+<header>
+<h2 class="h2">The manifest</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">$GROVE_HOME/manifest.toml</code> is desired state, and the only durable thing grove writes
+besides git itself. <code class="code">grove_ops::manifest</code> is its sole owner: it edits format-preservingly
+through <code class="code">toml_edit</code> under an exclusive advisory <code class="code">flock</code> on a sibling <code class="code">manifest.toml.lock</code>
+— never on the manifest itself, which every write replaces by rename, so a lock on its own
+inode would be released by the very write it guards — and so grove's writes never clobber a
+human's comments.</p>
+<pre class="snippet"><code># my repos                              # comments survive every grove write
+
+[roots."owner/name"]
+url   = "git@github.com:owner/name.git"
+trunk = "canary"                        # integrates here; absent → the remote's HEAD
+
+[roots."owner/name".pool]
+size = 2                                # warm slots to keep ready; default 0
+
+[roots."owner/name".env]
+_.symlink = [".env"]                    # shared live into every worktree
+_.copy = ["config/local.json"]          # seeded once per worktree
+
+[roots."owner/name".worktrees.feature-x]
+branch = "feature/x"
+base = "canary"                         # absent for worktrees adopted from git
+</code></pre>
+<p class="docs-note"><code class="code">trunk</code> names the branch grove integrates on: the one its checkout is named after, the one
+<code class="code">sync</code> fast-forwards, and the one every share reads through. Absent — the common case — it
+is the remote's <code class="code">HEAD</code>, whatever the clone landed on.</p>
+<p class="docs-note"><code class="code">base</code> is where a <em>new</em> branch forks from, and <code class="code">grove tree add</code> without <code class="code">--base</code> resolves
+it to the trunk branch and records it — named explicitly rather than left to git, whose own
+default start point is the bare's <code class="code">HEAD</code>. The two agree in the settled state and differ in
+exactly the window that matters: between a <code class="code">trunk</code> edit and the reconcile that applies it.
+A root not yet on disk resolves to nothing and the base stays unset, for the realizer to
+fill.</p>
+<p class="docs-note"><code class="code">_.symlink</code>/<code class="code">_.copy</code> are TOML <em>dotted keys</em> nesting as <code class="code">env</code> → <code class="code">_</code> → <code class="code">symlink</code>, not
+literal <code class="code">"_.symlink"</code> keys — mise's <code class="code">_</code> directive-namespace convention. <code class="code">_.setup</code>, a
+per-worktree setup command, is reserved and not implemented.</p>
+<p class="docs-note">Structure and spacing are canonicalized on every write and on every hand-edit the watcher
+sees: roots as standalone <code class="code">[roots."slug"]</code> tables sorted by slug, each root's sub-tables
+regrouped, worktrees sorted by name, one blank line between tables. Diffs stay stable and
+merges stay clean. Canonicalization is write-if-changed, so it does not loop on its own
+file-change event, and a top-level table that is not under <code class="code">[roots]</code> is left untouched.</p>
+<h3 class="h3" id="manifest-validation">Validation</h3>
+<p class="docs-note">Four validators guard the boundary between a declaration and a filesystem path or a git
+argument. All four are applied at the declaring API <em>and</em> when reading a hand-edited or
+git-synced manifest, so neither entrance is the only gate.</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>validator</th><th>rule</th></tr></thead>
+<tbody>
+<tr><td><code class="code">validate_slug</code></td><td>non-empty relative path whose every <code class="code">/</code> segment is a real name — no <code class="code">..</code>, <code class="code">.</code>, or empty segment, so no absolute, doubled-<code class="code">/</code> or trailing-<code class="code">/</code> spelling (<code class="code">o/r/</code> would be a second manifest and lane key for <code class="code">o/r</code>); no backslash; no ASCII control characters</td></tr>
+<tr><td><code class="code">validate_name</code></td><td>exactly one <code class="code">Normal</code> segment (so no <code class="code">/</code>), the slug rules otherwise, and never a dotted name — no checkout can be spelled that way</td></tr>
+<tr><td><code class="code">validate_share_path</code></td><td>one or more safe segments (nesting allowed), canonical — no <code class="code">.</code>, empty (<code class="code">//</code>) or trailing-<code class="code">/</code> segments — no segment beginning with <code class="code">-</code>, and no dotted first segment once the path nests (<code class="code">.env</code> is a share; a path <em>under</em> a dotted entry is not)</td></tr>
+<tr><td><code class="code">validate_ref_arg</code></td><td>a <code class="code">branch</code>, <code class="code">base</code> or <code class="code">trunk</code> is non-empty and does not begin with <code class="code">-</code>, so a crafted declaration cannot smuggle a git flag</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note" id="manifest-dot-rule"><strong>The dot rule.</strong> Git refuses a ref component beginning with a dot, so no branch — and
+therefore no directory <code class="code">worktrees::name_for</code> derives from one — is ever spelled that way.
+A dotted entry in a code dir is somebody else's artefact: grove neither declares nor
+adopts it, and <code class="code">worktrees::is_reserved</code> is that one-line predicate, not a list. Rejecting
+a dotted <em>declaration</em> follows — it would ask reconcile to create a directory no adoption
+could ever read back as a checkout.</p>
+<p class="docs-note">The share-path gate is the <em>string</em> half of a two-gate posture; the filesystem half is the
+<code class="code">O_NOFOLLOW</code> descent in <a class="link" href="#environment">§ The worktree environment</a>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="on-disk-layout">
+<header>
+<h2 class="h2">On-disk layout</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Two trees, one entry per root in each: the code dir carries the checkouts, the root
+directory carries everything grove owns.</p>
+<pre class="tree"><code>$GROVE_HOME/
+├── manifest.toml
+├── manifest.toml.lock                     # serializes manifest read-modify-write
+├── grove.lock · grove.pid · grove.log     # daemon custody
+├── code/
+│   └── owner/name/                        # the code dir — checkouts, and only checkouts
+│       ├── canary/                        # the trunk: the checkout of the trunk branch
+│       └── feature-x/                     # a worktree — a direct sibling of the trunk
+└── roots/
+    └── owner/name/                        # the root — everything grove owns for it
+        ├── bare/                          # the bare clone
+        ├── pool/slot-0/                   # warm slots, detached at the trunk tip
+        └── cloning                        # the marker, only while a clone is in flight
+</code></pre>
+<p class="docs-note">The install layout — <code class="code">versions/</code>, <code class="code">current</code>, <code class="code">previous</code>, <code class="code">channel</code>, <code class="code">pending</code> and
+<code class="code">update.lock</code> — is a separate tree under <code class="code">$GROVE_INSTALL</code> (<a class="link" href="deployment.html"><code class="code">deployment.html</code></a>). The
+split is what makes the two disposable in opposite directions: the install can be deleted
+and re-installed with no repository noticing, and nothing under <code class="code">$GROVE_HOME</code> is
+regenerable from a release.</p>
+<p class="docs-note"><code class="code">roots::root_dir</code> and <code class="code">roots::code_dir</code> are the published definition of the two joins,
+<code class="code">roots::bare_dir</code> of the bare, <code class="code">pool::pool_dir</code> of the pool and <code class="code">roots::trunk</code> of the
+trunk; nothing else in the tree recomputes them.</p>
+<p class="docs-note" id="on-disk-layout-a-code-dir-holds-checkouts-and-only-checkouts"><strong>A code dir holds checkouts and only checkouts.</strong> Every entry is a git worktree of the
+root's bare, which is what lets an editor, a <code class="code">find</code>, or an operator's eye read the
+directory without an "except grove's own" clause. The one tolerated stranger is
+<code class="code">.DS_Store</code> — a Finder artefact that appears in any directory a Mac has looked at, and the
+only name <code class="code">roots::foreign_entries</code> skips.</p>
+<p class="docs-note" id="on-disk-layout-one-root-one-directory"><strong>One root, one directory.</strong> The bare, the warm pool and the in-flight-clone marker all
+live under <code class="code">roots/&lt;slug&gt;/</code>, so nothing of a root is anywhere but there and its code dir —
+which is what lets a removal delete a root completely by deleting two paths. The bare is
+the subdirectory <code class="code">bare/</code>, never <code class="code">roots/&lt;slug&gt;</code> itself: a bare repository at the root
+directory would make that directory look like a repository to every tool that walks
+upward, so <code class="code">git status</code> under it errors and an editor opened there sees no working tree.</p>
+<p class="docs-note" id="on-disk-layout-checkout-depth-is-load-bearing"><strong>Checkout depth is load-bearing.</strong> Every checkout — the trunk included — is a <em>direct</em>
+child of the code dir, and shares materialize only at that canonical depth.
+<code class="code">worktrees::name_for</code> folds a branch name's <code class="code">/</code> to <code class="code">-</code> (<code class="code">feature/x</code> → <code class="code">feature-x</code>) for
+exactly this reason, and it is the one branch-to-directory rule in grove: <code class="code">grove tree add</code>,
+the trunk and share targets all read it. <code class="code">worktrees::adoptable_name</code> refuses anything more
+than one segment below the code dir. A warm-pool slot sits outside the code tree
+altogether, so it is not at canonical depth and materializes nothing while it is a slot —
+a relative <code class="code">../&lt;trunk&gt;/&lt;p&gt;</code> from <code class="code">roots/&lt;slug&gt;/pool/slot-N/</code> resolves inside the pool, not
+against the trunk. Promote is what puts it right, and it is one <code class="code">git worktree move</code> into
+the code dir: worktree pointers are absolute, so crossing between the two trees costs a
+checkout nothing, and the links materialize correctly the moment it lands.</p>
+<p class="docs-note">A root on an earlier layout generation is doctor's <code class="code">legacy_layout</code> finding, and
+<code class="code">grove doctor --fix</code> migrates it in place. Realization refuses such a root rather than
+cloning beside it (<a class="link" href="#root-realization">§ Root realization</a>). <code class="code">grove_ops::layout</code> is where the superseded names
+are spelled and the generations named, and nothing else in grove reads them; see
+<a class="link" href="api.html#doctor"><code class="code">api.html</code> § Doctor</a>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="trunk">
+<header>
+<h2 class="h2">The trunk</h2>
+</header>
+<div class="stack">
+<p class="docs-note">The trunk is the checkout of the branch a root integrates on. It is not a special
+directory: it is named by <code class="code">worktrees::name_for(branch)</code> exactly as every other checkout is
+(<code class="code">canary</code> → <code class="code">canary/</code>, <code class="code">release/2</code> → <code class="code">release-2/</code>), and what tells it apart from its
+siblings is that the manifest points at it.</p>
+<p class="docs-note"><code class="code">roots::trunk(home, slug) -&gt; Trunk { branch, name, dir }</code> is the one resolution, and
+nothing else spells the trunk's path. Desired state is read first — the root's <code class="code">trunk</code> key
+when it declares one — else the bare's <code class="code">HEAD</code>, which reconcile sets from that same
+declaration. So a root adopted off disk has a trunk too, whatever it was cloned onto, and a
+freshly-declared <code class="code">trunk</code> resolves here before any convergence has run.
+<code class="code">git::default_branch</code> is what reads <code class="code">HEAD</code> back, and every consumer already went through
+it. <code class="code">trunk_reads_the_declaration_and_falls_back_to_the_bares_head</code> pins both halves.</p>
+<p class="docs-note"><code class="code">roots::trunk_dir</code> is the same lookup for a caller with nowhere to put a failure — a
+presence probe, a doctor row. A root whose bare cannot be read falls back to <code class="code">&lt;code&gt;/main</code>,
+so the probe reports "missing" rather than blanking; anything able to report an error calls
+<code class="code">trunk</code> instead.</p>
+<h3 class="h3" id="trunk-changing-the-trunk-is-a-manifest-edit">Changing the trunk is a manifest edit</h3>
+<p class="docs-note">Edit <code class="code">trunk</code>, reconcile, and <code class="code">converge_trunk</code> brings the disk onto it in three moves, each
+a no-op once it has run:</p>
+<ul class="claims stack" role="list">
+<li>a <code class="code">worktrees.&lt;name&gt;</code> entry already on the trunk branch is <strong>dropped</strong> — that checkout
+<em>is</em> the trunk now, and leaving it declared would put the root's integration checkout
+where a <code class="code">tree remove</code> deletes it;</li>
+<li>the trunk's checkout is <strong>created</strong> when nothing is there, an ordinary <code class="code">git worktree add</code>
+from the bare;</li>
+<li><code class="code">HEAD</code> is <strong>moved</strong> onto the trunk branch, so actual state answers the declaration —
+after a share pass, since <code class="code">HEAD</code> is the one record of which links went through the old
+trunk, and only once that pass carried every share without an error
+(<a class="link" href="#environment-never-clobber">§ Never clobber</a>).</li>
+</ul>
+<p class="docs-note" id="trunk-no-trunk-is-ever-deleted-by-a-trunk-change"><strong>No trunk is ever deleted by a trunk change.</strong> The previous trunk stays checked out where
+it is, and the worktree reconcile that follows adopts it into <code class="code">worktrees.&lt;name&gt;</code> — an
+ordinary worktree from then on.
+<code class="code">a_trunk_change_creates_the_new_checkout_and_adopts_the_old_one</code> and
+<code class="code">a_declared_worktree_on_the_new_trunk_branch_becomes_the_trunk</code> pin the two directions.</p>
+<p class="docs-note">The branch is proved to exist before anything is written, so a typo'd <code class="code">trunk</code> leaves the
+root exactly as it was rather than minting the typo as a branch. A <em>declared</em> worktree
+already occupying the new trunk's directory on a different branch is two checkouts asking
+for one path, which no order of operations resolves: reconcile refuses, naming both, rather
+than dropping somebody's declaration or leaving the trunk on a branch it does not name.</p>
+</div>
+</section>
+
+<section class="docs-section" id="reconcile-is-two-way-and-additive">
+<header>
+<h2 class="h2">Reconcile is two-way and additive</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">worktrees::reconcile(home, slug)</code> converges declared against actual and <strong>never deletes</strong>:</p>
+<ul class="claims stack" role="list">
+<li id="reconcile-is-two-way-and-additive-declared-not-in-git"><strong>declared, not in git</strong> → <code class="code">git worktree add</code> at <code class="code">&lt;code&gt;/&lt;name&gt;</code> on the declared branch
+(from <code class="code">base</code> when the declaration records one). A recreate git refuses is reported as
+<code class="code">failed</code> with git's reason, not silently dropped — the operator sees a wedged worktree
+instead of a silent retry loop.</li>
+<li id="reconcile-is-two-way-and-additive-in-git-not-declared"><strong>in git, not declared</strong> → written into the manifest as <code class="code">adopted</code>, with no <code class="code">base</code>
+(the fork point is unknown).</li>
+<li id="reconcile-is-two-way-and-additive-both"><strong>both</strong> → nothing.</li>
+</ul>
+<p class="docs-note">The trunk is never one of the three: <code class="code">worktrees::adoptable_name</code> excludes the root's own
+checkout by name, so it is neither adopted into <code class="code">worktrees</code> nor recreated as one. The
+checkout a trunk change left behind is not the trunk any more, so it <em>is</em> adopted, like any
+other undeclared branch-carrying checkout.</p>
+<p class="docs-note">Git-level ghosts are pruned first. A worktree directory removed out of band leaves a
+<code class="code">prunable</code> registration that makes git report it as still present (masking the
+declared-but-missing case, so the recreate never fires) and refuses a re-<code class="code">add</code> at that path.
+Pruning clears both, and deletes nothing real — the working tree is already gone.</p>
+<p class="docs-note">Adoption needs a branch to record, so a <strong>detached</strong> checkout is never adopted. A <em>declared</em>
+detached worktree is left entirely alone: present, so no recreate; branchless, so no
+adoption. <code class="code">worktrees::actual</code> deliberately retains detached checkouts with <code class="code">branch: None</code>,
+because presence is independent of the branch.</p>
+<p class="docs-note"><code class="code">worktrees::list</code> is the declared ⋈ actual join a UI draws: every declared worktree with
+whether git has it, plus every undeclared branch-carrying one, each with its own
+<code class="code">git status</code> drift. <code class="code">branch</code> is what the manifest declares; <code class="code">status.branch</code> is what is
+actually checked out, and the two disagreeing is drift a dashboard flags and doctor reports
+as a <code class="code">worktree</code>/<code class="code">mismatch</code> check. A <code class="code">git status</code> that fails is swallowed to <code class="code">None</code> — one
+wedged checkout must not blank the whole list.</p>
+</div>
+</section>
+
+<section class="docs-section" id="root-realization">
+<header>
+<h2 class="h2">Root realization</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">roots::reconcile_one(home, slug)</code> realizes one declared root: converge the trunk, clone
+the declared-but-missing bare, check the trunk branch out at <code class="code">&lt;code&gt;/&lt;trunk name&gt;</code>,
+reconcile that root's worktrees, then materialize its shares. It is idempotent — a
+<code class="code">present</code> root re-reconciles to a no-op.</p>
+<p class="docs-note">Converging the trunk comes first because <em>which</em> directory is the trunk is a manifest
+question, and a trunk change left unapplied would make the rest of the pass see a root
+whose trunk checkout is missing — the trunk recovery below — rather than one whose trunk
+simply moved.</p>
+<p class="docs-note"><code class="code">Err</code> is reserved for not-declared and lookup faults. A clone or guard failure is an
+<code class="code">Ok(Applied { status: Failed })</code>, so one wedged root never aborts a sweep;
+<code class="code">grove_ops::apply</code> (the offline <code class="code">grove apply</code>) relies on that to report a failed root
+beside its healthy neighbours.</p>
+<p class="docs-note">A root that is not already present is decided by reading <em>both</em> of its directories, not
+the manifest: a bare that is not at <code class="code">roots/&lt;slug&gt;/bare</code> is not the same as nothing being
+there. Four answers, cheapest and least destructive first — only the last two write
+anything.</p>
+<ol class="steps">
+<li id="root-realization-refuse-a-root-on-an-earlier-layout-generation"><strong>Refuse a root on an earlier layout generation.</strong> Its bare sits inside the code dir,
+so every probe the clone arm makes reads <em>missing</em> against it — cloning would lay a
+whole second root down beside the first, both left to be untangled by hand. The outcome
+is <code class="code">failed</code> with "run <code class="code">grove doctor --fix</code> to migrate it in place", and nothing under
+the root is created or removed: migration stays in doctor, where an operator asked for
+it. <code class="code">grove_ops::layout</code> is the one spelling of the superseded names, read by doctor's
+<code class="code">legacy_layout</code> finding and by the realizer, so the two cannot disagree about what a
+legacy root is (<a class="link" href="api.html#doctor"><code class="code">api.html</code> § Doctor</a> names the generations).</li>
+<li id="root-realization-refuse-an-occupied-code-dir"><strong>Refuse an occupied code dir.</strong> A code dir holds checkouts and only checkouts, so
+anything already in it is somebody's and a clone would interleave grove's layout with
+theirs: the outcome is <code class="code">failed</code> naming the entries. Occupied means <em>anything</em> but
+<code class="code">.DS_Store</code> — there is no "except grove's own" clause left to carve out, because grove
+owns nothing here. The legacy check comes first, and that order is load-bearing: a
+legacy root's own entries would trip the occupancy check too, and "holds <code class="code">.git</code>" is the
+less useful of the two answers.</li>
+<li id="root-realization-re-add-the-trunk"><strong>Re-add the trunk</strong> when the bare is there and its checkout is gone — it vanished out
+of band (a stray <code class="code">rm</code>, a <code class="code">git worktree prune</code>); grove never produces this state itself.
+Prune, then <code class="code">git worktree add</code> from the bare that is already there: a checkout, not a
+repository, is what went missing, so this is the whole of the real repair and it touches
+nothing else under the root. It is <strong>refused</strong> when the bare carries other live
+worktrees — a user's checkouts, possibly with uncommitted work — as <code class="code">failed</code> with
+"recreate it, or <code class="code">grove clone remove</code> the root". That check fails safe: if
+<code class="code">git worktree list</code> errors at all, grove assumes worktrees may exist and refuses. Two
+exclusions keep the count honest, and they need different tests: the trunk being
+recovered, matched by the basename that names it in the code dir, and the warm-pool
+slots, matched by path — a slot is registered under <code class="code">roots/&lt;slug&gt;/pool/</code>, where its
+<code class="code">slot-N</code> basename names nothing in the code dir.</li>
+<li id="root-realization-clone"><strong>Clone</strong>, which is a root's first realization and, when the bare cannot produce a
+worktree at all, its re-clone. A re-clone deletes both of the root's directories first,
+so it happens <strong>only if the code dir holds nothing but <code class="code">.DS_Store</code></strong>, and names what it
+would have destroyed otherwise. This is the one path where grove would <code class="code">rm -rf</code> a
+directory a human also writes into, unattended, on a reconcile nobody asked for — which
+is why the root directory, grove's alone, is the only one it deletes without asking.</li>
+</ol>
+<p class="docs-note">A refusal is an <code class="code">Applied</code> carrying its reason, so it reads the same on both realizers:
+<code class="code">grove apply</code> prints <code class="code">failed  &lt;slug&gt;: &lt;reason&gt;</code> beside the roots that converged, and the
+daemon degrades that root, where it waits for an operator rather than a retry clock.
+<code class="code">grove doctor --fix</code> is what clears a legacy root — it migrates the layout in place, and
+the engine re-derives the root as <code class="code">ready</code> from disk on the next event.</p>
+<p class="docs-note">A clone in flight writes a <code class="code">cloning</code> marker at <code class="code">roots/&lt;slug&gt;/cloning</code> for the length of
+the network fetch: <code class="code">gix</code> materializes the bare with its <code class="code">origin</code> before a byte of the
+transfer lands, and adoption must not read that as a discovery — otherwise an operator's
+undeclare is silently undone and the root re-cloned on the next manifest event. It sits
+beside the bare rather than in the code dir, which holds checkouts and nothing else; a
+crashed clone leaves it behind on purpose, so the leftover is visibly grove's. The clone
+holds an exclusive <code class="code">flock</code> on the marker for its whole length, and a lock dies with its
+process — that is what tells a live clone from a crashed one. A second realizer (another
+offline CLI, a daemon booted mid-clone) that finds the lock held touches nothing: the
+outcome is <code class="code">failed</code> with "a clone of this root is in flight". A free lock on a leftover
+marker is a crashed clone's, and the recovery above proceeds under it, removing the
+marker once the root is whole.</p>
+<p class="docs-note">Worktree reconcile and share materialization are best-effort inside <code class="code">reconcile_one</code> — a
+share hiccup must not fail the root — but a worktree the reconcile <em>cannot</em> recreate is
+surfaced on stderr, which is grove-ops' operator channel (the CLI prints it, the daemon's
+log pipeline picks it up).</p>
+</div>
+</section>
+
+<section class="docs-section" id="adoption">
+<header>
+<h2 class="h2">Adoption</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Adoption is discovery, and it <strong>never clones</strong>.</p>
+<p class="docs-note"><code class="code">roots::adopt(home)</code> walks <code class="code">$GROVE_HOME/roots/&lt;org&gt;/&lt;repo&gt;</code> — the tree grove owns, never
+the code tree — and declares any slug whose <code class="code">bare/</code> has an <code class="code">origin</code> remote and is not
+already declared. It:</p>
+<ul class="claims stack" role="list">
+<li>skips dotfile directories (a <code class="code">.Trash</code> under <code class="code">roots/</code> is not an org);</li>
+<li>skips a name that is not UTF-8, reporting it as <code class="code">skipped</code> with a lossy rendering for the
+operator's eyes only — a U+FFFD-laced slug would not round-trip to the real directory,
+so it is never minted;</li>
+<li>skips a repo with no <code class="code">origin</code> (no URL to record);</li>
+<li>skips a clone in flight or crashed short of a whole root, which the <code class="code">cloning</code> marker
+names, lock held or not;</li>
+<li id="adoption-never-overwrites-a-declared-url"><strong>never overwrites a declared URL</strong>;</li>
+<li>is best-effort per repo — one failure does not abort the rest;</li>
+<li>canonicalizes the manifest at the end, so a pure hand-edit reorder is normalized even
+when the pass declared nothing.</li>
+</ul>
+<p class="docs-note">The watcher runs <code class="code">adopt</code> on every manifest save and at boot, then publishes
+<code class="code">roots_changed</code>. The engines do the realizing.</p>
+<p class="docs-note">A code dir that holds something with no root directory behind it is the mirror case, and
+it is <strong>not</strong> adoptable — there is no bare to read a URL from, so there is nothing to
+declare. Doctor reports it as <code class="code">orphan_code</code>, report-only (<a class="link" href="api.html#doctor"><code class="code">api.html</code> § Doctor</a>).</p>
+</div>
+</section>
+
+<section class="docs-section" id="removal-declared-first-then-delete-on-disk-then-undeclare">
+<header>
+<h2 class="h2">Removal: declared first, then delete on disk, then undeclare</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">roots::remove</code> refuses a slug that is <strong>not declared</strong> before it builds any path it would
+hand to <code class="code">remove_dir_all</code>. <code class="code">&lt;home&gt;/code/&lt;slug&gt;</code> is a real directory whether or not grove put
+it there, so a valid-shaped typo used to obliterate somebody else's checkout and report
+success — the same typo the daemon route answers with a 404. Undeclared is <code class="code">not_declared</code>
+(exit 3) on both paths.</p>
+<p class="docs-note">It then surveys the root for <strong>unsaved work</strong> — uncommitted tracked changes, or commits no
+remote has, in any worktree under it (warm-pool slots excluded; untracked files are not the
+signal, since grove materializes shares as untracked entries); any local branch in the bare
+carrying unpushed commits, checked out or not (a bare keeps no reflog, so a removed tree's
+branch dies with it); a <code class="code">refs/stash</code>; and any code-dir entry that is not a registered
+worktree of the bare (a human's clone or notes, what <code class="code">foreign_entries</code> refuses to clone
+over) — and refuses with a
+<code class="code">conflict</code> naming them unless the caller passed <code class="code">--force</code> (<code class="code">Removal::Forced</code>, <code class="code">force: true</code>
+on the route). <code class="code">grove tree remove</code> already refuses one dirty checkout because git does; the
+command that deletes N of them at once must not be the one that protects least.</p>
+<p class="docs-note">Past both guards it deletes <strong>both</strong> of the root's directories — <code class="code">roots/&lt;slug&gt;</code> and
+<code class="code">code/&lt;slug&gt;</code> — and <em>then</em> removes the manifest entry. Both, because nothing of a root may
+survive either tree: taking only one would leave half a root for <code class="code">adopt</code> or <code class="code">doctor</code> to
+find. Each is deleted only if it is there, since a declared-but-unrealized root has
+neither. <code class="code">remove_undeclares_and_deletes</code> pins both halves gone.</p>
+<p class="docs-note">The order is the whole point: undeclaring first opens a window in which the watcher's
+<code class="code">adopt</code> — which runs on the manifest save — re-finds the still-present bare and re-declares
+the slug, and the engine then re-clones the root the user just deleted. Deleting first
+closes it; adopt cannot resurrect a bare that is gone.</p>
+<p class="docs-note">A partial <code class="code">remove_dir_all</code> failure propagates <em>before</em> the undeclare, so the slug stays
+declared and doctor/reconcile report a broken root rather than adopt bringing it back.</p>
+<p class="docs-note"><code class="code">worktrees::remove</code> refuses an undeclared name for the same reason, then inverts the order:
+<strong>git first, then undeclare</strong>. Removing the manifest entry first would let the next reconcile
+re-adopt the still-registered worktree. When the directory is already gone out of band,
+grove prunes the stale git registration so the removal is git-visible before the undeclare.
+The git remove is never forced, and git counts shares as untracked files, so <code class="code">env::unlay</code>
+first takes back what grove laid there (<a class="link" href="#environment-removal">§ Removal</a>); a
+user's untracked file still refuses it, and the shares are laid again.</p>
+<p class="docs-note">Removing a root through the API pokes the watcher afterwards: a removed root's engine is
+torn down by the reconcile pass that follows, never by an explicit stop call. Removing a
+worktree sends no nudge — a worktree has no engine.</p>
+</div>
+</section>
+
+<section class="docs-section" id="sync">
+<header>
+<h2 class="h2">Sync</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">roots::sync(home, slug)</code> requires a ready root and does four things, as one lane call:
+fetch the trunk branch (bounded, single refspec), fast-forward the trunk checkout onto the
+tracking ref, prune warm-pool slots stranded at a pre-sync tip, and report.</p>
+<p class="docs-note">The branch is the trunk's own, not the bare's <code class="code">HEAD</code>. Reconcile converges the two, but a
+sync in the window between a <code class="code">trunk</code> edit and the reconcile that applies it must fetch and
+fast-forward the branch the manifest names, never the one being left behind
+(<code class="code">sync_fetches_and_fast_forwards_the_declared_trunk</code>).</p>
+<p class="docs-note" id="sync-it-never-forces"><strong>It never forces.</strong> A trunk carrying local commits or dirty tracked files is a
+<em>reported</em> outcome, not a reset: <code class="code">SyncReport::trunk</code> is <code class="code">updated</code>, <code class="code">already_current</code>,
+<code class="code">diverged</code>, or <code class="code">dirty</code>, and the daemon turns the latter two into the snapshot's <code class="code">sync_note</code>.
+Syncing a root with nothing on disk is <code class="code">not_ready</code> — a transient code, so the engine retries
+on the next event rather than degrading.</p>
+<p class="docs-note">Slot pruning compares each slot to the trunk's tip <em>after</em> the op, so it recycles exactly
+the slots a fresh <code class="code">pool.fill</code> would no longer produce, whichever way the trunk outcome went.
+The engine's fill loop restores the target at the new tip.</p>
+</div>
+</section>
+
+<section class="docs-section" id="warm-pool">
+<header>
+<h2 class="h2">The warm pool</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Warm slots are pre-checked-out worktrees under <code class="code">roots/&lt;slug&gt;/pool/</code> that realizing a
+declared worktree claims near-instantly, skipping a cold checkout. They sit in the tree
+grove owns, not in the code dir, so an operator's view of their checkouts never carries
+them. The declared target is <code class="code">[roots."&lt;slug&gt;".pool] size</code> (default 0 — opt-in); the
+observed count is <code class="code">worktrees::pool_count</code>, which counts registered worktrees whose path
+sits <em>strictly</em> under <code class="code">pool::pool_dir</code> — strictly, because a worktree registered at the
+pool directory itself would otherwise count as a slot and, being the lowest path, be the
+one <code class="code">promote</code> picked up and moved.</p>
+<p class="docs-note" id="warm-pool-who-claims-a-slot"><strong>Who claims a slot:</strong> the realizer, not a caller. <code class="code">worktrees::create</code> (the offline
+<code class="code">grove tree add</code>) and <code class="code">worktrees::reconcile</code> (what the engine runs after a
+declare-and-nudge, and over a hand-edited manifest) both try <code class="code">pool::promote</code> first and
+cold-create on <code class="code">Cold</code>. That is deliberate placement: a pool claimed from only one entry
+point is a pool that is filled, paid for on every clone, reported as <code class="code">pool n/n</code> readiness,
+and redeemed by nothing.</p>
+<p class="docs-note"><code class="code">pool::fill</code> adds <strong>one</strong> detached slot at the trunk tip — resolved through <code class="code">roots::trunk</code>,
+so a root that has declared a new trunk seeds onto that branch and not the one it is
+leaving — and nothing else. N calls converge to N slots. <code class="code">pool::reclaim</code> is its mirror — it
+removes the highest-indexed slot, non-forced — so a target that <em>drops</em> converges too
+rather than leaving the checkouts on disk forever with nothing able to reclaim them. The
+engine's fill task picks whichever direction the observed count needs. It prunes git-level
+ghosts first, for a specific failure: a slot directory removed out of band leaves a
+<code class="code">prunable</code> registration, <code class="code">free_slot</code> picks the now-empty path, and the detached add then
+fails with "missing but already registered" — wedging every future fill. It errors when the
+bare is missing, because the engine only fills a <code class="code">ready</code> root, so a missing bare is a real
+fault rather than a steady state.</p>
+<p class="docs-note">Slots get <strong>no shares</strong>. A slot sits outside the code tree, so <code class="code">env::materialize</code>'s
+depth invariant does not hold there — a relative link would resolve inside the pool — and
+the promote move would invalidate the links regardless. <code class="code">worktrees::actual</code>'s path-based
+exclusion keeps slots out of the declared set entirely, regardless of branch or
+detachment: a slot path does not strip under the code dir, so no basename of it is ever
+read as a checkout.</p>
+<p class="docs-note"><code class="code">pool::promote(home, slug, name, branch, base)</code>:</p>
+<ol class="steps">
+<li>attaches the branch <strong>in the slot</strong> (DWIM, like <code class="code">worktree_add</code>), from <code class="code">base</code> when the
+caller named one and the trunk branch otherwise — named explicitly, so a promote is not
+silently forked from whatever commit <code class="code">fill</code> seeded the slot at;</li>
+<li>claims it into the code dir with <code class="code">git worktree move</code> — not a bare rename, which would
+strip git's gitdir pointers. The move crosses from <code class="code">roots/&lt;slug&gt;/pool/</code> to
+<code class="code">code/&lt;slug&gt;/</code>, and costs nothing extra for it: worktree pointers are absolute, so a
+cross-tree move is the same call a within-tree one would be;</li>
+<li>declares it in the manifest;</li>
+<li>materializes the root's shares, now that it is at canonical depth.</li>
+</ol>
+<p class="docs-note" id="warm-pool-attach-before-move"><strong>Attach before move</strong> is what makes promote convergent under interruption. Any worktree
+that ever reaches <code class="code">&lt;code&gt;/&lt;name&gt;</code> already carries a branch, so a moved-but-undeclared one
+is adopted by <code class="code">worktrees::reconcile</code> — there is no window in which a <em>detached</em> orphan is
+stranded at the user path, which reconcile could neither adopt nor recreate. An attach
+failure (the branch is checked out elsewhere) leaves the slot cleanly detached and reusable.</p>
+<p class="docs-note">A promote never clobbers an existing <code class="code">&lt;code&gt;/&lt;name&gt;</code>: that is <code class="code">Promotion::Cold(Conflict)</code>.
+An empty pool is <code class="code">Promotion::Cold(Empty)</code>. Neither is an error — both tell the realizer to
+cold-create, which is what makes the warm and cold paths interchangeable.</p>
+</div>
+</section>
+
+<section class="docs-section" id="serialization">
+<header>
+<h2 class="h2">Serialization</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Every per-root git writer runs on that root's lane in the daemon — reconcile (promote
+included), sync, fill, remove, worktree ops, and doctor's converge. <code class="code">grove-ops</code> does not enforce this: its
+<code class="code">flock</code> serializes the manifest, deliberately not git, and two concurrent <code class="code">git worktree add</code>s
+on one root race an index lock. <strong>The lane is the caller's to supply</strong>; a concurrent caller
+that does not serialize per root loses an invariant this crate was written against. See
+<a class="link" href="architecture.html#daemon-lanes"><code class="code">architecture.html</code> § Lanes</a>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="where-this-is-exercised">
+<header>
+<h2 class="h2">Where this is exercised</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">crates/grove-ops/src/roots.rs</code>, <code class="code">worktrees.rs</code> and <code class="code">pool.rs</code> carry the unit suites —
+including <code class="code">remove_then_adopt_declares_nothing</code>, <code class="code">remove_keeps_the_root_declared_on_a_partial_delete</code>,
+<code class="code">reconcile_one_refuses_to_wipe_live_worktrees_when_trunk_is_missing</code>,
+<code class="code">reconcile_one_refuses_a_root_in_the_legacy_layout</code>,
+<code class="code">reconcile_one_refuses_to_clone_into_an_occupied_root</code>,
+<code class="code">reconcile_one_clones_into_a_code_dir_holding_only_a_ds_store</code>,
+<code class="code">reconcile_one_recovers_a_missing_trunk_past_the_roots_warm_pool</code>,
+<code class="code">remove_undeclares_and_deletes</code>,
+<code class="code">a_trunk_change_creates_the_new_checkout_and_adopts_the_old_one</code>,
+<code class="code">create_without_a_base_forks_the_new_branch_from_the_trunk</code>,
+<code class="code">a_pool_slot_is_excluded_from_list_and_reconcile_even_with_a_branch</code>,
+<code class="code">promote_attach_failure_strands_no_orphan_and_keeps_the_slot</code>,
+<code class="code">promote_never_clobbers_an_existing_worktree</code> and
+<code class="code">sync_reports_a_diverged_trunk_and_keeps_its_slots</code>. The end-to-end path — declare, realize,
+promote, sync, remove — is <code class="code">crates/grove-daemon/tests/scenario.rs</code>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="environment">
+<header>
+<h2 class="h2">The worktree environment</h2>
+</header>
+<div class="stack">
+<p class="docs-note">A root's worktrees are separate checkouts of one repository, so each starts without the
+untracked files a developer's trunk accumulated — <code class="code">.env</code>, a local config, a credentials
+file. <strong>Shares</strong> close that gap: a root declares files it wants present in every worktree,
+and grove materializes them.</p>
+<p class="docs-note"><code class="code">grove_ops::env</code> is the sole owner of share filesystem mutation. Nothing else in the tree
+creates, repoints, or removes a share.</p>
+<h3 class="h3" id="environment-declaring">Declaring</h3>
+<pre class="snippet"><code>[roots."owner/name".env]
+_.symlink = [".env", "config/app.json"]   # live: a link to the trunk's copy
+_.copy    = ["config/local.json"]         # seeded once: an independent real file
+</code></pre>
+<p class="docs-note">Two modes, and the asymmetry between them is the whole design:</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th></th><th><code class="code">_.symlink</code></th><th><code class="code">_.copy</code></th></tr></thead>
+<tbody>
+<tr><td>what lands in the worktree</td><td>a relative symlink to <code class="code">../…/&lt;trunk&gt;/&lt;p&gt;</code></td><td>a real file, seeded from <code class="code">&lt;trunk&gt;/&lt;p&gt;</code></td></tr>
+<tr><td>edits</td><td>shared — one file, every worktree sees it</td><td>independent per worktree</td></tr>
+<tr><td>re-run behaviour</td><td>self-heals: a stale grove link is repointed</td><td>seed-once: never overwritten</td></tr>
+<tr><td><code class="code">--fix</code></td><td>backs a conflict up, then links</td><td>no bearing — a copy has no wrong state to heal</td></tr>
+<tr><td>on undeclare</td><td>GC'd (it holds no data)</td><td>left in place (it is a real file the worktree owns)</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">A symlink is identifiable as grove's own — its target points under the trunk — so it can be
+healed and collected. A seeded copy is indistinguishable from a file the user wrote, so it
+is never overwritten and never collected. <code class="code">_.setup</code>, a per-worktree setup command, is
+reserved in the schema and not implemented.</p>
+<p class="docs-note">A path declared in both lists is materialized as a symlink: <code class="code">manifest::list_shares</code> gives
+<code class="code">_.symlink</code> precedence.</p>
+<h3 class="h3" id="environment-source-is-the-trunk">The source is the trunk</h3>
+<p class="docs-note">Every share's source is <code class="code">&lt;trunk&gt;/&lt;p&gt;</code> — the trunk checkout, resolved once per pass through
+<code class="code">roots::trunk</code> and named by its branch like every other checkout in the code dir (see
+<a class="link" href="#trunk">§ The trunk</a>). That is what makes a symlink share <em>live</em>: the worktree
+link and the operator's own trunk copy are the same file.</p>
+<p class="docs-note">A source pass runs first, per declared share, and creates <code class="code">&lt;trunk&gt;/&lt;p&gt;</code> empty when it is
+missing. A real file or a pre-made directory already there <strong>is</strong> the source and is left
+alone.</p>
+<p class="docs-note" id="environment-d5"><strong>D5 — a user symlink at the source is read through, never replaced.</strong> A symlink where the
+source belongs is the user's own choice of source (<code class="code">&lt;trunk&gt;/.env → ~/secrets/env</code>), and
+grove respects it: a <code class="code">_.symlink</code> share reads <em>through</em> it (worktree → <code class="code">&lt;trunk&gt;/&lt;p&gt;</code> → the
+user's target), and a <code class="code">_.copy</code> share's <code class="code">NOFOLLOW</code> source open refuses it downstream, so the
+copy is reported per worktree rather than silently following a redirect. Only a non-file,
+non-dir, non-symlink oddity (a fifo, a socket) is replaced, and only because it sits inside
+the trunk, which is grove's domain.</p>
+<h3 class="h3" id="environment-detect-fix">Detect → fix</h3>
+<p class="docs-note">Per declared share <code class="code">&lt;p&gt;</code>, per present worktree. <code class="code">materialize</code> acts; <code class="code">diagnose</code> classifies
+identically and <strong>mutates nothing</strong> — a byte-for-byte filesystem snapshot is identical
+before and after, which is what <code class="code">--dry-run</code> promises and
+<code class="code">diagnose_mutates_nothing</code>/<code class="code">copy_diagnose_mutates_nothing</code> prove.</p>
+<h4 class="h3" id="environment-symlink"><code class="code">_.symlink</code></h4>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>state at <code class="code">&lt;wt&gt;/&lt;p&gt;</code></th><th>verdict</th><th><code class="code">materialize</code> (Safe)</th><th><code class="code">materialize</code> (Force)</th></tr></thead>
+<tbody>
+<tr><td>absent</td><td><code class="code">linked</code></td><td>create the relative link</td><td>same</td></tr>
+<tr><td>symlink → exactly <code class="code">../…/&lt;trunk&gt;/&lt;p&gt;</code></td><td><code class="code">ok</code></td><td>nothing</td><td>nothing</td></tr>
+<tr><td>symlink pointing <em>under</em> the trunk, wrong path</td><td><code class="code">repointed</code></td><td>repoint (temp + same-dir <code class="code">rename(2)</code>)</td><td>same</td></tr>
+<tr><td>symlink pointing elsewhere (foreign)</td><td><code class="code">conflict</code></td><td><strong>never touched</strong></td><td>back up, then link → <code class="code">created</code></td></tr>
+<tr><td>real file / directory / other</td><td><code class="code">conflict</code></td><td><strong>never touched</strong></td><td>back up, then link → <code class="code">created</code></td></tr>
+</tbody>
+</table>
+</div>
+<h4 class="h3" id="environment-copy"><code class="code">_.copy</code></h4>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>state at <code class="code">&lt;wt&gt;/&lt;p&gt;</code></th><th>verdict</th><th>action</th></tr></thead>
+<tbody>
+<tr><td>absent</td><td><code class="code">copied</code></td><td>seed from <code class="code">&lt;trunk&gt;/&lt;p&gt;</code></td></tr>
+<tr><td>symlink pointing under the trunk (a prior <code class="code">_.symlink</code> for this path)</td><td><code class="code">copied</code></td><td>replace — the link is data-free; this is the symlink → copy migration</td></tr>
+<tr><td>foreign symlink / real file / directory</td><td><code class="code">ok</code></td><td>leave it: the worktree owns it</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note"><code class="code">--fix</code> (<code class="code">Fix::Force</code>) is not in that table because it has no bearing on a copy. Seed-once
+means there is no wrong state to heal.</p>
+<h4 class="h3" id="environment-gc-on-undeclare">GC on undeclare</h4>
+<p class="docs-note">A worktree top-level entry that is a symlink to <code class="code">../&lt;trunk&gt;/&lt;name&gt;</code> for a <code class="code">&lt;name&gt;</code> no longer
+declared is an orphan and is removed (<code class="code">gc</code>). <code class="code">unlinkat</code> removes the <em>link</em>, never its
+target. A real file — including a <code class="code">_.copy</code>'s seeded file — or a symlink pointing anywhere
+else is left alone. GC is top-level only; nested-share GC is not implemented.</p>
+<h4 class="h3" id="environment-removal">Removal</h4>
+<p class="docs-note"><code class="code">worktrees::remove</code> never forces <code class="code">git worktree remove</code>, which refuses over untracked files —
+and a share the repo does not ignore is one. <code class="code">env::unlay</code> first takes back, at each declared
+share path, a grove-shaped link or a real file byte-identical to its trunk source: both are
+data-free. A path git tracks in that worktree (one <code class="code">git ls-files</code> for all share paths) is
+git's, never taken — in a clean worktree it always equals the trunk's, and unlinking it
+would read as a deletion that blocks the remove. An edited copy is the worktree's own and still blocks, as does any other
+untracked file; on that refusal the shares are materialized again. The trunk is never
+unlaid — its share paths are the sources.</p>
+<h4 class="h3" id="environment-statuses">Statuses</h4>
+<p class="docs-note"><code class="code">ShareStatus</code> is <code class="code">ok | created | linked | copied | repointed | conflict | gc | error</code>,
+pinned in <code class="code">contracts/wire-vocab.json</code> as <code class="code">share_status</code>. The would/did distinction is not
+carried in the status — <code class="code">diagnose</code> reuses <code class="code">linked</code>/<code class="code">repointed</code>/<code class="code">created</code>/<code class="code">gc</code> as
+"would-link", "would-repoint", and so on — because the renderer and the exit code branch
+only on <code class="code">conflict</code> and <code class="code">error</code>.</p>
+<p class="docs-note">The whole pass is best-effort: one bad share or one unopenable worktree pushes an <code class="code">error</code>
+row and never aborts the batch.</p>
+<h3 class="h3" id="environment-never-clobber">Never clobber</h3>
+<p class="docs-note">Only a symlink that is grove's <em>own</em> is ever touched. "Grove's own" is a purely lexical
+test on the link target — after any leading <code class="code">..</code> components, the first segment names the
+trunk — with no I/O and no canonicalization, so it cannot be steered by what is on disk.</p>
+<p class="docs-note">The test accepts one further name: <code class="code">.trunk</code>, the fixed directory a root still on the v1
+layout carries its trunk in. A link through it is grove's own, so the next materialize
+repoints it onto the branch-named trunk rather than reading it as a stranger's and leaving
+it (<code class="code">materialize_repoints_a_legacy_trunk_link</code>). That is the share half of what
+<code class="code">grove doctor --fix</code> migrates, and the only reason the name appears in this module.</p>
+<p class="docs-note">And one more, in one pass only: the old trunk, in the share pass <code class="code">converge_trunk</code> runs
+before it moves <code class="code">HEAD</code>, so links through the old trunk are repointed while they are still
+recognizably grove's, and each source missing from the new trunk is seeded from the old
+trunk's rather than created empty — a repointed link reads the same bytes, and a symlink
+source is carried as the same link — unless its relative target stays inside the trunk,
+where it would dangle, an error row asking for it to be re-created in the new trunk
+(<code class="code">a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk</code>). The pass is
+all-or-nothing: a dry run reads every seed first, so an old source that cannot be read is
+an error row with nothing seeded and no link moved, and <code class="code">HEAD</code> stays put for the next
+event to retry (<code class="code">an_unreadable_old_source_holds_the_trunk_change</code>). Every other pass knows
+only the declared trunk, so while a trunk change is refused a link through the old trunk
+is a <code class="code">conflict</code>, never repointed into whatever occupies the new trunk's directory
+(<code class="code">a_refused_trunk_change_leaves_links_through_the_old_trunk_alone</code>); and while the change
+is pending — <code class="code">HEAD</code> off the declared trunk — a source missing from the new trunk is an
+error row, never created empty for the next <code class="code">carry</code> to take as real.</p>
+<p class="docs-note">A real file, a directory, or a foreign symlink is reported as <code class="code">conflict</code> and left exactly
+as it was. <code class="code">grove doctor</code> exits <strong>5</strong> on any unresolved conflict, which makes it a usable
+CI gate even under <code class="code">--dry-run</code>.</p>
+<p class="docs-note"><code class="code">--fix</code> is the operator's explicit override, and it still does not destroy anything: the
+real file is <code class="code">renameat</code>'d to the first free <code class="code">&lt;leaf&gt;.grove-bak</code>, <code class="code">&lt;leaf&gt;.grove-bak-1</code>, …
+(never over a prior backup; no timestamp, because there is no clock at this layer and a
+stable suffix is more legible), and only then is the link created.</p>
+<p class="docs-note">The backup rename runs unlocked, so two concurrent realizers could race the backup name.
+In practice mutations for a root are serialized on that root's lane — distinct roots run in
+parallel but never share a worktree — and <code class="code">Force</code> is an explicit operator action.</p>
+<h3 class="h3" id="environment-security-posture">Security posture</h3>
+<p class="docs-note">Two independent gates, string and filesystem.</p>
+<p class="docs-note" id="environment-string-gate"><strong>The string gate</strong> is <code class="code">manifest::validate_share_path</code>, applied at <code class="code">list_shares</code>, so only
+canonical, traversal-free paths reach the materializer: relative, <code class="code">Normal</code> components only,
+no segment beginning with <code class="code">-</code>, no <code class="code">.</code>/empty/trailing-<code class="code">/</code> segments, and no dotted first
+segment once the path nests — the dot rule (<a class="link" href="#manifest-validation">§ Validation</a>), which keeps
+a share from reaching down into a dotted directory while leaving <code class="code">.env</code> a share like any
+other. Canonicality matters beyond traversal: the link pass and the GC pass derive paths
+differently, so a non-canonical stored string would let them disagree about the same share.</p>
+<p class="docs-note" id="environment-filesystem-gate"><strong>The filesystem gate</strong> is a dirfd-pinned <code class="code">O_NOFOLLOW</code> descent. Every component of a share
+path <em>within</em> the worktree is opened with <code class="code">openat(NOFOLLOW)</code> from a pinned dirfd, so a
+symlinked parent (<code class="code">config → /etc</code>) trips <code class="code">ELOOP</code> and can never redirect a write outside the
+worktree. <code class="code">open_dir_nofollow</code> is the only place a parent component is opened — the one place
+<code class="code">NOFOLLOW</code> could be forgotten. Classify and act share one pinned dirfd, which closes the
+lstat → create TOCTOU, and the leaf write is a relative-target temp plus a same-dir
+<code class="code">rename(2)</code> on that fd. The base worktree and trunk directories themselves sit under the
+grove-controlled <code class="code">$GROVE_HOME</code> and are opened <code class="code">NOFOLLOW</code> on their final component; their
+ancestors are grove's own, not attacker-influenced.</p>
+<p class="docs-note">No <code class="code">unsafe</code>, no <code class="code">libc</code> — the syscalls come from <code class="code">rustix</code>, and the workspace forbids
+<code class="code">unsafe_code</code>.</p>
+<p class="docs-note"><code class="code">materialize_refuses_a_destination_under_a_symlinked_parent</code>,
+<code class="code">copy_refuses_a_destination_under_a_symlinked_parent</code> and
+<code class="code">ensure_source_refuses_a_symlink_redirect_in_the_trunk</code> are the regression guards.</p>
+<h3 class="h3" id="environment-depth">Depth</h3>
+<p class="docs-note">Shares materialize <strong>only at canonical depth</strong> — a worktree that is a direct sibling of
+the trunk. The link target is built as one <code class="code">..</code> per path component plus <code class="code">&lt;trunk&gt;/&lt;p&gt;</code>,
+which is correct exactly one level under the code dir.</p>
+<p class="docs-note">Warm-pool slots therefore get no shares while they are slots: a slot lives at
+<code class="code">roots/&lt;slug&gt;/pool/slot-N</code>, outside the code tree altogether, so <code class="code">../&lt;trunk&gt;/&lt;p&gt;</code> resolves
+inside the pool rather than against the trunk — and the promote move would invalidate the
+link anyway. <code class="code">pool::promote</code> materializes <em>after</em> the move into the code dir, when the
+worktree has reached canonical depth, and the same relative target is then correct.
+<code class="code">fill_materializes_no_shares_in_slots</code> pins the negative half.</p>
+<h3 class="h3" id="environment-where-materialization-is-wired">Where materialization is wired</h3>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>call site</th><th>when</th><th>mode</th></tr></thead>
+<tbody>
+<tr><td><code class="code">worktrees::create</code></td><td>a cold worktree checkout, right after <code class="code">git worktree add</code></td><td><code class="code">Fix::Safe</code>, best-effort</td></tr>
+<tr><td><code class="code">roots::reconcile_one</code></td><td>after a root's worktrees converge</td><td><code class="code">Fix::Safe</code>, best-effort</td></tr>
+<tr><td><code class="code">pool::promote</code></td><td>after the slot is moved to canonical depth and declared</td><td><code class="code">Fix::Safe</code></td></tr>
+<tr><td><code class="code">doctor::run</code></td><td>the operator's explicit pass</td><td><code class="code">diagnose</code> under <code class="code">--dry-run</code>; <code class="code">Fix::Force</code> under <code class="code">--fix</code>, else <code class="code">Fix::Safe</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">The first three are best-effort: a share hiccup must never fail a checkout or a root's
+reconcile, because doctor and the next reconcile retry it. Doctor is the pass whose result
+an operator reads, so its report is the answer.</p>
+<p class="docs-note">Only <strong>present</strong> worktrees are visited (<code class="code">worktrees::list</code>, filtered on <code class="code">present</code>), and the
+trunk — the share <em>source</em> — is never treated as one of them. A root whose trunk is missing
+contributes a single <code class="code">error</code> row — "trunk missing — clone/realize the root first" — rather
+than a per-share pile.</p>
+<h3 class="h3" id="environment-report">The report</h3>
+<p class="docs-note"><code class="code">ShareOutcome { slug, worktree?, path, status, reason? }</code> is one row per share per
+location; <code class="code">worktree</code> is absent for a source-level row. It is the <code class="code">report</code> array of
+<code class="code">POST /api/doctor</code> and of the offline <code class="code">grove doctor</code>, and <code class="code">reason</code> carries the prose for a
+conflict or an error.</p>
+<p class="docs-note"><code class="code">grove doctor</code>'s verdict comes from this report and nothing else: any <code class="code">error</code> row exits 1,
+otherwise N unresolved conflicts exit 5, otherwise success. Doctor's git-plumbing checks
+(<a class="link" href="api.html#doctor"><code class="code">api.html</code> § Doctor</a>) are report-only and exit-neutral.</p>
+</div>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>
