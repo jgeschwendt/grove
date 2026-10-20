@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>grove — architecture</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M8 3v10M8 7l-3-2M8 9l3-2' stroke='white' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body data-page="architecture">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.810,87.810,0,0,1,16,10.54V195.830a87.810,87.810,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.090,103.090,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+<symbol id="ph-tree" viewBox="0 0 256 256" fill="currentColor"><path d="M198.1,62.6a76,76,0,0,0-140.2,0A72.27,72.27,0,0,0,16,127.8C15.89,166.62,47.36,199,86.14,200A71.68,71.68,0,0,0,120,192.49V232a8,8,0,0,0,16,0V192.49A71.45,71.45,0,0,0,168,200l1.86,0c38.78-1,70.25-33.36,70.14-72.18A72.26,72.26,0,0,0,198.1,62.6ZM169.45,184a55.61,55.61,0,0,1-32.52-9.4q-.47-.3-.93-.57V132.94l43.58-21.78a8,8,0,1,0-7.16-14.32L136,115.06V88a8,8,0,0,0-16,0v51.06L83.58,120.84a8,8,0,1,0-7.16,14.32L120,156.94V174q-.47.27-.93.57A55.7,55.7,0,0,1,86.55,184a56,56,0,0,1-22-106.86,15.9,15.9,0,0,0,8.05-8.33,60,60,0,0,1,110.7,0,15.9,15.9,0,0,0,8.05,8.33,56,56,0,0,1-22,106.86Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-tree" /></svg>
+    grove <small>· architecture</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">Architecture</p>
+  <p class="lead docs-lead">Grove cultivates git worktrees. <code class="code">manifest.toml</code> declares desired state, git on disk is
+actual state, and grove converges actual toward desired — additively, never destroying a
+human's or an agent's work.</p>
+  <p class="docs-note">One Rust workspace, one shipped executable. <code class="code">grove serve</code> <em>is</em> the daemon; every other
+subcommand is the CLI. A UI lives outside this repo and reads the same state through
+the HTTP API.</p>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#four-crates">four crates</a>
+    <a class="pill" href="#files-are-authoritative">files are authoritative</a>
+    <a class="pill" href="#one-realizer-ever">one realizer, ever</a>
+    <a class="pill" href="#daemon">daemon</a>
+    <a class="pill" href="#wire-contract">wire contract</a>
+    <a class="pill" href="#clock-seam">clock seam</a>
+    <a class="pill" href="#telemetry">telemetry</a>
+    <a class="pill" href="#testing-and-gates">testing and gates</a>
+    <a class="pill" href="#architecture-graph">architecture graph</a>
+    <a class="pill" href="index.html">design</a>
+    <a class="pill" href="api.html">api</a>
+    <a class="pill" href="deployment.html">deployment</a>
+    <a class="pill" href="engine.html">engine</a>
+    <a class="pill" href="updates.html">updates</a>
+    <a class="pill" href="worktrees.html">worktrees</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="four-crates">
+<header>
+<h2 class="h2">The four crates</h2>
+</header>
+<div class="stack">
+<pre class="tree"><code>crates/
+├── grove-ops     # the domain layer: manifest · git · env · roots · worktrees · pool
+│                 #   · doctor · clock · wire · error · telemetry · testfix
+├── grove-api     # the shared HTTP contract: envelope, route bodies, event vocabulary
+├── grove-daemon  # tokio/axum: routes, boot state, guards, lanes, engines, watcher,
+│                 #   event bus, log ring, the read surface
+└── grove         # the CLI + `grove serve` + process custody + self-update
+</code></pre>
+<p class="docs-note">Dependencies run one way: <code class="code">grove-ops</code> ← <code class="code">grove-api</code> ← <code class="code">grove-daemon</code> ← <code class="code">grove</code>. <code class="code">grove</code>
+also depends on <code class="code">grove-ops</code> and <code class="code">grove-api</code> directly, so the offline realizer and the
+API client speak the same types the daemon serves. Edition 2024, resolver 3,
+<code class="code">unsafe_code = "forbid"</code> workspace-wide, <code class="code">clippy::pedantic</code> warn-by-default with named
+opt-outs (<code class="code">Cargo.toml</code>).</p>
+<p class="docs-note"><code class="code">grove-ops</code> is a library only — no subprocess, no framing, no handshake. The CLI, the
+daemon's lanes, and the offline realizer all call it in-process.</p>
+</div>
+</section>
+
+<section class="docs-section" id="files-are-authoritative">
+<header>
+<h2 class="h2">Files are authoritative</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Desired state is <code class="code">manifest.toml</code>; actual state is git on disk. There is no database and
+no second source of truth. Everything the daemon holds in memory is a cache:</p>
+<ul class="claims stack" role="list">
+<li>a root's engine status (<code class="code">unknown | missing | ready | degraded | cloning | unavailable</code>)
+is re-derived from disk on every roots-changed event, and from scratch on restart;</li>
+<li>the warm-pool count is a hint — <code class="code">pool.fill</code> re-observes disk before it mutates, so a
+stale hint costs at most one no-op fill;</li>
+<li>the log ring is a bounded tail of what this process said, not a record.</li>
+</ul>
+<p class="docs-note">A daemon may be killed and restarted with only the filesystem intact. Nothing depends on
+process continuity, and an abandoned clone is re-derived from disk on the next boot.</p>
+<p class="docs-note">Reading actual state means reading both of a root's directories, not the one entry the
+realizer came for. Grove keeps them apart on purpose: <code class="code">roots/&lt;slug&gt;/</code> holds everything
+grove owns — the bare, the warm pool, the in-flight-clone marker — and <code class="code">code/&lt;slug&gt;/</code>, the
+root's <em>code dir</em>, holds checkouts and only checkouts. A root carrying a superseded layout
+(its bare inside the code dir) and a root whose code dir already holds somebody's files
+both read as <em>missing</em> to the clone arm's probes, and cloning either would lay a second
+root down beside what is there.
+Realization refuses both instead, naming what it found: reconcile adds and never deletes,
+so the four answers a declared-but-absent root can get are two refusals, a trunk recovery
+and a clone (<a class="link" href="worktrees.html#root-realization"><code class="code">worktrees.html</code> § Root realization</a>). A refusal is a <code class="code">failed</code> outcome, so
+the daemon degrades that root and waits; <code class="code">grove doctor --fix</code> migrates a legacy root in
+place, and the engine re-derives it from disk.</p>
+<p class="docs-note">The manifest is edited format-preservingly through <code class="code">toml_edit</code>, under an exclusive
+advisory <code class="code">flock</code> on a sibling <code class="code">manifest.toml.lock</code> — never on the manifest itself, which
+a write replaces by rename, so a lock on its inode would not survive its own
+publication — and canonicalized (roots sorted by slug, worktrees by name, one blank line
+between tables) on both grove's own writes and a human's hand-edit. <code class="code">grove-ops::manifest</code>
+is its sole owner; the CLI edits it offline and the daemon edits it in-process.</p>
+</div>
+</section>
+
+<section class="docs-section" id="one-realizer-ever">
+<header>
+<h2 class="h2">One realizer, ever</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Declaration is universal — the manifest is written by whoever runs the command.
+Realization is not: it belongs to a running daemon whenever one answers, and to the CLI
+only when none does.</p>
+<p class="docs-note">Every command that <em>delegates</em> a state change probes <code class="code">GET /api/health</code> first and reads
+the answer three ways (<code class="code">grove::api::Reachability</code>):</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th></th><th><code class="code">Up</code> — a daemon answered</th><th><code class="code">Busy</code> — connected, no answer in time</th><th><code class="code">Offline</code> — connection refused</th></tr></thead>
+<tbody>
+<tr><td><code class="code">clone add</code> · <code class="code">tree add</code></td><td>declare, then <code class="code">POST /api/roots/reconcile</code></td><td>declare only</td><td>realize in-process</td></tr>
+<tr><td><code class="code">clone remove</code> · <code class="code">tree remove</code></td><td>delegate to the API</td><td><strong>refuse</strong>, exit 4</td><td>remove in-process</td></tr>
+<tr><td><code class="code">doctor</code></td><td><code class="code">POST /api/doctor</code></td><td>error, exit 4</td><td>run in-process</td></tr>
+<tr><td><code class="code">sync</code></td><td><code class="code">POST /api/roots/sync</code> (accept-only)</td><td><strong>refuse</strong>, exit 4</td><td><code class="code">roots::sync</code> in-process</td></tr>
+<tr><td><code class="code">tree list</code></td><td>the daemon's snapshot, else the disk</td><td>the disk</td><td>the disk</td></tr>
+<tr><td><code class="code">apply</code></td><td>always local</td><td>always local</td><td>always local</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">Only a connection-level failure means "no daemon". A timeout, or any other post-connect
+error, means something is there and slow — realizing in-process against it would race
+that daemon into a dual clone. A destructive op has no declare-only analogue, so <code class="code">Busy</code>
+refuses outright rather than guessing.</p>
+<p class="docs-note"><code class="code">sync</code> refuses on <code class="code">Busy</code> for the same reason a remove does, arrived at from the other
+side: it is a git <em>write</em> on the root (fetch, fast-forward, prune stranded warm slots),
+so there is nothing to merely declare and fetching here would put a second writer in a
+root whose daemon may be mid-reconcile. On <code class="code">Up</code> it delegates without waiting — the
+daemon's sync is accept-only — so the outcome is read from <code class="code">grove tree list</code> or the event
+stream rather than returned; offline it runs <code class="code">roots::sync</code> here and prints the report the
+delegating arm cannot produce. A diverged or dirty trunk is exit 0 either way: carried
+law 9 makes it a report, not a failure, and the two arms must not disagree about a state
+only one of them can see.</p>
+<p class="docs-note"><code class="code">tree list</code> is the row that never fails on the daemon's account: a read has no realizer
+to race, so a snapshot that does not arrive — or whose row the daemon marks
+<code class="code">unavailable</code> — falls back to the disk rather than reporting the daemon's empty list as
+an answer.</p>
+<p class="docs-note"><code class="code">apply</code> is the deliberate exception, and the only one: it probes nothing and realizes in
+this process whatever the manifest declares. It <em>is</em> the offline realizer, exposed as a
+command — an operator who types it is reaching for the local one. The cost is that it
+opts out of the guarantee the rest of the table buys: with a daemon up, <code class="code">grove apply</code>
+drives <code class="code">roots::reconcile_one</code> on roots whose engine may be mid-reconcile, off any lane,
+which is exactly the concurrent-caller hazard <code class="code">grove-ops</code> warns about (<code class="code">lm:lane-is-callers</code>,
+<a class="link" href="worktrees.html#serialization"><code class="code">worktrees.html</code> § Serialization</a>). It is carried as a hazard on <code class="code">crates/grove</code> rather
+than as a safe path; on a box with a daemon, <code class="code">grove clone add</code> / <code class="code">POST /api/roots/reconcile</code>
+is the gated way to ask for the same convergence.</p>
+<p class="docs-note">Landmarks: <code class="code">grove::commands</code> (<code class="code">stele:landmark single-realizer</code>) and
+<code class="code">grove::api::ApiClient::reachable</code>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="daemon">
+<header>
+<h2 class="h2">The daemon</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">grove serve</code> builds a multi-thread tokio runtime, installs a <code class="code">tracing</code> subscriber with
+two sinks (stderr, and the daemon's log ring), binds, signals readiness, and serves until
+the shutdown route drains the accept loop. Binding, readiness and serving are three
+separate steps: a port-0 bind must report the address it got, and readiness is the
+caller's signal — nothing inside the daemon may declare itself ready.</p>
+<h3 class="h3" id="daemon-lanes">Lanes — per-root serialization</h3>
+<p class="docs-note"><code class="code">grove-ops</code> was written against a single-git-writer-per-root invariant and does not
+enforce it; its <code class="code">flock</code> serializes the <em>manifest</em>, deliberately not git. So every
+git-writing op for a root — reconcile, sync, fill, promote, remove, worktree ops, doctor's
+converge — goes through that root's lane, and only one runs at a time. Different roots run
+in parallel. A lane is a tokio task; the work itself runs on <code class="code">spawn_blocking</code>, because
+<code class="code">grove-ops</code> is synchronous.</p>
+<p class="docs-note">Three queues, drained strictly in order, with no preemption of an op already running:</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>tier</th><th>what</th><th>depth</th><th>shed behaviour</th></tr></thead>
+<tbody>
+<tr><td><code class="code">Foreground</code></td><td>a mutation a user is waiting on: remove, promote, doctor converge</td><td>256</td><td>overflow → <code class="code">LaneError::Busy</code> (HTTP 503 <code class="code">unavailable</code>)</td></tr>
+<tr><td><code class="code">Read</code></td><td>the git reads a snapshot row needs</td><td>16</td><td>overflow → <code class="code">Busy</code>; a read whose caller has given up is dropped at the head of the lane</td></tr>
+<tr><td><code class="code">Background</code></td><td>the engine's convergence: reconcile, sync, fill</td><td>unbounded</td><td>coalesced desired state — at most one outstanding per root per kind, so it cannot grow</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">Reads earn a tier of their own because they arrive from <em>polling</em> — one lane job per root
+per snapshot, on every <code class="code">GET /api/roots</code>, every <code class="code">/api/events</code> connect and every bus-lag
+resync. Sharing the mutation queue let a dashboard shed a <code class="code">roots/remove</code> with 503
+<code class="code">unavailable</code>. A read whose caller has already gone is abandoned; a mutation runs to
+completion however bored its caller got.</p>
+<p class="docs-note">Lanes spawn lazily and reap themselves after 60 s idle. The reap and a concurrent submit
+both hold the registry lock across look-up-and-enqueue / re-check-and-unregister, so no
+job is ever handed to a lane that has decided to die. <code class="code">Lanes::quiesced</code> counts accepted-
+and-unfinished jobs so a drain can ask whether any git write is still in flight.</p>
+<h3 class="h3" id="daemon-engine">Engine — one driver per declared root</h3>
+<p class="docs-note">One task per root, owning that root's status cache, its single background slot, and its
+pool hint. At most one of reconcile / sync / fill is in flight, chosen in that priority
+order, with every condition re-evaluated as level-triggered state on each completion. No
+timers anywhere: a failure degrades one root, logs, and waits — the next event is the
+retry. See <a class="link" href="engine.html"><code class="code">engine.html</code></a>.</p>
+<p class="docs-note"><code class="code">engine::RootSet</code> owns the map from declared slug to running engine. It subscribes to the
+event bus and reconciles the map on every <code class="code">roots_changed</code>, so anything that publishes that
+event updates the engines for free.</p>
+<h3 class="h3" id="daemon-watcher">Watcher — discover and announce</h3>
+<p class="docs-note">One task, three triggers, one job. The triggers are the HTTP nudge
+(<code class="code">POST /api/roots/reconcile</code>, and the poke a root removal sends after itself), an optional
+<code class="code">notify</code> watch on <code class="code">$GROVE_HOME/manifest.toml</code>, and one announcement at boot. The job is
+<code class="code">roots::adopt</code> — declare any undeclared on-disk bare, <strong>never clone</strong> — then read the
+declared set and publish <code class="code">roots_changed</code>. Bursts are collapsed by a 150 ms debounce with
+single-in-flight-plus-pending coalescing.</p>
+<p class="docs-note">The nudge is the reliable path; the filesystem watch is opportunistic coverage for what
+the CLI cannot tell the daemon about (a hand-edit, a git-synced manifest). It is off in
+<code class="code">Config::new</code> — every test drives the nudge — and on in <code class="code">Config::from_env</code>
+(<code class="code">GROVE_MANIFEST_FS_WATCH=0</code> turns it off in production). A watcher that fails to arm
+logs a warning; it never fails the boot.</p>
+<p class="docs-note">The watcher never clones, and an engine never reads the manifest for anyone but itself.</p>
+<h3 class="h3" id="daemon-events-and-logs">Events and logs — two channels, one wire</h3>
+<p class="docs-note"><code class="code">events::EventBus</code> is a bounded (256) tokio <code class="code">broadcast</code> carrying the four <strong>state</strong> events:
+<code class="code">roots_changed</code>, <code class="code">root_sync_changed</code>, <code class="code">task_started</code>, <code class="code">task_finished</code>. Every one is
+level-triggered — "something changed, re-read it" — so a subscriber that falls behind
+loses freshness, never correctness: it is told it lagged and answers by re-reading the
+world. <code class="code">EventBus::publish</code> debug-asserts <code class="code">Event::is_state</code>, so a snapshot or a log line
+cannot reach the bus.</p>
+<p class="docs-note"><code class="code">logs::LogRing</code> is a separate channel: a bounded ring of the last 500 lines plus a
+broadcast of each as it lands, fed by a <code class="code">tracing</code> layer the <em>process</em> installs. A log line
+is not level-triggered — a dropped one is gone — so sharing the bus would let a chatty
+minute evict pending state events and leave a UI stale for the wrong reason. The layer
+records a fixed shape (level, target, message) plus only the whitelisted fields grove's own
+macros key on, each rendered through a redactor that strips URL userinfo; anything else is
+dropped before it can reach a subscriber. Capture level is <code class="code">GROVE_LOG_RING</code> (default
+<code class="code">info</code>), separate from <code class="code">GROVE_LOG</code>, which is what the process writes to stderr.</p>
+<p class="docs-note"><code class="code">stream</code> is the read surface: <code class="code">snapshot()</code> assembles the one <code class="code">Snapshot</code> shape served both
+as <code class="code">GET /api/roots</code> and as the opening frame of <code class="code">GET /api/events</code>, and <code class="code">pump</code> produces the
+stream — snapshot, then every state event, every log line, and a heartbeat comment every
+15 s of silence, read off the clock seam.</p>
+<h3 class="h3" id="daemon-boot-state-and-guards">Boot state and guards</h3>
+<p class="docs-note"><code class="code">booting → ready → stopping</code>, with a sticky <code class="code">degraded(reason)</code> beside it. <code class="code">mark_ready</code>
+never clears a degrade: a fault recorded while the process was coming up must survive the
+unconditional post-boot ready signal, or the self-update health gate would accept the
+bundle that broke it. <code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain
+<em>is</em> draining.</p>
+<p class="docs-note">Three middleware layers wrap every route, host outermost so it runs first:</p>
+<ul class="claims stack" role="list">
+<li id="daemon-host"><strong>Host</strong> 403s (<code class="code">forbidden</code>) any request whose <code class="code">Host</code> is not <code class="code">localhost</code>, <code class="code">127.0.0.1</code>,
+<code class="code">::1</code> or the bind address — reads and the event stream included, so a page rebound to
+127.0.0.1 cannot read the snapshot. A missing or unparseable <code class="code">Host</code> is refused.</li>
+<li id="daemon-readiness"><strong>Readiness</strong> 503s every non-whitelisted <code class="code">/api</code> path while <code class="code">stopping</code> or <code class="code">degraded</code>.
+The whitelist is exactly <code class="code">/api/health</code> and <code class="code">/api/daemon/shutdown</code> — health so the state
+stays observable, shutdown so a late or repeated stop is not itself refused. <code class="code">booting</code>
+is deliberately not gated.</li>
+<li id="daemon-mutation"><strong>Mutation</strong> passes safe methods (GET/HEAD/OPTIONS) untouched. For the rest it allows a
+<strong>missing</strong> <code class="code">Origin</code> (the CLI and every non-browser client send none) or an origin whose
+host is one of the fixed set <code class="code">localhost</code>, <code class="code">127.0.0.1</code>, <code class="code">::1</code>; anything else is 403
+<code class="code">forbidden</code>. The list is fixed, never the request's own <code class="code">Host</code> — that is what makes it a
+DNS-rebinding defense.</li>
+</ul>
+<p class="docs-note">All three, plus the loopback bind refusal in <code class="code">config::guard_loopback</code>, are compensating controls
+for an unauthenticated API and retire only when served-mode auth lands.</p>
+<h3 class="h3" id="daemon-drain">Drain</h3>
+<p class="docs-note"><code class="code">POST /api/daemon/shutdown</code> marks stopping <em>before</em> it answers, then schedules the accept
+loop to stop after a 100 ms grace so the acknowledgement reaches the client. <code class="code">Daemon::serve</code>
+then spends one budget (<code class="code">drain_budget</code>, default 5 s, armed off the clock seam at the
+trigger) in two phases: open responses first, then lane work via <code class="code">Lanes::quiesced</code>. What
+does not land in either phase is logged by slug and abandoned.</p>
+<p class="docs-note">The bound is not a nicety. An SSE response finishes only when its body stops being written,
+so one peer that stopped reading would hold <code class="code">grove serve</code> open forever and make every stop
+end at SIGTERM. The default sits under the CLI's own 10 s stop grace — pinned from both
+sides by <code class="code">the_drain_budget_fits_inside_the_cli_stop_grace</code> and
+<code class="code">the_budgets_stay_in_their_intended_order</code>.</p>
+<h3 class="h3" id="daemon-process-custody">Process custody</h3>
+<p class="docs-note">Custody lives in the CLI (<code class="code">grove::server::ServerControl</code>), not the daemon: <code class="code">grove on</code>
+launches the grove binary detached as <code class="code">&lt;launcher&gt; serve</code>, tracks it by
+<code class="code">$GROVE_HOME/grove.pid</code>, and gates readiness on <code class="code">GET /api/health</code>. <code class="code">grove off</code> drains over
+the API, then escalates SIGTERM → SIGKILL. A pid is re-verified before every escalation
+signal — liveness plus a start-time identity token — so a recycled pid reads as stale
+rather than as grove still running. A bind held with no pid file refuses the start rather
+than adopting a stranger. <code class="code">grove reboot</code> is off then on.</p>
+</div>
+</section>
+
+<section class="docs-section" id="wire-contract">
+<header>
+<h2 class="h2">The wire contract</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">grove-api</code> is the one place the HTTP shape is written down, and both ends compile against
+it. Three properties it exists to hold:</p>
+<ol class="steps">
+<li id="wire-contract-one-serializer"><strong>One serializer.</strong> <code class="code">Envelope</code> is the only thing that writes <code class="code">{ok, …}</code>.</li>
+<li id="wire-contract-discrimination-on-ok"><strong>Discrimination on <code class="code">ok</code>.</strong> The envelope is tagged on its boolean, not on which of
+<code class="code">data</code>/<code class="code">error</code> happens to be present, and a body that disagrees with its own tag is a
+decode error.</li>
+<li id="wire-contract-typed-vocabularies"><strong>Typed vocabularies.</strong> Error codes, root status, sync notes, boot status, event names
+and the engine's policy curations are enums, declared through the <code class="code">wire_enum!</code> macro so
+the variant list, the serde spelling and the <code class="code">ALL</code> array are one piece of text.</li>
+</ol>
+<p class="docs-note"><code class="code">contracts/wire-vocab.json</code> is the fixture: every vocabulary plus a key set per payload
+shape, all derived from the producing types by <code class="code">crates/grove-api/tests/wire_vocab.rs</code>. Each
+key set is one object deep, so a nested shape carries its own group (<code class="code">git_status_keys</code>,
+<code class="code">log_field_keys</code>) — one added under an existing shape and not given a group is pinned by
+nothing. A rename fails that test; re-bless with
+<code class="code">BLESS_WIRE=1 cargo test -p grove-api</code>. Nothing outside this repo reads the fixture — the
+dashboard decodes the wire by hand — so the guard is grove-side only: a rename is caught
+here, deliberately re-blessed here, and still reaches a consumer as a runtime miss.
+The byte-for-byte JSON — which optionals are omitted, how each event tags itself — is
+pinned by round-trip tests beside the types in <code class="code">grove-api</code>. Details in <a class="link" href="api.html"><code class="code">api.html</code></a>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="clock-seam">
+<header>
+<h2 class="h2">The clock seam</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">grove_ops::clock</code> is the one place <code class="code">Instant::now()</code> is called. Every wall-clock budget is
+a <code class="code">Deadline</code> read off an injected <code class="code">Clock</code>: production wires <code class="code">SystemClock</code>, tests wire
+<code class="code">TestClock</code> and step time by hand, so a "60 s idle reap" test costs milliseconds and cannot
+flake on a loaded machine. <code class="code">Deadline</code> is absolute rather than a re-based <code class="code">Duration</code>, so
+handing it down a call chain cannot multiply the budget by the chain's depth.</p>
+<p class="docs-note">The seam is enforced, not conventional:
+<code class="code">harness_meta::every_wall_clock_read_goes_through_the_clock_seam</code> fails the build the moment
+an <code class="code">Instant::now()</code> appears outside <code class="code">clock.rs</code>.</p>
+<p class="docs-note"><code class="code">tokio::time</code> has a clock of its own, so the daemon's two timers do not use it directly:
+<code class="code">wait::until</code> / <code class="code">wait::within</code> poll the injected clock on a 50 ms tick, which is what lets
+a fake-clock <code class="code">advance()</code> end a 60 s budget inside a test.</p>
+</div>
+</section>
+
+<section class="docs-section" id="telemetry">
+<header>
+<h2 class="h2">Telemetry</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">grove_ops::telemetry</code> carries an OpenTelemetry span exporter behind <code class="code">GROVE_TELEMETRY</code>,
+with a redacting URL helper and the span attribute discipline (<code class="code">grove.op</code>, <code class="code">grove.outcome</code>,
+<code class="code">grove.slug</code>, redacted <code class="code">grove.url</code>). The transport is a simple (synchronous) span exporter
+over blocking HTTP, and it has no default destination: with <code class="code">GROVE_TELEMETRY</code> on but
+<code class="code">GROVE_OTLP_TRACES_ENDPOINT</code> unset, <code class="code">init</code> hands back the same no-op handle it hands back
+when telemetry is off. A daemon that wires this up wants a batch exporter first, so an
+export cannot sit on a runtime thread.</p>
+<p class="docs-note" id="telemetry-no-binary-in-this-tree-calls-telemetry-init-today"><strong>No binary in this tree calls <code class="code">telemetry::init</code> today</strong> — neither <code class="code">grove serve</code> nor any
+CLI dispatch path — so the module ships unwired: the daemon's observability is the
+<code class="code">tracing</code> subscriber (stderr plus the log ring) described above. The module's own doc
+comment still describes the daemon replacing the transport as a future step.</p>
+</div>
+</section>
+
+<section class="docs-section" id="testing-and-gates">
+<header>
+<h2 class="h2">Testing and gates</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">mise run check</code> is format plus lint; <code class="code">mise run test</code> is <code class="code">cargo nextest run --workspace</code>
+plus <code class="code">cargo test --doc --workspace</code>; <code class="code">mise run smoke</code> drives <code class="code">scripts/install.sh</code> and
+<code class="code">scripts/uninstall.sh</code> against a fixture release. CI runs exactly those three, plus the
+stele graph gate below.</p>
+<p class="docs-note">Two tiers, by naming convention: a test whose name begins with <code class="code">slow_</code> is excluded by the
+default nextest profile and included by <code class="code">NEXTEST_PROFILE=ci</code> (<code class="code">.config/nextest.toml</code>). The
+tier is visible at the call site and needs no registration anywhere.</p>
+</div>
+</section>
+
+<section class="docs-section" id="architecture-graph">
+<header>
+<h2 class="h2">The architecture graph</h2>
+</header>
+<div class="stack">
+<p class="docs-note">The repo carries a <a class="link" href="https://github.com/jgeschwendt/stele">stele</a> graph: one node per
+container and per crate, declared in that directory's <code class="code">AGENTS.md</code>, each with a purpose, the
+commands that prove it, and its invariants and hazards. Every claim is anchored to a
+<code class="code">// stele:landmark &lt;slug&gt;</code> comment (or a <code class="code">path#symbol</code>) in the code it governs. A claim
+proved by a <em>separate</em> test target names it in <code class="code">enforced_by:</code>; a claim proved by the inline
+<code class="code">mod tests</code> beside its own anchor names nothing, deliberately — <code class="code">enforced_by</code> exempts a
+claim from digest-staling, and the digest gate is the only thing watching a region whose
+tests live inside it. <code class="code">.stele/graph.lock</code> is the compiled
+graph; the <code class="code">&lt;!-- stele:begin router --&gt;</code> regions and <code class="code">.stele/index/</code> are projections of it.
+<code class="code">.steleignore</code> keeps <code class="code">plans/</code>, <code class="code">.github/</code> and <code class="code">.claude/</code> out of the scan.</p>
+<pre class="snippet"><code>stele check         # anchors resolve, dependencies match, every directory is routed,
+                    # freshness holds, documented commands still resolve
+stele emit --check  # the committed projections still match the lock
+stele build         # recompile the lock and re-stamp each claim's `verified` mark
+</code></pre>
+<p class="docs-note"><code class="code">check</code> and <code class="code">emit --check</code> run in the hk pre-push hook and in CI. <strong><code class="code">build</code> runs in
+neither</strong> — it re-stamps freshness, so a gate that ran it would launder staleness into a
+green tick. When <code class="code">check</code> reports a stale claim, re-read the anchored code, satisfy yourself
+the claim still holds, then <code class="code">stele build</code> by hand and commit the lock alongside the change
+that staled it.</p>
+<p class="docs-note"><code class="code">crates/grove-ops/tests/harness_meta.rs</code> is the meta-check that keeps the harness honest:
+every test file is reachable from <code class="code">mise run test</code>, CI runs the same gate as local, the
+install smoke is reachable from a gate, the slow tier is configured and inhabited, every
+wall-clock read goes through the seam, no scratch directory is parked in a <code class="code">static</code>, and no
+test hides behind <code class="code">#[ignore]</code>. It reads the <em>committed</em> tree via <code class="code">git ls-files</code> (through
+<code class="code">grove_ops::git::git_command</code>, so an inherited <code class="code">GIT_DIR</code> cannot redirect it) and refuses an
+inventory that does not contain itself.</p>
+</div>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>
