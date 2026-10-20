@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>grove — updates</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M8 3v10M8 7l-3-2M8 9l3-2' stroke='white' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body data-page="updates">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.810,87.810,0,0,1,16,10.54V195.830a87.810,87.810,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.090,103.090,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+<symbol id="ph-tree" viewBox="0 0 256 256" fill="currentColor"><path d="M198.1,62.6a76,76,0,0,0-140.2,0A72.27,72.27,0,0,0,16,127.8C15.89,166.62,47.36,199,86.14,200A71.68,71.68,0,0,0,120,192.49V232a8,8,0,0,0,16,0V192.49A71.45,71.45,0,0,0,168,200l1.86,0c38.78-1,70.25-33.36,70.14-72.18A72.26,72.26,0,0,0,198.1,62.6ZM169.45,184a55.61,55.61,0,0,1-32.52-9.4q-.47-.3-.93-.57V132.94l43.58-21.78a8,8,0,1,0-7.16-14.32L136,115.06V88a8,8,0,0,0-16,0v51.06L83.58,120.84a8,8,0,1,0-7.16,14.32L120,156.94V174q-.47.27-.93.57A55.7,55.7,0,0,1,86.55,184a56,56,0,0,1-22-106.86,15.9,15.9,0,0,0,8.05-8.33,60,60,0,0,1,110.7,0,15.9,15.9,0,0,0,8.05,8.33,56,56,0,0,1-22,106.86Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-tree" /></svg>
+    grove <small>· updates</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">Self-update and releases</p>
+  <p class="lead docs-lead">Grove updates by <strong>versioned directories plus an atomic symlink flip</strong>. Version
+directories are immutable once written; only <code class="code">current</code> ever moves, and it moves by
+<code class="code">rename(2)</code>. There is no sentinel state machine, no in-place swap, and no orphan
+trampoline — a failed download or extract leaves <code class="code">current</code> untouched, so a broken release
+cannot take a server down.</p>
+  <p class="docs-note">There is no update timer. <code class="code">grove up</code> is the whole story; grove polls nothing.</p>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#layout">layout</a>
+    <a class="pill" href="#grove-up">grove up</a>
+    <a class="pill" href="#bounce">bounce</a>
+    <a class="pill" href="#channels-and-sources">channels and sources</a>
+    <a class="pill" href="#installing">installing</a>
+    <a class="pill" href="#publishing">publishing</a>
+    <a class="pill" href="#command-surface-and-exit-codes">command surface and exit codes</a>
+    <a class="pill" href="#tests">tests</a>
+    <a class="pill" href="index.html">design</a>
+    <a class="pill" href="api.html">api</a>
+    <a class="pill" href="architecture.html">architecture</a>
+    <a class="pill" href="deployment.html">deployment</a>
+    <a class="pill" href="engine.html">engine</a>
+    <a class="pill" href="worktrees.html">worktrees</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="layout">
+<header>
+<h2 class="h2">The layout</h2>
+</header>
+<div class="stack">
+<pre class="tree"><code>$GROVE_INSTALL/                  # default ~/.local/share/grove
+├── versions/0.3.1/bin/grove     # immutable after write — one binary per release
+├── versions/0.4.0/bin/grove
+├── current  → versions/0.4.0    # the only mutation point
+├── previous → versions/0.3.1    # the rollback target
+├── channel                      # the release channel this box follows
+├── pending                      # a flip whose health gate has not answered
+└── update.lock                  # serializes concurrent `grove up`
+</code></pre>
+<p class="docs-note" id="layout-install-is-not-the-workspace"><strong>The install is not the workspace.</strong> Everything above is release state: disposable,
+regenerable, owned by <code class="code">grove up</code>, and knowing nothing about repos. <code class="code">$GROVE_HOME</code>
+(default <code class="code">~/.grove</code>) is the other root and holds the opposite — <code class="code">manifest.toml</code> and its
+lock, <code class="code">grove.lock</code>, <code class="code">grove.pid</code>, <code class="code">grove.log</code>, every checkout under <code class="code">code/</code>, and each repo's bare
+clone, pool and in-flight-clone marker under <code class="code">roots/</code>. Two
+lifecycles, two knobs: the install can be deleted and re-installed at will, the
+workspace is the most valuable tree on the box. Both are resolved once, in <code class="code">grove-ops</code>
+(<code class="code">install_home</code> and <code class="code">home</code>), and the CLI, the launcher and the daemon all read those
+resolutions rather than re-deriving either.</p>
+<p class="docs-note"><code class="code">grove</code> on PATH is a symlink to <code class="code">$GROVE_INSTALL/current/bin/grove</code>, so the flip retargets
+the whole install at once. A running process keeps its mapped binary, so a flip never
+disturbs the daemon that is up — the new version takes effect at the bounce.</p>
+<p class="docs-note">The bundle is one file in a <code class="code">bin/</code> directory. <code class="code">grove serve</code> <em>is</em> the daemon, so there is no
+second artifact and no embedded runtime; the launcher contract is
+<code class="code">$GROVE_INSTALL/current/bin/grove serve</code>.</p>
+<p class="docs-note"><code class="code">crates/grove/src/update/layout.rs</code> is the pure on-disk mechanism — no network, fully unit
+tested. <code class="code">mod.rs</code> orchestrates a run, with both side effects injected as seams (where
+bundles come from, how the server bounces), so the whole flow is testable against local
+fixtures. A file lock serializes concurrent <code class="code">grove up</code> invocations.</p>
+</div>
+</section>
+
+<section class="docs-section" id="grove-up">
+<header>
+<h2 class="h2"><code class="code">grove up</code></h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>recover any unproven flip
+  → resolve the version (--version, else the channel)
+  → fetch the bundle + its .sha256 sidecar
+  → verify the checksum
+  → install into versions/&lt;v&gt;/  (refusing a bundle with no bin/grove)
+  → flip current  (writes the pending marker first)
+  → bounce the server
+  → version-aware health gate
+  → healthy: clear pending, prune old versions; else roll back
+</code></pre>
+<p class="docs-note">Landmark: <code class="code">stele:landmark self-update-flip</code> in <code class="code">Updater::up</code>.</p>
+<p class="docs-note" id="grove-up-a-bundle-that-carries-no-bin-grove-never-becomes-current"><strong>A bundle that carries no <code class="code">bin/grove</code> never becomes <code class="code">current</code>.</strong> <code class="code">install_bundle</code> unpacks
+into a dot-prefixed staging dir (<code class="code">versions/.&lt;v&gt;.tmp</code>, never listed or accepted as a version),
+asserts the binary is there and fsyncs the tree, and only then renames it into
+<code class="code">versions/&lt;v&gt;</code> — moving any prior tree aside first, since <code class="code">rename(2)</code> cannot replace a
+non-empty dir — so reinstalling the version <code class="code">current</code> points at never strands it on a
+half-tree. A refused bundle leaves only the staging dir, which is removed; a crash between
+the two renames leaves the prior tree in <code class="code">versions/.&lt;v&gt;.old</code>, restored by the next install
+of <code class="code">&lt;v&gt;</code> before anything else touches it. The
+health gate cannot cover this: it is skipped whenever no server is running — the state of
+every first install, and of <code class="code">install.sh</code>'s hand-off on a clean machine — so a mis-packed
+release flipped <code class="code">current</code> onto an empty tree, exited 0, and left the operator's PATH
+symlink (<code class="code">current/bin/grove</code>) dangling with no <code class="code">grove</code> to roll back with.</p>
+<p class="docs-note" id="grove-up-gate-is-version-aware"><strong>The gate is version-aware.</strong> A 200 is not enough — a draining old server also answers,
+and a stale process still bound to the port would answer as a different version. The gate
+requires <code class="code">GET /api/health</code> to return a <em>ready</em> 200 whose <code class="code">version</code> is exactly the one just
+flipped to, polled up to 30 s (<code class="code">GROVE_HEALTH_GATE_SECS</code>; its floor is the 30 s <code class="code">grove on</code>
+ready timeout, because the bounce underneath it is a whole stop-and-start, and a gate
+shorter than the start it waits on would roll back every healthy release that merely booted
+slowly).</p>
+<p class="docs-note" id="grove-up-a-failed-gate-rolls-back-automatically"><strong>A failed gate rolls back automatically</strong>, and the outcome is distinguished: a rollback
+whose restored version comes back healthy is exit 7 (<code class="code">update</code>), while one whose restored
+version <em>also</em> fails to come back is exit 6 (<code class="code">unhealthy</code>) — the box is down, and that must
+not read as a routine rollback. A restart that errors outright is treated as a bad boot and
+rolls back too, rather than stranding <code class="code">current</code>.</p>
+<p class="docs-note">Pruning keeps the three newest version directories, plus whatever <code class="code">current</code> and
+<code class="code">previous</code> name, and is housekeeping only: a prune
+failure never fails a landed, healthy update.</p>
+<h3 class="h3" id="grove-up-pending-marker">The pending marker</h3>
+<p class="docs-note">The flip lands before the gate answers, so the owed verdict is written to disk first.
+<code class="code">Layout::flip_to</code> writes <code class="code">pending</code> naming the version <strong>and the direction</strong> before <code class="code">current</code>
+moves. A healthy (or not-running) verdict clears it; a rejection leaves it standing until
+the rollback it owes overwrites it with its own, so no instant has <code class="code">current</code> on a rejected
+version with no marker saying so. A rejection with nowhere to roll back keeps the forward
+marker, and the next <code class="code">grove up</code> re-gates that version instead of reporting "already on" it.
+Every gate follows the one rule — <code class="code">up</code>'s, the auto-rollback's recovery bounce, <code class="code">grove up --rollback</code>'s, and the re-gate below — so a re-gate that rejects again leaves the marker
+for the next <code class="code">grove up</code> too. A marker still naming <code class="code">current</code> at the start of the next <code class="code">grove up</code> is therefore proof that
+the last verdict on it was never a healthy one. A re-gate that rejects again blocks only a
+re-request of that same version, which exits 6 with the marker kept; any other target
+(<code class="code">--version &lt;fix&gt;</code>, or a channel that has moved on) goes forward past it to its own flip and
+gate, and on rejection the usual rollback.</p>
+<p class="docs-note">Gating <em>before</em> the flip is not an option: in served mode the bounce hands off to a
+supervisor that restarts whatever <code class="code">current</code> points at, so a pre-flip gate cannot be
+expressed at all.</p>
+<p class="docs-note">The direction is not decoration. <strong>Both</strong> movers of <code class="code">current</code> mark a flip pending — a
+rollback owes a gate exactly as a forward flip does — and a rollback's marker names the
+version that was just <em>proven</em>. <code class="code">Updater::recover_unproven_flip</code> distinguishes three states:</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>marker</th><th>what happened</th><th>recovery</th></tr></thead>
+<tbody>
+<tr><td>names something other than <code class="code">current</code></td><td>the process died before the rename; nothing moved, but <code class="code">current</code> may itself be unvouched (a forward flip off a rejected version)</td><td>do <strong>not</strong> flip; re-run the gate on <code class="code">current</code></td></tr>
+<tr><td>names <code class="code">current</code>, direction <code class="code">forward</code></td><td>the flip landed and no gate vouched for it (a crash, or a rejection with nowhere to roll back) — <code class="code">current</code> is unproven</td><td>roll back to the proven version (or, on a first install with nowhere to fall back to, keep <code class="code">current</code> and give it the gate it was owed)</td></tr>
+<tr><td>names <code class="code">current</code>, direction <code class="code">rollback</code></td><td><code class="code">current</code> is already the proven version, but no gate has vouched for it since the rollback</td><td>do <strong>not</strong> flip; re-run the owed gate</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">Reading a rollback marker as a forward flip would undo the rollback, land back on the
+release the gate rejected, then report "already on <code class="code">&lt;v&gt;</code>" and exit 0 with no bounce at all.</p>
+<p class="docs-note">Every arm re-runs the bounce, because whatever is <em>running</em> may still be the version
+the interrupted update was leaving behind. They pass <code class="code">ensure_running = false</code>: a marker on
+disk says nothing about whether this box runs a daemon at all, and force-starting one an
+operator deliberately stopped is not recovery.</p>
+<p class="docs-note">The idempotence shortcut ("grove is already on <code class="code">&lt;v&gt;</code>") is suppressed after a recovery that
+moved <code class="code">current</code>, for the same reason: exiting 0 there would launder an interrupted update
+into a no-op whose reported version is the one nothing has proven.</p>
+<p class="docs-note">Undoing a forward flip also drops <code class="code">previous</code>, which the swap left naming the undone version.
+<code class="code">up</code> then re-gates whatever it targets, and when that is the restored version itself, a
+flaky second gate would otherwise roll back onto the release nothing proved and force-start
+it.</p>
+<p class="docs-note"><code class="code">grove up --rollback</code> deliberately does <strong>not</strong> run the recovery first — after an
+interrupted update that command <em>is</em> the recovery, and rolling back twice would land on the
+unproven version it exists to escape. It flips to <code class="code">previous</code>, bounces, and maps an unhealthy
+or errored restart to exit 6.</p>
+</div>
+</section>
+
+<section class="docs-section" id="bounce">
+<header>
+<h2 class="h2">The bounce</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Whether the server is restarted at all is decided by three facts: is there a pid file, was
+<code class="code">ensure_running</code> requested, and does anything answer <code class="code">/api/health</code>. Only a fully stopped
+server — no pid, not force-starting, nothing answering — short-circuits to <code class="code">NotRunning</code> and
+skips the gate. A pid-less server that still answers is managed externally, so it is gated
+and auto-rolled-back like any other.</p>
+<p class="docs-note"><code class="code">GROVE_MODE=served</code> changes the restart to a plain stop: the substrate's supervisor brings
+the process back on whatever <code class="code">current</code> points at. Otherwise the bounce is <code class="code">grove off</code> then
+<code class="code">grove on</code>.</p>
+<p class="docs-note"><code class="code">ServerControl::from_env()</code> is resolved <em>before</em> anything is downloaded, so a bad
+<code class="code">GROVE_BIND</code> fails as the config error it is instead of being misread from inside the bounce
+as "the new version failed to start".</p>
+</div>
+</section>
+
+<section class="docs-section" id="channels-and-sources">
+<header>
+<h2 class="h2">Channels and sources</h2>
+</header>
+<div class="stack">
+<p class="docs-note">The channel a <code class="code">grove up</code> follows resolves as <code class="code">--channel</code> → <code class="code">GROVE_CHANNEL</code> →
+<code class="code">$GROVE_INSTALL/channel</code> → <code class="code">stable</code>. Only <code class="code">install.sh</code> writes that file, and it derives the
+value from the <em>resolved version's</em> prerelease suffix rather than from its own <code class="code">channel</code>
+input: a pinned <code class="code">install.sh v0.1.1-canary.2</code> runs with <code class="code">channel=stable</code> but is really a
+canary box, and keying off the input would strand it on stable. <code class="code">grove up --channel</code> is
+per-run and persists nothing.</p>
+<p class="docs-note">Against GitHub Releases, <code class="code">stable</code> is the <code class="code">releases/latest</code>
+redirect (which excludes prereleases) and any other channel is the highest
+<code class="code">v&lt;base&gt;-&lt;channel&gt;.&lt;N&gt;</code> prerelease, walked page by page (100 per page, 20 pages max) —
+releases come newest-first, so the highest of a channel lives on the first page that
+carries the channel at all.</p>
+<p class="docs-note"><code class="code">GROVE_INSTALL_BASE_URL</code> overrides the source:</p>
+<ul class="claims stack" role="list">
+<li>an <code class="code">https://</code> base → a flat <code class="code">&lt;base&gt;/&lt;version&gt;/&lt;target&gt;.tar.gz</code> (+ <code class="code">.sha256</code>) layout with
+<code class="code">&lt;base&gt;/latest</code> naming the current version;</li>
+<li>a plain <code class="code">http://</code> base → <strong>refused unless it targets loopback</strong> (<code class="code">127.0.0.1</code>,
+<code class="code">localhost</code>, <code class="code">::1</code>), so a MITM cannot redirect a self-update over cleartext. Any userinfo
+in the authority is refused outright — <code class="code">http://127.0.0.1@evil.com/x</code> targets evil.com
+while a naive host parse reads 127.0.0.1, and the loopback test seam never needs
+credentials. <strong>The same rule is re-applied to every redirect hop</strong>, not only to the base
+string: redirects follow (GitHub's <code class="code">releases/latest</code> and its asset download both need
+them), so a check on the base's spelling alone constrained the URL rather than where the
+bytes came from — a loopback base could 302 the fetch to any host over cleartext, and an
+<code class="code">https</code> base could be downgraded to <code class="code">http</code> mid-chain. <code class="code">install.sh</code> applies the rule too,
+because it runs before any grove binary exists to apply it;</li>
+<li>anything else → a local fixture directory, which is what the install smoke and
+<code class="code">install.sh</code>'s staging use.</li>
+</ul>
+<p class="docs-note">Downloads are capped: 256 MiB for a bundle, 8 MiB for a text body (the sidecar, the
+<code class="code">latest</code> file). The cap is read as <code class="code">cap + 1</code> bytes so "exactly at the limit" is
+distinguishable from "over", and an oversized body is refused rather than buffered.</p>
+<p class="docs-note"><code class="code">host_target</code> is <code class="code">&lt;arch&gt;-&lt;os&gt;</code>, matching <code class="code">scripts/release.sh</code> and <code class="code">scripts/install.sh</code>; an
+unsupported host is refused up front.</p>
+</div>
+</section>
+
+<section class="docs-section" id="installing">
+<header>
+<h2 class="h2">Installing</h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>bash scripts/install.sh                 # latest stable
+channel=canary bash scripts/install.sh  # latest prerelease of a channel
+bash scripts/install.sh v0.1.0          # a pinned tag
+</code></pre>
+<p class="docs-note"><code class="code">install.sh</code> is deliberately thin: platform detect, resolve the release on
+<code class="code">jgeschwendt/grove</code>, download the bundle, its checksum sidecar, a bootstrap <code class="code">grove</code> <strong>and
+the bootstrap's own sidecar</strong> into a staging directory, then hand off to <code class="code">grove up</code> with
+that directory as <code class="code">GROVE_INSTALL_BASE_URL</code>. The bootstrap's checksum is verified before it
+is made executable: it is the one asset the script <em>runs</em>, and the binary that verifies the tarball.
+Everything that touches the layout is unit-tested Rust; the
+GitHub fetch is the only logic that lives in bash, and it stages into the same local-dir
+source the smoke test and <code class="code">grove up</code> already understand.</p>
+<p class="docs-note">The releases are public, so the installer needs no credentials: it resolves and downloads
+anonymously. <code class="code">GH_TOKEN</code>/<code class="code">GITHUB_TOKEN</code>, when exported, is used only to lift GitHub's
+anonymous rate limit — the script then resolves and fetches through the REST API's asset
+endpoint instead of the plain <code class="code">releases/download/…</code> URL, which is the same bundle by
+another route.</p>
+<p class="docs-note"><code class="code">GROVE_LINK_DIR</code> names where the PATH symlink goes; unset, the script searches
+<code class="code">/usr/local/bin</code> then <code class="code">~/.local/bin</code>. <code class="code">scripts/uninstall.sh</code> stops the server first —
+through the installed binary, since the roots about to be deleted hold that binary and,
+in the workspace, the pid file and the lock the daemon runs under — then removes the
+symlink and the install root. <code class="code">$GROVE_HOME</code> survives unless <code class="code">--purge</code> asks for it: the
+install is regenerable by one <code class="code">grove up</code>, the checkouts under <code class="code">$GROVE_HOME</code> are not.</p>
+</div>
+</section>
+
+<section class="docs-section" id="publishing">
+<header>
+<h2 class="h2">Publishing</h2>
+</header>
+<div class="stack">
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>path</th><th>what it does</th></tr></thead>
+<tbody>
+<tr><td><code class="code">scripts/release.sh</code></td><td>builds and packs <strong>this box's</strong> platform into <code class="code">dist/&lt;version&gt;/</code>: <code class="code">&lt;target&gt;.tar.gz</code>, its <code class="code">.sha256</code>, the standalone bootstrap <code class="code">grove-&lt;target&gt;</code> and <em>its</em> <code class="code">.sha256</code>, with <code class="code">dist/latest</code> naming the version. Fails if the version stamp did not reach the binary — a mislabelled bundle breaks the health gate on every box that pulls it.</td></tr>
+<tr><td><code class="code">.github/workflows/release.yaml</code></td><td>on a <code class="code">v*</code> tag: open a <strong>draft</strong> release, build the bundle for every supported platform, upload, and publish only once the whole matrix has landed.</td></tr>
+<tr><td><code class="code">scripts/publish-canary.sh</code></td><td>builds the current tree for this box only and uploads it as a <code class="code">-canary.N</code> prerelease directly with <code class="code">gh</code> — zero CI minutes, and <code class="code">release.yaml</code> never fires. Host-only: <code class="code">grove up --channel canary</code> on another OS or arch will 404.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">The draft is the point. A published bare-semver tag becomes <code class="code">releases/latest</code> the instant it
+exists, while the bundles are still compiling under <code class="code">lto = true</code> / <code class="code">codegen-units = 1</code> — and
+for that whole window both stable resolvers (the Rust one and <code class="code">install.sh</code>) would land on
+the new tag and then 404 on its assets. A draft is invisible to <code class="code">releases/latest</code> and to the
+asset listing, uploads to it work normally, and a partial matrix simply never promotes.</p>
+<p class="docs-note">A bare semver tag (<code class="code">v0.1.0</code>) publishes as the latest stable release; a suffixed tag
+(<code class="code">v0.1.0-canary.1</code>) publishes as a prerelease, which is what channel resolution walks.</p>
+<p class="docs-note">Shell completions and a man page are not in the bundle: clap can generate both, but nothing
+in the shipped binary's dependency graph produces them yet.</p>
+</div>
+</section>
+
+<section class="docs-section" id="command-surface-and-exit-codes">
+<header>
+<h2 class="h2">Command surface and exit codes</h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>grove up                       # follow the box's channel
+grove up --version 0.2.0       # pin a version
+grove up --channel canary      # follow a channel for this run
+grove up --rollback            # back to the previous version
+</code></pre>
+<p class="docs-note"><code class="code">--rollback</code> ignores <code class="code">--version</code>/<code class="code">--channel</code> by construction: it flips to whatever
+<code class="code">previous</code> names, which is the one version a rollback can mean.</p>
+<p class="docs-note">Exit codes are a contract:</p>
+<div class="table-wrap">
+<table data-table>
+<thead><tr><th>code</th><th>meaning</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>general failure or an API error envelope (with <code class="code">error.data</code>'s detail appended)</td></tr>
+<tr><td>3</td><td>not found — an undeclared root or worktree, from the in-process realizer</td></tr>
+<tr><td>4</td><td>the server is unreachable or busy</td></tr>
+<tr><td>5</td><td>conflict — doctor's unresolved conflicts, or a guarded remove refusing over unsaved work (in-process; through the server the same refusal is exit 1 with <code class="code">remove_failed</code> and its reason)</td></tr>
+<tr><td>6</td><td>unhealthy — including a rollback whose restored version did not come back</td></tr>
+<tr><td>7</td><td>self-update failed (and rolled back cleanly)</td></tr>
+</tbody>
+</table>
+</div>
+<p class="docs-note">Code 2 is skipped: it is clap's own exit for an unparseable command line.</p>
+</div>
+</section>
+
+<section class="docs-section" id="tests">
+<header>
+<h2 class="h2">Tests</h2>
+</header>
+<div class="stack">
+<p class="docs-note"><code class="code">crates/grove/src/update/layout.rs</code> and <code class="code">source.rs</code> carry the unit suites (flip, rollback,
+pending marker, pruning, version ordering, channel resolution, the <code class="code">http://</code> and userinfo
+refusals, the size caps). <code class="code">crates/grove/tests/update_e2e.rs</code> drives the round trip against a
+real daemon: <code class="code">slow_the_update_round_trip_gates_and_rolls_back_against_a_real_daemon</code> and
+<code class="code">slow_an_interrupted_flip_is_undone_by_the_next_up</code>.</p>
+<p class="docs-note"><code class="code">mise run smoke</code> (<code class="code">test/install_smoke.sh</code>) drives <code class="code">scripts/install.sh</code> and
+<code class="code">scripts/uninstall.sh</code> as an operator would, hermetically, against a fixture release in a
+temp directory — its own <code class="code">GROVE_HOME</code> and <code class="code">GROVE_INSTALL</code>, its own <code class="code">GROVE_BIND</code>, no
+network. It gets its own mise task and its own CI job because no cargo target can reach a
+shell script, and <code class="code">harness_meta</code> pins both ends of that wiring:
+<code class="code">the_install_smoke_is_reachable_from_a_gate</code> and
+<code class="code">the_install_smoke_links_only_inside_its_own_home</code>.</p>
+</div>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>
