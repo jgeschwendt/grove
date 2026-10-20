@@ -613,7 +613,9 @@ grove respects it: a <code class="code">_.symlink</code> share reads <em>through
 user's target), and a <code class="code">_.copy</code> share's <code class="code">NOFOLLOW</code> source open refuses it downstream, so the
 copy is reported per worktree rather than silently following a redirect. Only a non-file,
 non-dir, non-symlink oddity (a fifo, a socket) is replaced, and only because it sits inside
-the trunk, which is grove's domain.</p>
+the trunk, which is grove's domain. During a trunk change, grove's own share link in the new
+trunk's source slot (laid through the old trunk while it was a worktree) is no user source:
+it is seeded over from the old trunk.</p>
 <h3 class="h3" id="environment-detect-fix">Detect → fix</h3>
 <p class="docs-note">Per declared share <code class="code">&lt;p&gt;</code>, per present worktree. <code class="code">materialize</code> acts; <code class="code">diagnose</code> classifies
 identically and <strong>mutates nothing</strong> — a byte-for-byte filesystem snapshot is identical

@@ -274,7 +274,19 @@ fn run_root(
     };
     // The previous trunk seeds a missing source; outside [`carry`] that is the trunk
     // itself, where an absent source is absent still, so the seed falls through to empty.
-    let prev_fd = open_dir_nofollow(&root_fd, OsStr::new(pass.prev_trunk)).ok();
+    // Only a missing previous trunk seeds nothing: one that cannot be opened holds.
+    let prev_fd = match open_dir_nofollow(&root_fd, OsStr::new(pass.prev_trunk)) {
+        Ok(fd) => Some(fd),
+        Err(e) if e.downcast_ref() == Some(&Errno::NOENT) => None,
+        Err(e) => {
+            return out.push(err(
+                slug,
+                None,
+                "",
+                &format!("open {}: {e:#}", pass.prev_trunk),
+            ));
+        }
+    };
     let declared = match manifest::list_shares(&manifest_path(home), slug) {
         Ok(d) => d,
         Err(e) => return out.push(err(slug, None, "", &format!("read shares: {e:#}"))),
@@ -364,43 +376,59 @@ fn source_outcome<Fd: AsFd>(
         match descend_parent(&trunk_fd, rel, action.mutates())? {
             // parent missing, diagnose → would-create
             None => seed().map(|_| ShareStatus::Created),
-            Some((parent_fd, leaf)) => match classify_leaf(&parent_fd, &leaf)? {
-                LeafState::Absent => {
-                    if pass.pending {
-                        bail!("trunk change pending; reconcile carries it");
-                    }
-                    let seed = seed()?;
-                    if action.mutates() {
-                        match seed {
-                            Some(Seed::File(bytes, mode)) => {
-                                write_file(&parent_fd, &leaf, &bytes, mode)?;
-                            }
-                            Some(Seed::Link(target)) => link_leaf(&parent_fd, &leaf, &target)?,
-                            None => create_empty(&parent_fd, &leaf)?,
+            Some((parent_fd, leaf)) => {
+                let state = classify_leaf(&parent_fd, &leaf)?;
+                // The share link grove laid where a carry's source goes, while the new
+                // trunk was a worktree, is no source of the user's: seeded over, as if
+                // absent — unless it reads a directory, which no seed carries.
+                let laid = matches!(&state, LeafState::Symlink { target }
+                    if pass.prev_trunk != pass.trunk_name
+                        && *target == trunk_relative_target(pass.prev_trunk, rel)
+                        && !statat(&parent_fd, &leaf, AtFlags::empty())
+                            .is_ok_and(|s| FileType::from_raw_mode(s.st_mode).is_dir()));
+                match if laid { LeafState::Absent } else { state } {
+                    LeafState::Absent => {
+                        if pass.pending {
+                            bail!("trunk change pending; reconcile carries it");
                         }
+                        let seed = seed()?;
+                        if action.mutates() {
+                            // a file seed renames over the link; a link or empty one cannot
+                            if laid && !matches!(seed, Some(Seed::File(..))) {
+                                unlinkat(&parent_fd, &leaf, AtFlags::empty())
+                                    .context("unlink the share link in the source's place")?;
+                            }
+                            match seed {
+                                Some(Seed::File(bytes, mode)) => {
+                                    write_file(&parent_fd, &leaf, &bytes, mode)?;
+                                }
+                                Some(Seed::Link(target)) => link_leaf(&parent_fd, &leaf, &target)?,
+                                None => create_empty(&parent_fd, &leaf)?,
+                            }
+                        }
+                        Ok(ShareStatus::Created)
                     }
-                    Ok(ShareStatus::Created)
-                }
-                // A real file or pre-made dir IS the source; leave it. And D5: a
-                // *symlink* where the source belongs is the user's own choice of
-                // source — respected too, never unlinked/replaced. A `_.symlink` share
-                // reads *through* it (worktree → `<trunk>/<p>` → the user's target); a
-                // `_.copy` share's `NOFOLLOW` source open refuses it downstream (a copy
-                // from a link is reported per-worktree, not silently followed).
-                LeafState::RealFile | LeafState::Dir | LeafState::Symlink { .. } => {
-                    Ok(ShareStatus::Ok)
-                }
-                // A non-file/dir/symlink oddity (fifo, socket, …) can't serve as a
-                // source — it's inside the trunk (grove's domain), so replace it.
-                LeafState::Other => {
-                    if action.mutates() {
-                        unlinkat(&parent_fd, &leaf, AtFlags::empty())
-                            .context("unlink non-file source")?;
-                        create_empty(&parent_fd, &leaf)?;
+                    // A real file or pre-made dir IS the source; leave it. And D5: a
+                    // *symlink* where the source belongs is the user's own choice of
+                    // source — respected too, never unlinked/replaced. A `_.symlink` share
+                    // reads *through* it (worktree → `<trunk>/<p>` → the user's target); a
+                    // `_.copy` share's `NOFOLLOW` source open refuses it downstream (a copy
+                    // from a link is reported per-worktree, not silently followed).
+                    LeafState::RealFile | LeafState::Dir | LeafState::Symlink { .. } => {
+                        Ok(ShareStatus::Ok)
                     }
-                    Ok(ShareStatus::Created)
+                    // A non-file/dir/symlink oddity (fifo, socket, …) can't serve as a
+                    // source — it's inside the trunk (grove's domain), so replace it.
+                    LeafState::Other => {
+                        if action.mutates() {
+                            unlinkat(&parent_fd, &leaf, AtFlags::empty())
+                                .context("unlink non-file source")?;
+                            create_empty(&parent_fd, &leaf)?;
+                        }
+                        Ok(ShareStatus::Created)
+                    }
                 }
-            },
+            }
         }
     })();
     match result {

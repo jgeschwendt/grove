@@ -499,6 +499,11 @@ fn realize(
                 Ok(held) => claim = held,
                 Err(refused) => return (refused, None),
             }
+            // A racing realizer's repair may have landed since the look above.
+            if trunk.exists() {
+                let _ = std::fs::remove_file(&marker);
+                return (present(&root.slug), None);
+            }
         }
         if has_live_worktrees(home, &root.slug, &bare) {
             // A human's checkouts are no clone's leftover: a marker this call laid goes.
@@ -647,16 +652,17 @@ pub const IN_FLIGHT: &str =
     "a clone of this root is in flight in another realizer; nothing touched";
 
 /// Block until the clone in flight on `slug` ends — its marker gone, or its lock
-/// released — and answer `true`; `false` at once when no lock is held on it, so a
-/// caller retrying on `true` never spins on a refusal no clone will clear.
+/// released, a free leftover the retry then claims — and answer `true`; `false` at
+/// once only when the marker cannot be opened or locked at all, so a caller retrying
+/// on `true` never spins on a refusal no clone will clear.
 #[must_use]
 pub fn await_clone(home: &Path, slug: &str) -> bool {
     match std::fs::File::open(root_dir(home, slug).join(CLONING_MARKER)) {
         Err(e) => e.kind() == std::io::ErrorKind::NotFound,
-        Ok(marker) => {
-            matches!(marker.try_lock(), Err(std::fs::TryLockError::WouldBlock))
-                && marker.lock().is_ok()
-        }
+        Ok(marker) => match marker.try_lock() {
+            Ok(()) => true,
+            Err(e) => matches!(e, std::fs::TryLockError::WouldBlock) && marker.lock().is_ok(),
+        },
     }
 }
 
@@ -1250,6 +1256,71 @@ mod tests {
                 "main"
             );
         }
+    }
+
+    /// An old trunk the carry cannot open — here a symlink, which `NOFOLLOW` refuses —
+    /// is no absent one: seeding empty sources from it would repoint every link onto
+    /// them, so it holds the carry like an unreadable source. A missing one, with
+    /// nothing to seed, lets it through.
+    #[test]
+    fn an_unopenable_old_trunk_holds_the_trunk_change() {
+        for held in [true, false] {
+            let tmp = TempDir::new().unwrap();
+            let (home, code) = shared_root(&tmp);
+            std::fs::rename(code.join("main"), tmp.path().join("moved")).unwrap();
+            if held {
+                std::os::unix::fs::symlink(tmp.path().join("moved"), code.join("main")).unwrap();
+            }
+            declare_trunk(&home, "o/r", "canary");
+            assert_eq!(reconcile_one(&home, "o/r").unwrap().error.is_some(), held);
+            let trunk = if held { "main" } else { "canary" };
+            assert_eq!(git::default_branch(&bare_dir(&home, "o/r")).unwrap(), trunk);
+            assert_eq!(
+                std::fs::read_link(code.join("feat/.env")).unwrap(),
+                Path::new("..").join(trunk).join(".env")
+            );
+        }
+    }
+
+    /// A worktree promoted to trunk carries grove's link through the old trunk in its
+    /// source slot — never the user's source: the carry seeds over it, so the bytes
+    /// outlive the ex-trunk once that ordinary worktree is removed.
+    #[test]
+    fn a_promoted_worktree_seeds_its_source_over_its_share_link() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
+        std::fs::write(code.join("main/.env"), "SECRET").unwrap();
+        std::fs::create_dir(code.join("main/data")).unwrap();
+        let shares = [".k", ".env.local", "data"];
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &shares).unwrap();
+        crate::worktrees::create(&home, "o/r", "canary", "canary", None).unwrap();
+        // an absent old source seeds empty; a link not the one grove lays here, or one
+        // reading a directory, stays the link it is
+        std::fs::remove_file(code.join("main/.k")).unwrap();
+        std::fs::remove_file(code.join("canary/.env.local")).unwrap();
+        std::os::unix::fs::symlink("../main/.env", code.join("canary/.env.local")).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        assert_eq!(
+            reconcile_one(&home, "o/r").unwrap().status,
+            ReconcileStatus::Present
+        );
+        for (p, file) in [
+            (".env", true),
+            (".k", true),
+            (".env.local", false),
+            ("data", false),
+        ] {
+            let meta = std::fs::symlink_metadata(code.join("canary").join(p)).unwrap();
+            assert_eq!(meta.is_file(), file, "{p}");
+        }
+        let info = bare_dir(&home, "o/r").join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("exclude"), ".env*\n").unwrap();
+        crate::worktrees::remove(&home, "o/r", "main").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(code.join("feat/.env")).unwrap(),
+            "SECRET"
+        );
     }
 
     /// A share link laid through the old trunk is grove's own: the trunk change moves
@@ -1914,6 +1985,26 @@ mod tests {
         ));
     }
 
+    /// Under its claim the repair looks at the trunk again: one a racing realizer
+    /// finished since the first look — here a link the claim's own marker lands — is
+    /// present, and the marker it laid goes.
+    #[test]
+    fn realize_rechecks_the_trunk_under_its_claim() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        let marker = root_dir(&home, "o/r").join(CLONING_MARKER);
+        std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
+        std::os::unix::fs::symlink(&marker, trunk_dir(&home, "o/r")).unwrap();
+
+        let (applied, claim) = realize(&home, &declared(&home, "o/r").unwrap(), None);
+
+        assert_eq!(applied.status, ReconcileStatus::Present, "{applied:?}");
+        assert!(claim.is_none() && !marker.exists());
+    }
+
     /// A lock counts only while the marker still names its inode: one taken on a
     /// marker its holder unlinked is on a file the next realizer never sees.
     #[test]
@@ -1965,8 +2056,8 @@ mod tests {
 
         drop(held);
         assert!(
-            !await_clone(&home, "o/r"),
-            "a free marker is no clone to wait on"
+            await_clone(&home, "o/r"),
+            "a free marker is a holder gone, its leftover the retry's to claim"
         );
         assert_eq!(
             reconcile_one(&home, "o/r").unwrap().status,
