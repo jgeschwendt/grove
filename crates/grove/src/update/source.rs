@@ -1,20 +1,13 @@
 //! Release resolution + HTTP fetch: where update bundles come from (GitHub
 //! Releases in production; flat `LocalDir`/`BaseUrl` for the smoke tests).
 //!
-//! v2 publishes to **this repo's own Releases** rather than v1's separate download
-//! satellite. The repo is public, so both halves work anonymously: channel resolution
-//! reads the releases list, and the bundle comes off the plain `releases/download/…`
-//! URL. A `GH_TOKEN`/`GITHUB_TOKEN` in the environment rides the *resolution* calls
-//! only — to the [`GitHub`] hosts, which only `install_source(None)` fills — purely to
-//! lift GitHub's anonymous rate limit; nothing here requires one.
-//!
 //! [`scripts/install.sh`] stays the bootstrap for a box with no `grove` yet: it stages
 //! the two files into a directory and hands `grove up` the
-//! [`BundleSource::LocalDir`] it already understands — the same bash/Rust split v1
-//! drew.
+//! [`BundleSource::LocalDir`] it already understands.
 //!
 //! [`scripts/install.sh`]: https://github.com/jgeschwendt/grove/blob/main/scripts/install.sh
 
+use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -30,11 +23,6 @@ use crate::CliError;
 const RELEASES_PER_PAGE: usize = 100;
 const MAX_RELEASE_PAGES: usize = 20;
 
-/// GitHub repo the release channels resolve against — where `install.sh` and
-/// `release.yaml` publish. Overridable for tests via `GROVE_INSTALL_BASE_URL` (an http
-/// base, or a local fixture dir the install smoke test points at).
-const RELEASE_REPO: &str = "jgeschwendt/grove";
-
 /// Channel followed when none is pinned/persisted. Stable = the `releases/latest`
 /// redirect; other channels are the highest `v*-<channel>.N` prerelease.
 pub(super) const DEFAULT_CHANNEL: &str = "stable";
@@ -47,9 +35,13 @@ pub(super) const DEFAULT_CHANNEL: &str = "stable";
 pub(super) fn install_source(base: Option<String>) -> Result<BundleSource, CliError> {
     let Some(base) = base else {
         return Ok(BundleSource::GitHubReleases(GitHub {
-            repo: RELEASE_REPO.to_string(),
+            repo: "jgeschwendt/grove".to_string(),
             web: "https://github.com".to_string(),
             api: "https://api.github.com".to_string(),
+            token: bearer(
+                std::env::var("GH_TOKEN").ok(),
+                std::env::var("GITHUB_TOKEN").ok(),
+            ),
         }));
     };
     if let Some(rest) = base.strip_prefix("http://") {
@@ -78,7 +70,7 @@ pub(super) fn install_source(base: Option<String>) -> Result<BundleSource, CliEr
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
 }
 
 /// Where update bundles come from. `GitHubReleases` in production; the flat
@@ -97,12 +89,25 @@ pub enum BundleSource {
 
 /// A release repo and the two hosts it answers on. The fields are private so that
 /// only this module decides where a token goes: these hosts get one, and nothing
-/// spelled by `GROVE_INSTALL_BASE_URL` can become one of them.
-#[derive(Debug, PartialEq)]
+/// spelled by `GROVE_INSTALL_BASE_URL` can become one of them. The token rides
+/// resolution only, to lift GitHub's anonymous rate limit; the repo is public.
+#[derive(PartialEq)]
 pub struct GitHub {
     repo: String,
     web: String,
     api: String,
+    token: Option<String>,
+}
+
+/// Hand-written so the token can never be printed.
+impl fmt::Debug for GitHub {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GitHub")
+            .field("repo", &self.repo)
+            .field("web", &self.web)
+            .field("api", &self.api)
+            .finish_non_exhaustive()
+    }
 }
 
 impl BundleSource {
@@ -125,44 +130,44 @@ impl BundleSource {
     /// the sha256 in the sidecar `.sha256` file.
     pub(super) fn fetch(&self, version: &str, target: &str) -> Result<Vec<u8>, CliError> {
         let rel = format!("{version}/{target}.tar.gz");
-        let verified = |tar: Vec<u8>, sidecar: String| {
-            // The sidecar may be `<hex>` or `<hex>  filename`; take the first field.
-            let want = sidecar
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-            if want.len() != 64 || !want.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(CliError::Update(format!(
-                    "{rel}.sha256 is not a sha256 hex digest"
-                )));
-            }
-            let got = format!("{:x}", Sha256::digest(&tar));
-            (got == want).then_some(tar).ok_or_else(|| {
-                CliError::Update(format!("checksum mismatch: expected {want}, got {got}"))
-            })
+        let remote = |url: String| {
+            let client = http_client(None)?;
+            let tar = get(&client, &url, MAX_BUNDLE_BYTES)?;
+            Ok::<_, CliError>((tar, get_text(&client, &format!("{url}.sha256"))?))
         };
-        let url = match self {
+        let (tar, sidecar) = match self {
             BundleSource::LocalDir(dir) => {
                 let read = |p: &str| {
                     fs::read(dir.join(p)).map_err(|e| CliError::Update(format!("read {p}: {e}")))
                 };
                 let tar = read(&rel)?;
-                let sidecar = read(&format!("{rel}.sha256"))?;
-                return verified(tar, String::from_utf8_lossy(&sidecar).into_owned());
+                (
+                    tar,
+                    String::from_utf8_lossy(&read(&format!("{rel}.sha256"))?).into_owned(),
+                )
             }
-            BundleSource::BaseUrl(base) => format!("{base}/{rel}"),
-            // The public asset URL. A token is deliberately NOT sent here: the
-            // download 302s to a storage host, and a credential must not follow a
-            // redirect off github.com. Public assets need none anyway.
-            BundleSource::GitHubReleases(gh) => format!(
-                "{}/{}/releases/download/v{version}/{target}.tar.gz",
-                gh.web, gh.repo
-            ),
+            BundleSource::BaseUrl(base) => remote(format!("{base}/{rel}"))?,
+            // A token is deliberately NOT sent here: the download 302s to a storage
+            // host, and a credential must not follow a redirect off github.com.
+            BundleSource::GitHubReleases(gh) => {
+                remote(format!("{}/{}/releases/download/v{rel}", gh.web, gh.repo))?
+            }
         };
-        let client = http_client(None)?;
-        let tar = get(&client, &url, MAX_BUNDLE_BYTES)?;
-        verified(tar, get_text(&client, &format!("{url}.sha256"))?)
+        // The sidecar may be `<hex>` or `<hex>  filename`; take the first field.
+        let want = sidecar
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        if want.len() != 64 || !want.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(CliError::Update(format!(
+                "{rel}.sha256 is not a sha256 hex digest"
+            )));
+        }
+        let got = format!("{:x}", Sha256::digest(&tar));
+        (got == want).then_some(tar).ok_or_else(|| {
+            CliError::Update(format!("checksum mismatch: expected {want}, got {got}"))
+        })
     }
 }
 
@@ -174,8 +179,13 @@ impl GitHub {
     /// highest of a channel lives on the first page that carries the channel at all,
     /// and a short page (< `RELEASES_PER_PAGE`) is the last one.
     fn channel_version(&self, channel: &str) -> Result<String, CliError> {
-        let Self { repo, web, api } = self;
-        let client = http_client(github_token().as_deref())?;
+        let Self {
+            repo,
+            web,
+            api,
+            token,
+        } = self;
+        let client = http_client(token.as_deref())?;
         if channel == "stable" {
             let resp = send(&client, &format!("{web}/{repo}/releases/latest"))?;
             let url = resp.url().as_str();
@@ -211,8 +221,9 @@ fn tag_from_release_url(url: &str) -> Option<String> {
 /// Highest `v<base>-<channel>.<N>` version in one GitHub releases-list JSON body,
 /// leading `v` stripped, plus how many releases the page held (to detect the last
 /// page). The channel (env/file-controlled) is matched by a literal suffix parse —
-/// never compiled into a regex. Numeric-aware sort via [`version_key`], so
-/// `v0.1.1-canary.1` outranks `v0.1.0-canary.30`.
+/// never compiled into a regex: `-<channel>.` then digits to the end
+/// (`v0.1.1-canary.2` ✓; `v0.1.1-canary` ✗; `v0.1.1-beta.2` ✗ for canary). Numeric-aware
+/// sort via [`version_key`], so `v0.1.1-canary.1` outranks `v0.1.0-canary.30`.
 fn page_best(releases_json: &str, channel: &str) -> Result<(Option<String>, usize), CliError> {
     let releases: Vec<serde_json::Value> = serde_json::from_str(releases_json)
         .map_err(|e| CliError::Update(format!("parse releases list: {e}")))?;
@@ -220,18 +231,13 @@ fn page_best(releases_json: &str, channel: &str) -> Result<(Option<String>, usiz
     let best = releases
         .iter()
         .filter_map(|r| r.get("tag_name")?.as_str())
-        .filter(|tag| channel_tag_matches(tag, &suffix))
+        .filter(|tag| {
+            tag.rsplit_once(&suffix)
+                .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
         .max_by_key(|t| version_key(t))
         .map(|tag| tag.trim_start_matches('v').to_string());
     Ok((best, releases.len()))
-}
-
-/// A tag belongs to the channel iff `<suffix>` (`-<channel>.`) is present and
-/// followed by a non-empty run of digits to the end (`v0.1.1-canary.2` ✓;
-/// `v0.1.1-canary` ✗; `v0.1.1-beta.2` ✗ for `-canary.`).
-fn channel_tag_matches(tag: &str, suffix: &str) -> bool {
-    tag.rsplit_once(suffix)
-        .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Platforms this box could ask for and the release line does not publish, with the
@@ -278,20 +284,11 @@ pub(super) fn read_persisted_channel(install: &Path) -> Option<String> {
     (!c.is_empty()).then(|| c.to_string())
 }
 
-/// A bearer token for the release repo, when the environment carries one —
-/// `GH_TOKEN` then `GITHUB_TOKEN`, `gh`'s own precedence. Optional: the release repo
-/// is public, so this only lifts GitHub's anonymous rate limit on resolution.
-fn github_token() -> Option<String> {
-    bearer(
-        std::env::var("GH_TOKEN").ok(),
-        std::env::var("GITHUB_TOKEN").ok(),
-    )
-}
-
-/// The token-precedence rule, split out because a test may not set environment
-/// variables: `set_var` is `unsafe` under edition 2024 and this workspace forbids
-/// `unsafe_code`. Blank is not a token — an exported-but-empty `GH_TOKEN` (a CI
-/// default that never got a value) must fall through, not become `Bearer `.
+/// The token-precedence rule — `GH_TOKEN` then `GITHUB_TOKEN`, `gh`'s own — split out
+/// because a test may not set environment variables: `set_var` is `unsafe` under
+/// edition 2024 and this workspace forbids `unsafe_code`. Blank is not a token — an
+/// exported-but-empty `GH_TOKEN` (a CI default that never got a value) must fall
+/// through, not become `Bearer `.
 fn bearer(gh: Option<String>, github: Option<String>) -> Option<String> {
     [gh, github]
         .into_iter()
@@ -300,22 +297,12 @@ fn bearer(gh: Option<String>, github: Option<String>) -> Option<String> {
         .find(|t| !t.is_empty())
 }
 
-/// A blocking HTTP client that (1) sends a `User-Agent` — api.github.com **403s**
-/// requests without one — and (2) forces `Accept-Encoding: identity`, so a MITM
-/// proxy that recompresses gzip mid-flight can't change the bytes out from under
-/// the sha256 check (parity with `install.sh`).
-///
-/// **Redirects still follow — `releases/latest` and GitHub's asset download both
-/// need them — but every hop is re-checked against [`install_source`]'s rule.**
-/// Classifying the base string once was not the control it was documented as: the
-/// guard constrained the spelling of the URL, not where the bytes came from, so a
-/// loopback base could 302 the fetch to any host over cleartext, and an `https` base
-/// could be downgraded to `http` on redirect (reqwest permits a scheme change).
-///
-/// `auth` is attached only by [`GitHub::channel_version`], whose hosts only
-/// `install_source(None)` fills (see [`github_token`]); nothing built from
-/// `GROVE_INSTALL_BASE_URL` ever gets one, so a mirror base can never harvest the
-/// operator's token, and no asset download carries one.
+/// A blocking HTTP client (with a `User-Agent`: api.github.com 403s without one) that
+/// forces `Accept-Encoding: identity`, so a proxy recompressing mid-flight cannot change
+/// the bytes under the sha256 check (parity with `install.sh`). Every redirect hop must pass [`hop_is_allowed`], else a loopback base 302s the
+/// fetch anywhere over cleartext and an `https` base can be downgraded to `http`.
+/// `auth` comes only from [`GitHub::channel_version`], so no mirror base or asset
+/// download ever carries the operator's token.
 fn http_client(auth: Option<&str>) -> Result<Client, CliError> {
     Client::builder()
         .user_agent(concat!("grove/", env!("CARGO_PKG_VERSION")))
@@ -338,22 +325,11 @@ fn http_client(auth: Option<&str>) -> Result<Client, CliError> {
         .map_err(|e| CliError::Update(format!("build http client: {e}")))
 }
 
-/// May a redirect land here? `https` anywhere; plain `http` only on loopback — the
-/// same rule [`install_source`] applies to the base, applied to each hop so the
-/// promise it is documented with ("a MITM cannot redirect a self-update over
-/// cleartext") is actually the property enforced.
+/// May a redirect land here? [`install_source`]'s base rule, applied to every hop.
 fn hop_is_allowed(url: &reqwest::Url) -> bool {
     match url.scheme() {
         "https" => true,
-        // `Url::host_str` keeps IPv6 brackets (`[::1]`), which the host token does
-        // not carry — same peel `install_source` does on the raw authority.
-        "http" => {
-            let host = url.host_str().unwrap_or("");
-            let host = host
-                .strip_prefix('[')
-                .map_or(host, |b| b.split(']').next().unwrap_or_default());
-            url.username().is_empty() && is_loopback_host(host)
-        }
+        "http" => url.username().is_empty() && is_loopback_host(url.host_str().unwrap_or("")),
         _ => false,
     }
 }
@@ -376,17 +352,11 @@ fn default_headers(auth: Option<&str>) -> reqwest::header::HeaderMap {
     headers
 }
 
-/// Hard ceiling on a downloaded bundle. A body at or under this is read whole; a
-/// larger one is an error (not a silent truncation that later misreports as a
-/// checksum mismatch).
+/// Hard ceiling on a downloaded bundle; over it is an error, not a silent truncation.
 const MAX_BUNDLE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// The same ceiling for the *text* fetches — the sha256 sidecar (65 bytes), the flat
-/// sources' `latest` file (a version string), and one page of GitHub's releases list.
-/// Generous beside what any of them can legitimately be, and still a ceiling: without
-/// one, a hostile or merely broken mirror at `GROVE_INSTALL_BASE_URL` streams an
-/// unbounded body into memory on a file the code expects to be a line long, and the
-/// sidecar's 64-hex-digit check never gets to run because it runs *after* the read.
+/// The ceiling for text fetches (sidecar, `latest`, a releases page): without one a
+/// hostile mirror streams an unbounded body in before the sidecar's hex check runs.
 const MAX_TEXT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// `GET url`, non-2xx an error. reqwest's `Display` for a redirect error stops at
@@ -423,9 +393,6 @@ fn get(client: &Client, url: &str, cap: u64) -> Result<Vec<u8>, CliError> {
     Ok(buf)
 }
 
-/// A text body, capped like the bundle is. `Response::text` would read to the end of
-/// whatever arrives, so the cap — not the caller's expectations about the file — is
-/// what bounds the allocation.
 fn get_text(client: &Client, url: &str) -> Result<String, CliError> {
     String::from_utf8(get(client, url, MAX_TEXT_BYTES)?)
         .map_err(|e| CliError::Update(format!("{url} is not UTF-8: {e}")))
@@ -439,7 +406,9 @@ mod tests {
     use tempfile::TempDir;
 
     /// A loopback server answering every request through `route`: `Ok(body)` is a
-    /// 200, `Err(location)` a 302. One connection per request.
+    /// 200, `Err(location)` a 302. One connection per request. It refuses (panics) on any
+    /// request without `Accept-Encoding: identity`, an asset download carrying a
+    /// token, or a GitHub resolution call missing the test token `t`.
     fn serve(route: impl Fn(&str) -> Result<Vec<u8>, String> + Send + 'static) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -447,8 +416,17 @@ mod tests {
             for mut s in listener.incoming().flatten() {
                 let mut req = [0u8; 4096];
                 let n = s.read(&mut req).unwrap_or(0);
-                let head = String::from_utf8_lossy(&req[..n]);
-                let (status, body) = match route(head.split(' ').nth(1).unwrap_or("")) {
+                let head = String::from_utf8_lossy(&req[..n]).to_lowercase();
+                let path = head.split(' ').nth(1).unwrap_or("");
+                assert!(
+                    head.contains("accept-encoding: identity")
+                        && !(path.contains("/releases/download/")
+                            && head.contains("authorization:"))
+                        && (!(path.contains("/releases/latest") || path.starts_with("/repos/"))
+                            || head.contains("authorization: bearer t")),
+                    "{head}"
+                );
+                let (status, body) = match route(path) {
                     Ok(body) => ("200 OK".to_string(), body),
                     Err(to) => (format!("302 Found\r\nlocation: {to}"), Vec::new()),
                 };
@@ -463,13 +441,18 @@ mod tests {
     }
 
     /// Both remote sources end to end over loopback: resolution (the flat `latest`,
-    /// GitHub's stable redirect and its paged prerelease walk), the verified fetch, and
-    /// every transport refusal — the text cap (a mirror that streams without end must
-    /// hit a ceiling rather than the allocator, *before* the sidecar's hex check runs),
-    /// strict UTF-8, and the redirect policy's reasons surfacing in the error.
+    /// GitHub's stable redirect and its paged prerelease walk, capped), the verified
+    /// fetch, and every transport refusal — the text cap (a mirror that streams without
+    /// end must hit a ceiling rather than the allocator, *before* the sidecar's hex check
+    /// runs), strict UTF-8, and the redirect policy's reasons surfacing in the error.
     #[test]
     fn remote_sources_resolve_and_fetch_over_http() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
         let sidecar = format!("{:X}  t.tar.gz\n", Sha256::digest(b"bundle"));
+        let huge = vec![b'x'; usize::try_from(MAX_TEXT_BYTES + 1).unwrap()];
+        let huge_sha = format!("{:x}", Sha256::digest(&huge));
         // A full first page of non-matching (stable) tags; the canary is on page 2,
         // among tags that must not match it.
         let page1: Vec<_> = (0..RELEASES_PER_PAGE)
@@ -478,27 +461,39 @@ mod tests {
         let page1 = serde_json::to_vec(&page1).unwrap();
         let page2 = r#"[{"tag_name":"v0.1.0-canary.30"},{"tag_name":"v0.1.1-canary.1"},
             {"tag_name":"v0.9.0-canary"},{"tag_name":"v0.9.0-canary.x"},
-            {"tag_name":"v0.9.0-beta.5"},{"tag_name":"v0.9.0"}]"#;
+            {"tag_name":"v9.9.9-canary."},{"tag_name":"v0.9.0-beta.5"},{"tag_name":"v0.9.0"}]"#;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let full_hits = hits.clone();
         let base = serve(move |p| match p {
             "/latest" => Ok("0.4.0\n".into()),
             "/o/r/releases/latest" => Err("/o/r/releases/tag/v1.2.3/?q".into()),
             "/off" => Err("http://example.com/x".into()),
-            "/loop" => Err("/loop".into()),
             "/big" => Ok(vec![b'x'; 100]),
             "/binary" => Ok(vec![0xff]),
+            p if p.starts_with("/hop/") => match p[5..].parse::<usize>().unwrap() {
+                0 => Ok("end".into()),
+                n => Err(format!("/hop/{}", n - 1)),
+            },
+            p if p.starts_with("/huge/") && p.ends_with(".sha256") => Ok(huge_sha.clone().into()),
+            p if p.starts_with("/huge/") => Ok(huge.clone()),
+            p if p.starts_with("/repos/x/") => Err("/hop/9".into()),
+            p if p.starts_with("/repos/full/") => {
+                full_hits.fetch_add(1, Relaxed);
+                Ok(page1.clone())
+            }
             p if p.ends_with("&page=1") => Ok(page1.clone()),
             p if p.ends_with("&page=2") => Ok(page2.into()),
-            p if p.starts_with("/nohex") && p.ends_with(".sha256") => Ok("zz".into()),
+            p if p.starts_with("/nohex") && p.ends_with(".sha256") => Ok("z".repeat(64).into()),
             p if p.ends_with(".sha256") => Ok(sidecar.clone().into()),
             p if p.starts_with("/bad") => Ok("tampered".into()),
             _ => Ok("bundle".into()),
         });
         let gh = |repo: &str| {
-            let (web, api) = (base.clone(), base.clone());
             BundleSource::GitHubReleases(GitHub {
                 repo: repo.into(),
-                web,
-                api,
+                web: base.clone(),
+                api: base.clone(),
+                token: Some("t".into()),
             })
         };
         let flat = BundleSource::BaseUrl(base.clone());
@@ -519,11 +514,22 @@ mod tests {
         );
         assert_eq!(flat.fetch("0.4.0", "t").unwrap(), b"bundle");
         assert_eq!(gh("o/r").fetch("0.4.0", "t").unwrap(), b"bundle");
+        assert_eq!(
+            flat.fetch("huge", "t").unwrap().len() as u64,
+            MAX_TEXT_BYTES + 1
+        );
         let client = http_client(None).unwrap();
         assert_eq!(
             get(&client, &format!("{base}/big"), 100).unwrap().len(),
             100
         );
+        assert_eq!(get(&client, &format!("{base}/hop/9"), 9).unwrap(), b"end");
+        for (url, tag) in [
+            ("https://x/r/releases/tag/v1.2.3#f", Some("1.2.3")),
+            ("https://x/r/releases/tag/", None),
+        ] {
+            assert_eq!(tag_from_release_url(url).as_deref(), tag);
+        }
         let missing = BundleSource::LocalDir(local.path().join("missing"));
         for (err, want) in [
             (missing.channel_version("x").unwrap_err(), "read latest"),
@@ -536,6 +542,14 @@ mod tests {
                 gh("o/r").channel_version("nightly").unwrap_err(),
                 "no nightly releases found on o/r",
             ),
+            (
+                gh("full/r").channel_version("canary").unwrap_err(),
+                "no canary releases",
+            ),
+            (
+                gh("x/y").channel_version("canary").unwrap_err(),
+                "too many redirects",
+            ),
             (flat.fetch("bad", "t").unwrap_err(), "checksum mismatch"),
             (
                 flat.fetch("nohex", "t").unwrap_err(),
@@ -546,6 +560,10 @@ mod tests {
                 "exceeds size limit",
             ),
             (
+                get_text(&client, &format!("{base}/huge/t.tar.gz")).unwrap_err(),
+                "exceeds size limit",
+            ),
+            (
                 get_text(&client, &format!("{base}/binary")).unwrap_err(),
                 "is not UTF-8",
             ),
@@ -553,13 +571,14 @@ mod tests {
                 get(&client, &format!("{base}/off"), 9).unwrap_err(),
                 "refusing a redirect to http://example.com/x",
             ),
-            (
-                get(&client, &format!("{base}/loop"), 9).unwrap_err(),
-                "too many redirects",
-            ),
         ] {
             assert!(err.to_string().contains(want), "{err}");
         }
+        assert_eq!(
+            hits.load(Relaxed),
+            20,
+            "the walk stops at MAX_RELEASE_PAGES"
+        );
     }
 
     /// Plain http is loopback-only, and the rule binds the base AND every redirect hop
@@ -596,16 +615,12 @@ mod tests {
             install_source(Some("/tmp/fixture".into())).unwrap(),
             BundleSource::LocalDir("/tmp/fixture".into())
         );
-        // The default is this repo's own Releases — v1 published to a separate
-        // download satellite, which retires with the rewrite.
-        assert_eq!(
+        assert!(matches!(
             install_source(None).unwrap(),
-            BundleSource::GitHubReleases(GitHub {
-                repo: "jgeschwendt/grove".into(),
-                web: "https://github.com".into(),
-                api: "https://api.github.com".into(),
-            })
-        );
+            BundleSource::GitHubReleases(GitHub { repo, web, api, .. })
+                if repo == "jgeschwendt/grove" && web == "https://github.com"
+                    && api == "https://api.github.com"
+        ));
     }
 
     /// A platform the release matrix does not build is refused before a byte moves —
@@ -701,7 +716,10 @@ mod tests {
             bearer(None, Some("actions".into())).as_deref(),
             Some("actions")
         );
-        assert_eq!(bearer(Some("  ".into()), None), None);
+        assert_eq!(
+            bearer(Some("  ".into()), Some(" actions\n".into())).as_deref(),
+            Some("actions")
+        );
         assert_eq!(bearer(None, None), None);
     }
 
@@ -724,5 +742,12 @@ mod tests {
             authed[AUTHORIZATION].is_sensitive(),
             "a token must never be printable by Debug"
         );
+        let gh = GitHub {
+            repo: "o/r".into(),
+            web: "w".into(),
+            api: "a".into(),
+            token: Some("secret".into()),
+        };
+        assert!(!format!("{gh:?}").contains("secret"), "{gh:?}");
     }
 }
