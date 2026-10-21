@@ -233,6 +233,13 @@
     <li><strong>A carry holds on an in-trunk link whose target the new trunk will have</strong>
       (plausible, low). <code class="code">.k1 -&gt; .real</code> is held even when <code class="code">.real</code>
       is tracked or itself a declared share, until the operator re-creates it; the check is lexical.</li>
+    <li><strong>A late backport canary hides behind a page boundary</strong> (plausible, low;
+      <code class="code">update::source</code> channel walk). The walk takes the first page carrying the
+      channel, trusting newest-first to mean highest-first; a <code class="code">v0.1.0-canary.31</code> published
+      after <code class="code">v0.2.0-canary.1</code>, with a page boundary between them, resolves to the lower one.</li>
+    <li><strong>A redirect hop with only a password passes the loopback rule</strong> (confirmed by reading,
+      low; <code class="code">hop_is_allowed</code>). <code class="code">http://:pw@127.0.0.1/</code> is followed
+      while the same string as a base is refused (any <code class="code">@</code>); loopback either way.</li>
   </ol>
 </section>
 
