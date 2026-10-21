@@ -234,7 +234,7 @@ else
   fi
   vsn="${tag#v}"
 
-  # Stage the three files as a local-dir source: `grove up` reads
+  # Stage the two files as a local-dir source: `grove up` reads
   # <base>/<vsn>/<target>.tar.gz (+ .sha256), so lay them out exactly that way.
   base="$tmp/stage"
   mkdir -p "$base/$vsn"

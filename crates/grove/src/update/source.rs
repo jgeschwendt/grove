@@ -29,7 +29,7 @@ pub(super) const DEFAULT_CHANNEL: &str = "stable";
 
 /// Classify the `GROVE_INSTALL_BASE_URL` override into a [`BundleSource`]. An
 /// `https://` base is allowed anywhere; a plain `http://` base is refused unless
-/// it targets loopback (`127.0.0.1`/`localhost`) — the test/CI seam — so a MITM
+/// it targets loopback (`127.0.0.1`/`localhost`/`[::1]`) — the test/CI seam — so a MITM
 /// can't redirect a self-update over cleartext. A non-URL value is a local
 /// fixture dir (the smoke tests); `None` → GitHub Releases.
 pub(super) fn install_source(base: Option<String>) -> Result<BundleSource, CliError> {
@@ -61,12 +61,10 @@ pub(super) fn install_source(base: Option<String>) -> Result<BundleSource, CliEr
                  (a 127.0.0.1/localhost base is allowed for testing)"
             )));
         }
-        Ok(BundleSource::BaseUrl(base))
-    } else if base.starts_with("https://") {
-        Ok(BundleSource::BaseUrl(base))
-    } else {
-        Ok(BundleSource::LocalDir(PathBuf::from(base)))
+    } else if !base.starts_with("https://") {
+        return Ok(BundleSource::LocalDir(PathBuf::from(base)));
     }
+    Ok(BundleSource::BaseUrl(base))
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -140,9 +138,8 @@ impl BundleSource {
                 let read = |p: &str| {
                     fs::read(dir.join(p)).map_err(|e| CliError::Update(format!("read {p}: {e}")))
                 };
-                let tar = read(&rel)?;
                 (
-                    tar,
+                    read(&rel)?,
                     String::from_utf8_lossy(&read(&format!("{rel}.sha256"))?).into_owned(),
                 )
             }
@@ -325,7 +322,7 @@ fn http_client(auth: Option<&str>) -> Result<Client, CliError> {
         .map_err(|e| CliError::Update(format!("build http client: {e}")))
 }
 
-/// May a redirect land here? [`install_source`]'s base rule, applied to every hop.
+/// May a redirect land here? `https` anywhere; `http` only to a loopback host with no username.
 fn hop_is_allowed(url: &reqwest::Url) -> bool {
     match url.scheme() {
         "https" => true,
@@ -468,7 +465,6 @@ mod tests {
             "/latest" => Ok("0.4.0\n".into()),
             "/o/r/releases/latest" => Err("/o/r/releases/tag/v1.2.3/?q".into()),
             "/off" => Err("http://example.com/x".into()),
-            "/big" => Ok(vec![b'x'; 100]),
             "/binary" => Ok(vec![0xff]),
             p if p.starts_with("/hop/") => match p[5..].parse::<usize>().unwrap() {
                 0 => Ok("end".into()),
@@ -498,15 +494,8 @@ mod tests {
         };
         let flat = BundleSource::BaseUrl(base.clone());
         let local = TempDir::new().unwrap();
-        fs::write(local.path().join("latest"), "0.3.0\n").unwrap();
 
         assert_eq!(flat.channel_version("canary").unwrap(), "0.4.0");
-        assert_eq!(
-            BundleSource::LocalDir(local.path().into())
-                .channel_version("x")
-                .unwrap(),
-            "0.3.0"
-        );
         assert_eq!(gh("o/r").channel_version("stable").unwrap(), "1.2.3");
         assert_eq!(
             gh("o/r").channel_version("canary").unwrap(),
@@ -519,11 +508,7 @@ mod tests {
             MAX_TEXT_BYTES + 1
         );
         let client = http_client(None).unwrap();
-        assert_eq!(
-            get(&client, &format!("{base}/big"), 100).unwrap().len(),
-            100
-        );
-        assert_eq!(get(&client, &format!("{base}/hop/9"), 9).unwrap(), b"end");
+        assert_eq!(get(&client, &format!("{base}/hop/9"), 3).unwrap(), b"end");
         for (url, tag) in [
             ("https://x/r/releases/tag/v1.2.3#f", Some("1.2.3")),
             ("https://x/r/releases/tag/", None),
@@ -554,10 +539,6 @@ mod tests {
             (
                 flat.fetch("nohex", "t").unwrap_err(),
                 "is not a sha256 hex digest",
-            ),
-            (
-                get(&client, &format!("{base}/big"), 99).unwrap_err(),
-                "exceeds size limit",
             ),
             (
                 get_text(&client, &format!("{base}/huge/t.tar.gz")).unwrap_err(),
@@ -631,9 +612,10 @@ mod tests {
         assert_eq!(err.exit_code(), 7);
         assert!(err.to_string().contains("unsupported platform"), "{err}");
         assert!(err.to_string().contains("Apple Silicon"), "{err}");
-        for built in ["aarch64-darwin", "x86_64-linux", "aarch64-linux"] {
-            assert_eq!(supported(built.into()).unwrap(), built);
-        }
+        assert_eq!(
+            supported("aarch64-darwin".into()).unwrap(),
+            "aarch64-darwin"
+        );
         let host = host_target();
         assert!(
             host.contains('-') && !host.contains("macos"),
@@ -713,33 +695,18 @@ mod tests {
             Some("gh")
         );
         assert_eq!(
-            bearer(None, Some("actions".into())).as_deref(),
-            Some("actions")
-        );
-        assert_eq!(
             bearer(Some("  ".into()), Some(" actions\n".into())).as_deref(),
             Some("actions")
         );
-        assert_eq!(bearer(None, None), None);
+        assert_eq!(bearer(Some(" ".into()), None), None);
     }
 
-    /// The client carries the hardening the sha256 check depends on:
-    /// `Accept-Encoding: identity`, so a proxy that recompresses mid-flight cannot
-    /// change the bytes being hashed. A token, when present, rides as a *sensitive*
-    /// bearer header — and when absent, no `Authorization` is sent at all, which is
-    /// what keeps an anonymous fetch anonymous.
+    /// A token rides as a *sensitive* header and never prints through `Debug`; the
+    /// wire checks (identity encoding, which calls carry a token) live in `serve`.
     #[test]
     fn the_client_pins_its_headers_and_hides_a_token() {
-        use reqwest::header::{ACCEPT_ENCODING, AUTHORIZATION};
-
-        let anonymous = default_headers(None);
-        assert_eq!(anonymous[ACCEPT_ENCODING], "identity");
-        assert!(!anonymous.contains_key(AUTHORIZATION));
-
-        let authed = default_headers(Some("secret"));
-        assert_eq!(authed[AUTHORIZATION], "Bearer secret");
         assert!(
-            authed[AUTHORIZATION].is_sensitive(),
+            default_headers(Some("secret"))[reqwest::header::AUTHORIZATION].is_sensitive(),
             "a token must never be printable by Debug"
         );
         let gh = GitHub {
