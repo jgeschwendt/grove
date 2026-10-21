@@ -171,8 +171,9 @@ impl BundleSource {
 impl GitHub {
     /// `stable` follows `<web>/<repo>/releases/latest` — a redirect to the tag page,
     /// and one that excludes prereleases — and reads the version off the final URL.
-    /// Any other channel is the highest `v*-<channel>.N` prerelease (mirrors
-    /// `scripts/install.sh`), walked page by page: releases come newest-first, so the
+    /// Any other channel is the highest `v*-<channel>.N` prerelease (the suffix rule
+    /// `scripts/install.sh` uses, though it reads only the first page), walked page by
+    /// page: releases come newest-first, so the
     /// highest of a channel lives on the first page that carries the channel at all,
     /// and a short page (< `RELEASES_PER_PAGE`) is the last one.
     fn channel_version(&self, channel: &str) -> Result<String, CliError> {
