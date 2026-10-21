@@ -193,7 +193,7 @@ impl Box_ {
         std::fs::write(dir.join(format!("{target}.tar.gz")), &bundle).unwrap();
         std::fs::write(
             dir.join(format!("{target}.tar.gz.sha256")),
-            hex(&Sha256::digest(&bundle)),
+            format!("{:x}", Sha256::digest(&bundle)),
         )
         .unwrap();
         std::fs::write(self.base.join("latest"), v).unwrap();
@@ -239,14 +239,6 @@ fn bundle_of(binary: &Path) -> Vec<u8> {
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     enc.write_all(&builder.into_inner().unwrap()).unwrap();
     enc.finish().unwrap()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut s, b| {
-        use std::fmt::Write as _;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }
 
 /// A loopback address with nothing on it: bound to claim a free ephemeral port, then

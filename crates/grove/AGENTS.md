@@ -40,7 +40,7 @@ edges:
 - ※ cli-health-poll → src/server.rs:489
 - ※ pending-marker → src/update/layout.rs:179
 - ※ reachability-tri-state → src/api.rs:136
-- ※ self-update-flip → src/update/mod.rs:247
+- ※ self-update-flip → src/update/mod.rs:245
 - ※ single-realizer → src/commands.rs:35
 
 <!-- @end -->

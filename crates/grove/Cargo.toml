@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 # The update bundle is a `.tar.gz`; `Layout::install_bundle` extracts it and
-# `source::verify_sha256` checks the sidecar digest before anything is flipped.
+# `BundleSource::fetch` checks the sidecar's sha256 before anything is flipped.
 flate2 = "1"
 grove-api = { path = "../grove-api" }
 grove-daemon = { path = "../grove-daemon" }
