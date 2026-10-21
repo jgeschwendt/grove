@@ -297,8 +297,9 @@ fn bearer(gh: Option<String>, github: Option<String>) -> Option<String> {
 
 /// A blocking HTTP client (with a `User-Agent`: api.github.com 403s without one) that
 /// forces `Accept-Encoding: identity`, so a proxy recompressing mid-flight cannot change
-/// the bytes under the sha256 check (parity with `install.sh`). Every redirect hop must pass [`hop_is_allowed`], else a loopback base 302s the
-/// fetch anywhere over cleartext and an `https` base can be downgraded to `http`.
+/// the bytes under the sha256 check (parity with `install.sh`). Every redirect hop must
+/// pass [`hop_is_allowed`], else a loopback base 302s the fetch anywhere over cleartext
+/// and an `https` base can be downgraded to `http`.
 /// `auth` comes only from [`GitHub::channel_version`], so no mirror base or asset
 /// download ever carries the operator's token.
 fn http_client(auth: Option<&str>) -> Result<Client, CliError> {
@@ -405,8 +406,8 @@ mod tests {
 
     /// A loopback server answering every request through `route`: `Ok(body)` is a
     /// 200, `Err(location)` a 302. One connection per request. It refuses (panics) on any
-    /// request without `Accept-Encoding: identity`, an asset download carrying a
-    /// token, or a GitHub resolution call missing the test token `t`.
+    /// request without `Accept-Encoding: identity`, an asset or flat `latest` fetch
+    /// carrying a token, or a GitHub resolution call missing the test token `t`.
     fn serve(route: impl Fn(&str) -> Result<Vec<u8>, String> + Send + 'static) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -418,7 +419,7 @@ mod tests {
                 let path = head.split(' ').nth(1).unwrap_or("");
                 assert!(
                     head.contains("accept-encoding: identity")
-                        && !(path.contains("/releases/download/")
+                        && !((path == "/latest" || path.contains(".tar.gz"))
                             && head.contains("authorization:"))
                         && (!(path.contains("/releases/latest") || path.starts_with("/repos/"))
                             || head.contains("authorization: bearer t")),
