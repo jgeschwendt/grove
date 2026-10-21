@@ -31,7 +31,7 @@ jobs:
   # DRAFT, which is the whole point of the split. A published bare-semver tag becomes
   # `latest` the instant it exists, and the bundles are still compiling under
   # `lto = true` / `codegen-units = 1` for many minutes after: for that whole window
-  # both stable resolvers (update::source::resolve_stable_version and install.sh)
+  # both stable resolvers (update::source::GitHub::channel_version and install.sh)
   # land on the new tag and then 404 on its assets. `fail-fast: false` would make
   # that permanent rather than transient for any platform whose job failed. A draft
   # is invisible to `releases/latest` and to the asset listing, uploads to it work

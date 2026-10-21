@@ -61,9 +61,7 @@ mod source;
 pub use layout::Layout;
 use layout::{Flip, KEEP_VERSIONS, valid_version};
 pub use source::{BundleSource, host_target};
-use source::{
-    DEFAULT_CHANNEL, install_source, read_persisted_channel, supported_host_target, verify_sha256,
-};
+use source::{DEFAULT_CHANNEL, install_source, read_persisted_channel, supported};
 
 /// Whether a bounce should short-circuit to [`Bounce::NotRunning`] — skipping the
 /// health-gate. Only when there's no running pid, we aren't force-starting, AND
@@ -201,7 +199,7 @@ impl Updater {
         // line publishes no bundle for is refused here, the way `install.sh` refuses
         // it before its first request — not several seconds later as a 404 on an
         // asset URL that was never built.
-        let target = supported_host_target()?;
+        let target = supported(host_target())?;
         let source = install_source(std::env::var("GROVE_INSTALL_BASE_URL").ok())?;
 
         let install = crate::grove_install_home();
@@ -286,8 +284,7 @@ impl Updater {
             return Ok(());
         }
 
-        let (bytes, want_sha) = self.source.fetch(&version, &self.target)?;
-        verify_sha256(&bytes, &want_sha)?;
+        let bytes = self.source.fetch(&version, &self.target)?;
         self.layout.install_bundle(&version, &bytes)?;
         self.layout.flip_to(&version)?; // marks the flip pending
 
@@ -539,7 +536,6 @@ fn poll_ready_with(
 
 #[cfg(test)]
 mod tests {
-    use super::source::hex;
     use super::*;
     use sha2::{Digest, Sha256};
     use std::cell::{Cell, RefCell};
@@ -575,7 +571,7 @@ mod tests {
             fs::write(vdir.join(format!("{target}.tar.gz")), &bundle).unwrap();
             fs::write(
                 vdir.join(format!("{target}.tar.gz.sha256")),
-                hex(&Sha256::digest(&bundle)),
+                format!("{:x}", Sha256::digest(&bundle)),
             )
             .unwrap();
         }
@@ -984,26 +980,28 @@ mod tests {
 
     #[test]
     fn up_rejects_a_corrupt_bundle() {
-        let home = TempDir::new().unwrap();
-        let src = TempDir::new().unwrap();
-        fixture_source(src.path(), "test-target", &["0.4.0"]);
-        // Corrupt the checksum sidecar.
-        fs::write(
-            src.path().join("0.4.0/test-target.tar.gz.sha256"),
-            "deadbeef",
-        )
-        .unwrap();
+        // A sidecar that is no digest at all, and a tarball the digest doesn't match.
+        for (file, body, want) in [
+            ("tar.gz.sha256", "deadbeef", "not a sha256 hex digest"),
+            ("tar.gz", "tampered", "checksum mismatch"),
+        ] {
+            let home = TempDir::new().unwrap();
+            let src = TempDir::new().unwrap();
+            let source = fixture_source(src.path(), "test-target", &["0.4.0"]);
+            fs::write(src.path().join(format!("0.4.0/test-target.{file}")), body).unwrap();
 
-        let up = Updater::new(
-            Layout::new(home.path()),
-            "test-target",
-            BundleSource::LocalDir(src.path().to_path_buf()),
-            |_expected: &str, _force| Ok(Bounce::Healthy),
-        );
-        let err = up.up(Some("0.4.0")).unwrap_err();
-        assert_eq!(err.exit_code(), 7);
-        // Nothing flipped — a bad release never becomes current.
-        assert!(Layout::new(home.path()).current_version().is_none());
+            let up = Updater::new(
+                Layout::new(home.path()),
+                "test-target",
+                source,
+                |_: &str, _| Ok(Bounce::Healthy),
+            );
+            let err = up.up(Some("0.4.0")).unwrap_err();
+            assert_eq!(err.exit_code(), 7);
+            assert!(err.to_string().contains(want), "{err}");
+            // Nothing flipped — a bad release never becomes current.
+            assert!(Layout::new(home.path()).current_version().is_none());
+        }
     }
 
     #[test]
