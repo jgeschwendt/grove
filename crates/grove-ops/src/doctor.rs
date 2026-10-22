@@ -144,10 +144,8 @@ fn migrate_root(home: &Path, slug: &str) -> anyhow::Result<()> {
         // The root's own directory is new in this layout, so the destination's parent
         // may not exist yet — a rename into a missing parent is an ENOENT the operator
         // would read as a missing bare.
-        if let Some(parent) = bare.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-        }
+        let root = roots::root_dir(home, slug);
+        std::fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
         std::fs::rename(&from, &bare)
             .with_context(|| format!("rename {} -> {}", from.display(), bare.display()))?;
         git::worktree_repair(&bare, &[])?;
@@ -620,9 +618,7 @@ fn orphan_code(home: &Path) -> Vec<String> {
         let Some(org_name) = utf8_dir(&org) else {
             continue;
         };
-        let Ok(repos) = std::fs::read_dir(org.path()) else {
-            continue;
-        };
+        let repos = std::fs::read_dir(org.path()).into_iter().flatten();
         for repo in repos.flatten() {
             let Some(repo_name) = utf8_dir(&repo) else {
                 continue;
@@ -915,22 +911,40 @@ symlink = ["../../etc/passwd"]
     }
 
     /// The other half of the spec'd gap: a worktree that is present but sitting on a
-    /// branch nobody declared.
+    /// branch nobody declared, or on none — and one git will not read at all.
     #[test]
-    fn a_worktree_on_the_wrong_branch_is_a_mismatch() {
-        let tmp = TempDir::new().unwrap();
-        let home = testfix::home_with_root_and_worktree(&tmp);
-        let worktree = testfix::code_dir(&home, testfix::SLUG).join("feat");
-        testfix::git(&worktree, &["switch", "-q", "-c", "somewhere-else"]);
+    fn a_worktree_off_its_declared_branch_is_a_finding() {
+        for (args, status, said) in [
+            (
+                &["switch", "-q", "-c", "somewhere-else"][..],
+                CheckStatus::Mismatch,
+                "somewhere-else",
+            ),
+            (
+                &["switch", "-q", "--detach"],
+                CheckStatus::Mismatch,
+                "detached HEAD",
+            ),
+            (&[], CheckStatus::Unavailable, "would not report"),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let home = testfix::home_with_root_and_worktree(&tmp);
+            let worktree = testfix::code_dir(&home, testfix::SLUG).join("feat");
+            if args.is_empty() {
+                std::fs::write(worktree.join(".git"), "gitdir: /nowhere\n").unwrap();
+            } else {
+                testfix::git(&worktree, args);
+            }
 
-        let out = root_checks(&home, testfix::SLUG);
-        let wt = out
-            .iter()
-            .find(|c| c.check == CheckKind::Worktree && c.name.as_deref() == Some("feat"))
-            .unwrap();
-        assert_eq!(wt.status, CheckStatus::Mismatch);
-        let detail = wt.detail.as_ref().unwrap();
-        assert!(detail.contains("somewhere-else"), "{detail}");
+            let out = root_checks(&home, testfix::SLUG);
+            let wt = out
+                .iter()
+                .find(|c| c.check == CheckKind::Worktree && c.name.as_deref() == Some("feat"))
+                .unwrap();
+            assert_eq!(wt.status, status);
+            let detail = wt.detail.as_ref().unwrap();
+            assert!(detail.contains(said), "{detail}");
+        }
     }
 
     /// Declared-vs-actual drift, the direction reconcile closes by adopting.
@@ -1051,8 +1065,7 @@ symlink = ["../../etc/passwd"]
         for half in Half::ALL {
             assert!(
                 !code.join(half.entry()).exists(),
-                "{} is still in the code dir",
-                half.entry()
+                "{half:?} is still in the code dir"
             );
         }
 
@@ -1113,8 +1126,9 @@ symlink = ["../../etc/passwd"]
 
     /// The migration, end to end, from either generation: grove's own directories move
     /// under the root's own, git still opens every checkout, the share link follows the
-    /// trunk, and the check that reported it now passes. Run twice, because a migration
-    /// an operator re-runs after a crash must be a no-op the second time.
+    /// trunk, and the check that reported it now passes. Run twice — the second time
+    /// across the whole home — because a migration an operator re-runs after a crash
+    /// must be a no-op the second time.
     #[test]
     fn fix_migrates_a_retired_root_onto_the_current_layout_and_is_idempotent() {
         for generation in ["v1", "v2"] {
@@ -1129,7 +1143,7 @@ symlink = ["../../etc/passwd"]
             );
             assert_migrated(&home, generation == "v2");
 
-            let (again, _) = run(&home, Some(testfix::SLUG), false, true).unwrap();
+            let (again, _) = run(&home, None, false, true).unwrap();
             assert!(
                 again.iter().all(|row| !row.status.is_error()),
                 "{generation}: {again:?}"
@@ -1162,49 +1176,63 @@ symlink = ["../../etc/passwd"]
         );
     }
 
-    /// A migration that died between the rename and everything after it leaves two
-    /// bares. Only one of them holds the operator's history and grove cannot tell
-    /// which, so `--fix` stops on that root and says so, rather than renaming a
-    /// second directory over the first.
+    /// `--fix` stops on a root it cannot migrate whole, and its error row says why: a
+    /// migration that died between the rename and everything after it leaves two bares
+    /// (or two slots), only one of which holds the operator's history; a trunk with a
+    /// directory already at its new name; no bare anywhere to migrate onto; and a trunk
+    /// git will not read once everything has moved. The two bares rename nothing, and
+    /// the layout row names them too.
     #[test]
-    fn a_bare_beside_the_retired_one_refuses_rather_than_guessing() {
-        for generation in ["v1", "v2"] {
+    fn fix_refuses_a_migration_it_cannot_finish_and_says_why() {
+        type Case = (&'static str, &'static str, fn(&Path));
+        let bare_beside: fn(&Path) = |home| {
+            let bare = roots::bare_dir(home, testfix::SLUG);
+            std::fs::create_dir_all(&bare).unwrap();
+            std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        };
+        let cases: [Case; 6] = [
+            ("v1", "real bare", bare_beside),
+            ("v2", "real bare", bare_beside),
+            ("v2", "real slot", |home| {
+                std::fs::create_dir_all(pool::pool_dir(home, testfix::SLUG).join("slot-0"))
+                    .unwrap();
+            }),
+            ("v1", "nowhere to move", |home| {
+                std::fs::create_dir(roots::code_dir(home, testfix::SLUG).join("main")).unwrap();
+            }),
+            ("v1", "nothing to migrate", |home| {
+                std::fs::remove_dir_all(roots::code_dir(home, testfix::SLUG).join(".git")).unwrap();
+            }),
+            ("v2", "does not read as a git checkout", |home| {
+                let index = ".bare/worktrees/main/index";
+                std::fs::write(roots::code_dir(home, testfix::SLUG).join(index), "junk").unwrap();
+            }),
+        ];
+        for (generation, why, break_it) in cases {
             let tmp = TempDir::new().unwrap();
             let home = legacy_home(&tmp, generation);
             let before = crate::layout::legacy(&home, testfix::SLUG);
-            let bare = roots::bare_dir(&home, testfix::SLUG);
-            std::fs::create_dir_all(&bare).unwrap();
-            std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            break_it(&home);
 
             let (report, _) = run(&home, Some(testfix::SLUG), false, true).unwrap();
             assert!(
                 report.iter().any(|row| row.status.is_error()
-                    && row
-                        .reason
-                        .as_deref()
-                        .is_some_and(|why| why.contains("half-finished migration"))),
-                "{generation}: {report:?}"
+                    && row.reason.as_deref().is_some_and(|r| r.contains(why))),
+                "{generation} {why}: {report:?}"
             );
-            assert_eq!(
-                crate::layout::legacy(&home, testfix::SLUG),
-                before,
-                "{generation}: nothing was renamed"
-            );
-
-            let out = root_checks(&home, testfix::SLUG);
-            let legacy = out
-                .iter()
-                .find(|c| c.check == CheckKind::LegacyLayout)
-                .expect("the layout is checked");
-            assert_eq!(legacy.status, CheckStatus::Mismatch);
-            assert!(
-                legacy
-                    .detail
-                    .as_deref()
-                    .unwrap()
-                    .contains("half-finished migration"),
-                "{generation}: {legacy:?}"
-            );
+            if why == "real bare" {
+                assert_eq!(crate::layout::legacy(&home, testfix::SLUG), before);
+                let out = root_checks(&home, testfix::SLUG);
+                let legacy = out
+                    .iter()
+                    .find(|c| c.check == CheckKind::LegacyLayout)
+                    .unwrap();
+                assert_eq!(legacy.status, CheckStatus::Mismatch);
+                assert!(
+                    legacy.detail.as_deref().unwrap().contains(why),
+                    "{legacy:?}"
+                );
+            }
         }
     }
 
@@ -1232,6 +1260,10 @@ symlink = ["../../etc/passwd"]
         let orphan = home.join("code/x/y");
         std::fs::create_dir_all(&orphan).unwrap();
         std::fs::write(orphan.join(".DS_Store"), "").unwrap();
+        // Nor is anything a slug segment cannot be made of: a dotted org or repo.
+        for dotted in ["code/.cache/y/main", "code/x/.y/main"] {
+            std::fs::create_dir_all(home.join(dotted)).unwrap();
+        }
         assert_eq!(orphan_code_checks(&home, None)[0].status, CheckStatus::Ok);
 
         std::fs::create_dir_all(orphan.join("main")).unwrap();

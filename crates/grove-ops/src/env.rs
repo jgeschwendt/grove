@@ -147,9 +147,7 @@ pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
     for share in shares.iter().filter(|s| !tracked.contains(&s.path)) {
         let rel = Path::new(&share.path);
         let _ = (|| -> Result<()> {
-            let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, false)? else {
-                return Ok(());
-            };
+            let (parent_fd, leaf) = descend_parent(&wt_fd, rel, false)?.context("never laid")?;
             let ours = match classify_leaf(&parent_fd, &leaf)? {
                 LeafState::Symlink { target } => is_under_trunk(&trunk.name, &target),
                 LeafState::RealFile => read_source(&trunk_fd, rel)
@@ -556,10 +554,7 @@ fn gc_worktree<Fd: AsFd>(
 ) {
     let declared_paths: HashSet<&str> = declared.iter().map(|s| s.path.as_str()).collect();
     // Enumerate names via the path (read-only); the unlink decision is fd-pinned.
-    let Ok(entries) = std::fs::read_dir(wt_path) else {
-        return;
-    };
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(wt_path).into_iter().flatten().flatten() {
         let name = entry.file_name();
         let Some(name_str) = name.to_str() else {
             continue;
@@ -907,6 +902,11 @@ mod tests {
         manifest::add_share(&manifest_path(home), "o/r", "copy", paths).unwrap();
     }
 
+    fn mkfifo(path: &Path) {
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        assert!(made.unwrap().success());
+    }
+
     fn wt(home: &Path, name: &str) -> PathBuf {
         home.join("code/o/r").join(name)
     }
@@ -918,10 +918,7 @@ mod tests {
     }
 
     fn snapshot_into(dir: &Path, base: &Path, acc: &mut Vec<(PathBuf, bool, Vec<u8>)>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in entries.flatten() {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
             let rel = p.strip_prefix(base).unwrap().to_path_buf();
             let meta = std::fs::symlink_metadata(&p).unwrap();
@@ -1086,24 +1083,25 @@ mod tests {
     fn materialize_creates_source_and_links_worktree() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        declare(&home, &[".env"]);
+        // A fifo can serve as no source; inside the trunk it is grove's to replace.
+        mkfifo(&wt(&home, "main").join(".fifo"));
+        declare(&home, &[".env", ".fifo"]);
 
+        let dry = diagnose(&home, Some("o/r")).unwrap();
         let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
-        assert_eq!(
-            find(&out, None, ".env").status,
-            ShareStatus::Created,
-            "source created"
-        );
-        assert_eq!(find(&out, Some("feat"), ".env").status, ShareStatus::Linked);
-
-        assert!(
-            wt(&home, "main").join(".env").is_file(),
-            "empty source file in trunk"
-        );
-        assert_eq!(
-            std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
-            Path::new("../main/.env")
-        );
+        for p in [".env", ".fifo"] {
+            assert_eq!(find(&dry, None, p).status, ShareStatus::Created, "{p}");
+            assert_eq!(find(&out, None, p).status, ShareStatus::Created, "{p}");
+            assert_eq!(find(&out, Some("feat"), p).status, ShareStatus::Linked);
+            assert!(
+                wt(&home, "main").join(p).is_file(),
+                "empty source file in trunk"
+            );
+            assert_eq!(
+                std::fs::read_link(wt(&home, "feat").join(p)).unwrap(),
+                Path::new("../main").join(p)
+            );
+        }
     }
 
     #[test]
@@ -1321,22 +1319,44 @@ mod tests {
         );
     }
 
+    /// A slug, root or worktree the walk cannot open is one error row saying why, and no
+    /// link is laid: a bad slug never builds a path, a trunk that is missing or no
+    /// directory has nothing to link through, an unreadable manifest declares nothing,
+    /// and a worktree grove may not open is skipped.
     #[test]
-    fn materialize_noop_when_trunk_missing_entirely() {
-        let tmp = TempDir::new().unwrap();
-        let home = home_with_root(&tmp);
-        std::fs::remove_dir_all(wt(&home, "main")).unwrap();
-        declare(&home, &[".env"]);
+    fn what_the_walk_cannot_open_is_an_error_row() {
+        use std::os::unix::fs::PermissionsExt;
+        fn mode(home: &Path, m: u32) {
+            std::fs::set_permissions(wt(home, "feat"), std::fs::Permissions::from_mode(m)).unwrap();
+        }
+        type Case = (&'static str, Option<&'static str>, &'static str, fn(&Path));
+        let cases: [Case; 5] = [
+            ("../x", None, "invalid slug", |_| {}),
+            ("o/r", None, "trunk missing", |home| {
+                std::fs::remove_dir_all(wt(home, "main")).unwrap();
+            }),
+            ("o/r", None, "open main", |home| {
+                std::fs::remove_dir_all(wt(home, "main")).unwrap();
+                std::fs::write(wt(home, "main"), "").unwrap();
+            }),
+            ("o/r", None, "read shares", |home| {
+                std::fs::write(manifest_path(home), "not = = toml").unwrap();
+            }),
+            ("o/r", Some("feat"), "open worktree", |home| mode(home, 0)),
+        ];
+        for (slug, worktree, why, break_it) in cases {
+            let tmp = TempDir::new().unwrap();
+            let home = home_with_root(&tmp);
+            declare(&home, &[".env"]);
+            break_it(&home);
 
-        let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
-        assert!(
-            out.iter().any(|o| o.status == ShareStatus::Error
-                && o.reason.as_deref().unwrap().contains("trunk"))
-        );
-        assert!(
-            !wt(&home, "feat").join(".env").exists(),
-            "no link into a nonexistent trunk"
-        );
+            let out = materialize(&home, Some(slug), Fix::Safe).unwrap();
+            mode(&home, 0o755);
+            let row = out.iter().find(|o| o.status.is_error()).expect(why);
+            assert_eq!(row.worktree.as_deref(), worktree, "{why}");
+            assert!(row.reason.as_deref().unwrap().contains(why), "{row:?}");
+            assert!(!wt(&home, "feat").join(".env").exists(), "{why}");
+        }
     }
 
     #[test]
@@ -1403,7 +1423,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         std::fs::write(wt(&home, "feat").join(".env"), "conflict").unwrap(); // a conflict
-        declare(&home, &[".env", ".other"]); // .other will be a would-link
+        std::os::unix::fs::symlink("../main/old", wt(&home, "feat").join(".stale")).unwrap();
+        // .other would link; cfg/x would create its source and link under parents that
+        // are absent on both sides
+        declare(&home, &[".env", ".other", ".stale", "cfg/x"]);
 
         let root = home.join("code/o/r");
         let before = snapshot(&root);
@@ -1411,14 +1434,15 @@ mod tests {
         let after = snapshot(&root);
 
         assert_eq!(before, after, "diagnose must not mutate the filesystem");
-        assert_eq!(
-            find(&out, Some("feat"), ".env").status,
-            ShareStatus::Conflict
-        );
-        assert!(
-            out.iter()
-                .any(|o| o.path == ".other" && o.status == ShareStatus::Linked)
-        );
+        for (wt, path, status) in [
+            (Some("feat"), ".env", ShareStatus::Conflict),
+            (Some("feat"), ".other", ShareStatus::Linked),
+            (Some("feat"), ".stale", ShareStatus::Repointed),
+            (None, "cfg/x", ShareStatus::Created),
+            (Some("feat"), "cfg/x", ShareStatus::Linked),
+        ] {
+            assert_eq!(find(&out, wt, path).status, status, "{path}");
+        }
     }
 
     #[test]
@@ -1602,17 +1626,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         std::fs::write(wt(&home, "main").join("seed.env"), "SEED").unwrap();
-        declare_copy(&home, &["seed.env"]);
+        declare_copy(&home, &["seed.env", "cfg/seed.env"]);
 
         let root = home.join("code/o/r");
         let before = snapshot(&root);
         let out = diagnose(&home, Some("o/r")).unwrap();
         let after = snapshot(&root);
         assert_eq!(before, after, "diagnose must not seed a copy");
-        assert_eq!(
-            find(&out, Some("feat"), "seed.env").status,
-            ShareStatus::Copied
-        );
+        for path in ["seed.env", "cfg/seed.env"] {
+            assert_eq!(find(&out, Some("feat"), path).status, ShareStatus::Copied);
+        }
     }
 
     #[test]
@@ -1631,5 +1654,42 @@ mod tests {
             "new worktree pre-seeded with a copy"
         );
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "SEED");
+    }
+
+    /// `unlay` takes back only a file it can match to its trunk source: one whose source
+    /// is absent, or is no regular file, is the user's and stays.
+    #[test]
+    fn unlay_keeps_a_file_it_cannot_match_to_a_trunk_source() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        std::fs::create_dir(wt(&home, "feat").join("cfg")).unwrap();
+        mkfifo(&wt(&home, "main").join("odd"));
+        declare_copy(&home, &["cfg/x", "odd"]);
+        for p in ["cfg/x", "odd"] {
+            std::fs::write(wt(&home, "feat").join(p), "mine").unwrap();
+        }
+
+        unlay(&home, "o/r", "feat").unwrap();
+        for p in ["cfg/x", "odd"] {
+            assert_eq!(
+                std::fs::read_to_string(wt(&home, "feat").join(p)).unwrap(),
+                "mine"
+            );
+        }
+    }
+
+    /// A carried symlink source spelled `./<p>` names the old trunk's own file as surely
+    /// as `<p>`: carried verbatim it would dangle, so it holds the carry.
+    #[test]
+    fn a_dot_relative_link_source_points_inside_the_old_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        std::os::unix::fs::symlink("./.real", wt(&home, "feat").join(".k")).unwrap();
+        declare(&home, &[".k"]);
+
+        let out = carry(&home, "o/r", "feat");
+        let why = find(&out, None, ".k").reason.as_deref().unwrap();
+        assert!(why.contains("inside the old trunk"), "{why}");
+        assert!(std::fs::symlink_metadata(wt(&home, "main").join(".k")).is_err());
     }
 }
