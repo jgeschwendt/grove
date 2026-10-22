@@ -257,8 +257,15 @@ impl ApiClient {
             ))
         })?;
         let healthy = response.status().is_success();
-        let envelope: Envelope<HealthData> = response
-            .json()
+        // A body that never arrives is transport, as in [`Self::decode`]; one that is not
+        // an envelope is protocol.
+        let body = response.bytes().map_err(|e| {
+            CliError::Daemon(format!(
+                "grove server at {} closed the connection mid-health ({e})",
+                self.base
+            ))
+        })?;
+        let envelope: Envelope<HealthData> = serde_json::from_slice(&body)
             .map_err(|e| CliError::Api(format!("invalid response from {}: {e}", self.base)))?;
 
         match envelope {
@@ -767,16 +774,19 @@ mod tests {
     /// which is the transport class — exit 4, like a refused connect.
     #[test]
     fn a_body_cut_off_mid_response_maps_to_daemon() {
-        let client = ApiClient::at(
-            replying("HTTP/1.1 200 OK\r\ncontent-length: 99\r\n\r\n{".into()),
-            BUDGET,
-        );
-        let err = client.snapshot().unwrap_err();
-        assert_eq!(err.exit_code(), 4);
-        assert!(
-            err.to_string().contains("closed the connection mid-roots"),
-            "{err}"
-        );
+        let cut = || {
+            ApiClient::at(
+                replying("HTTP/1.1 200 OK\r\ncontent-length: 99\r\n\r\n{".into()),
+                BUDGET,
+            )
+        };
+        for (err, what) in [
+            (cut().snapshot().unwrap_err(), "mid-roots"),
+            (cut().ok().unwrap_err(), "mid-health"),
+        ] {
+            assert_eq!(err.exit_code(), 4, "{err}");
+            assert!(err.to_string().contains(what), "{err}");
+        }
     }
 
     /// Transport, not protocol: nothing answered, so exit 4 — the code `install.sh`

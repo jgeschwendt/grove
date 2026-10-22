@@ -73,7 +73,7 @@
     },
     "pending-marker": {
       "file": "crates/grove/src/update/layout.rs",
-      "line": 179,
+      "line": 189,
       "node": "crates/grove"
     },
     "per-root-lane": {
@@ -374,10 +374,10 @@
           "enforced_by": "crates/grove/tests/update_e2e.rs",
           "id": "pending-marker",
           "kind": "invariant",
-          "resolved": "crates/grove/src/update/layout.rs:179",
+          "resolved": "crates/grove/src/update/layout.rs:189",
           "text": "the pending marker names the version AND the direction, written before `current` moves and cleared only by a verdict that vouches for `current` (a rejection leaves it for the rollback to overwrite) — so the next `grove up` can tell an unproven forward flip (undo it) from an interrupted rollback (already on the proven version; re-run its gate)",
           "verified": {
-            "digest": "7cd867218a3cb178f0f89b4f7b53082f9e1c744335108ceaed47a76af27c9d97",
+            "digest": "5044da6468a37abce0896f1244217076061bf2daed05b32562f988c0408ccdeb",
             "sha": "361d1df84b67a62be23f67df595d4ba476d67931"
           }
         },

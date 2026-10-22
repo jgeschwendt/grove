@@ -51,6 +51,10 @@ impl Flip {
 pub struct Pending {
     pub version: String,
     pub kind: Flip,
+    /// A rollback's origin when a forward marker said nothing had vouched for it — the
+    /// one fact that tells an automatic rollback off a rejected version from a manual
+    /// one off a proven version, if either dies before its rename.
+    pub from: Option<String>,
 }
 
 /// The on-disk version layout rooted at `GROVE_INSTALL`. Every mutation is an
@@ -109,7 +113,8 @@ impl Layout {
 
     /// The whole marker: the version and the direction the flip moved.
     ///
-    /// The file is `to=<v>` + `kind=forward|rollback`, one field per line. A file
+    /// The file is `to=<v>` + `kind=forward|rollback` + an optional `from=<v>`, one
+    /// field per line. A file
     /// carrying a bare version and no fields is read as a **forward** flip — the only
     /// shape that existed before the direction was recorded, and the reading whose
     /// recovery is bounded (undo it) rather than one that leaves an unproven `current`
@@ -119,17 +124,21 @@ impl Layout {
         let text = fs::read_to_string(self.pending_path()).ok()?;
         let mut version = None;
         let mut kind = Flip::Forward;
+        let mut from = None;
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
             match line.split_once('=') {
                 Some(("to", v)) => version = Some(v.trim().to_string()),
                 Some(("kind", k)) if k.trim() == Flip::Rollback.as_str() => kind = Flip::Rollback,
+                Some(("from", v)) => from = Some(v.trim().to_string()),
                 Some(_) => {}
                 None => version = version.or_else(|| Some(line.to_string())),
             }
         }
-        version
-            .filter(|v| !v.is_empty())
-            .map(|version| Pending { version, kind })
+        version.filter(|v| !v.is_empty()).map(|version| Pending {
+            version,
+            kind,
+            from,
+        })
     }
 
     /// Record that `current` is about to move to `v`, which way, and that nothing has
@@ -137,9 +146,10 @@ impl Layout {
     /// the two orderings distinguishable after a crash: a marker naming the version
     /// `current` points at means the flip landed and the gate never answered; one
     /// naming anything else means the flip itself never happened.
-    fn mark_pending(&self, v: &str, kind: Flip) -> Result<(), CliError> {
+    fn mark_pending(&self, v: &str, kind: Flip, from: Option<&str>) -> Result<(), CliError> {
         let path = self.pending_path();
-        fs::write(&path, format!("to={v}\nkind={}\n", kind.as_str()))
+        let from = from.map(|f| format!("from={f}\n")).unwrap_or_default();
+        fs::write(&path, format!("to={v}\nkind={}\n{from}", kind.as_str()))
             .map_err(|e| CliError::Update(format!("write {}: {e}", path.display())))?;
         fsync_file(&path)?;
         fsync_dir(&self.home);
@@ -181,7 +191,7 @@ impl Layout {
         if !self.version_path(v).is_dir() {
             return Err(CliError::Update(format!("version {v} is not installed")));
         }
-        self.mark_pending(v, Flip::Forward)?;
+        self.mark_pending(v, Flip::Forward, None)?;
         match self.current_version() {
             Some(old) if old != v => self.point(&self.previous_link(), &old)?,
             _ => {}
@@ -200,7 +210,14 @@ impl Layout {
             .previous_version()
             .ok_or_else(|| CliError::Update("no previous version to roll back to".into()))?;
         let cur = self.current_version();
-        self.mark_pending(&prev, Flip::Rollback)?;
+        // `cur` is unproven while a marker says so: a forward flip onto it, or a rollback
+        // off it that recovery is now finishing.
+        let unproven = self.pending_flip().and_then(|p| match p.kind {
+            Flip::Forward => Some(p.version),
+            Flip::Rollback => p.from,
+        });
+        let from = unproven.filter(|u| cur.as_ref() == Some(u));
+        self.mark_pending(&prev, Flip::Rollback, from.as_deref())?;
         self.point(&self.current_link(), &prev)?;
         if let Some(cur) = cur {
             self.point(&self.previous_link(), &cur)?;
@@ -567,7 +584,8 @@ mod tests {
             layout.pending_flip(),
             Some(Pending {
                 version: "0.3.1".into(),
-                kind: Flip::Forward
+                kind: Flip::Forward,
+                from: None
             })
         );
         layout.clear_pending();
@@ -577,16 +595,26 @@ mod tests {
         assert_eq!(layout.pending_version().as_deref(), Some("0.4.0"));
 
         // A rollback moves `current` too, so its gate is owed the same way — but it
-        // lands on the PROVEN version, and the marker has to say so.
-        layout.clear_pending();
+        // lands on the PROVEN version, and the marker has to say so, naming what it
+        // escapes only while a forward marker says nothing vouched for that.
         assert_eq!(layout.rollback().unwrap(), "0.3.1");
-        assert_eq!(
-            layout.pending_flip(),
+        let rolled = |from: Option<&str>| {
             Some(Pending {
                 version: "0.3.1".into(),
-                kind: Flip::Rollback
+                kind: Flip::Rollback,
+                from: from.map(Into::into),
             })
-        );
+        };
+        assert_eq!(layout.pending_flip(), rolled(Some("0.4.0")));
+        // Recovery finishing that rollback keeps naming what it escapes.
+        layout.point(&layout.current_link(), "0.4.0").unwrap();
+        layout.point(&layout.previous_link(), "0.3.1").unwrap();
+        assert_eq!(layout.rollback().unwrap(), "0.3.1");
+        assert_eq!(layout.pending_flip(), rolled(Some("0.4.0")));
+        layout.flip_to("0.4.0").unwrap();
+        layout.clear_pending();
+        assert_eq!(layout.rollback().unwrap(), "0.3.1");
+        assert_eq!(layout.pending_flip(), rolled(None));
     }
 
     /// The marker's on-disk shape, and the one tolerance it grants: a file carrying a
@@ -607,7 +635,8 @@ mod tests {
             layout.pending_flip(),
             Some(Pending {
                 version: "0.4.0".into(),
-                kind: Flip::Forward
+                kind: Flip::Forward,
+                from: None
             })
         );
 
@@ -630,7 +659,7 @@ mod tests {
 
         // The crash window the ordering opens: marked, then the process died before
         // the rename. `current` still names the old, proven version.
-        layout.mark_pending("0.4.0", Flip::Forward).unwrap();
+        layout.mark_pending("0.4.0", Flip::Forward, None).unwrap();
         assert_eq!(layout.pending_version().as_deref(), Some("0.4.0"));
         assert_eq!(layout.current_version().as_deref(), Some("0.3.1"));
     }
