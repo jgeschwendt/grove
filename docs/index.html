@@ -251,7 +251,7 @@
   <ul>
     <li><code class="code">cargo nextest</code> fails ~118 tests in the shift sandbox: those binding
       loopback ports (EPERM), the <code class="code">ps</code>-based
-      <code class="code">process_start_time_is_stable_for_a_live_pid</code>, and on the
+      <code class="code">process_start_time_is_stable_for_a_live_pid_and_absent_for_a_dead_one</code>, and on the
       <code class="code">ci</code> profile the FSEvents-backed
       <code class="code">watcher::tests::slow_an_fs_write_to_the_manifest_announces</code>.</li>
     <li>Coverage is measured under <code class="code">shift-test</code>

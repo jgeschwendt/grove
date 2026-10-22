@@ -216,6 +216,12 @@ mod tests {
         assert_eq!(DEFAULT_BIND, SocketAddr::from(([127, 0, 0, 1], 7777)));
         // An unset `GROVE_BIND` is the default; a set one is parsed, gate and all.
         assert_eq!(super::bind_value(None).unwrap(), DEFAULT_BIND);
+        assert_eq!(
+            super::bind_value(Some("127.0.0.1:7001"))
+                .unwrap()
+                .to_string(),
+            "127.0.0.1:7001"
+        );
         assert!(super::bind_value(Some("0.0.0.0:7777")).is_err());
     }
 
