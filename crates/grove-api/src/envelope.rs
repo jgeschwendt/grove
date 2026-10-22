@@ -39,17 +39,6 @@ impl<T> Envelope<T> {
         Self::Ok(data)
     }
 
-    /// A failure envelope. Attach detail with
-    /// `Envelope::Err(ApiError::new(..).with_data(..))` when the route has any.
-    pub fn error(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self::Err(ApiError::new(code, message))
-    }
-
-    #[must_use]
-    pub const fn is_ok(&self) -> bool {
-        matches!(self, Self::Ok(_))
-    }
-
     /// The envelope as a `Result`, for a caller that wants `?`.
     pub fn into_result(self) -> Result<T, ApiError> {
         match self {
@@ -201,26 +190,24 @@ mod tests {
     fn parses_ok_envelope() {
         let json =
             r#"{"ok":true,"data":{"status":"ready","version":"0.1.0","home":"/home/.grove"}}"#;
-        match serde_json::from_str::<Envelope<HealthData>>(json).unwrap() {
-            Envelope::Ok(data) => {
-                assert_eq!(data.status, HealthStatus::Ready);
-                assert_eq!(data.version, "0.1.0");
-            }
-            Envelope::Err(_) => panic!("expected Ok variant"),
-        }
+        let data = serde_json::from_str::<Envelope<HealthData>>(json)
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(data.status, HealthStatus::Ready);
+        assert_eq!(data.version, "0.1.0");
     }
 
     #[test]
     fn parses_error_envelope() {
         let json = r#"{"ok":false,"error":{"code":"unavailable","message":"server booting"}}"#;
-        match serde_json::from_str::<Envelope<HealthData>>(json).unwrap() {
-            Envelope::Err(error) => {
-                assert_eq!(error.code, ErrorCode::Unavailable);
-                assert_eq!(error.message, "server booting");
-                assert_eq!(error.data, None);
-            }
-            Envelope::Ok(_) => panic!("expected Err variant"),
-        }
+        let error = serde_json::from_str::<Envelope<HealthData>>(json)
+            .unwrap()
+            .into_result()
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert_eq!(error.message, "server booting");
+        assert_eq!(error.data, None);
     }
 
     #[test]
@@ -247,9 +234,10 @@ mod tests {
                 reason: Some("real file".into()),
             },
         ];
-        let Envelope::Ok(data) = serde_json::from_str::<Envelope<DoctorData>>(json).unwrap() else {
-            panic!("expected Ok")
-        };
+        let data = serde_json::from_str::<Envelope<DoctorData>>(json)
+            .unwrap()
+            .into_result()
+            .unwrap();
         assert_eq!(data.report, expected);
         assert!(data.pools.is_empty(), "absent arrays default to empty");
         assert!(data.statuses.is_empty());
@@ -306,10 +294,10 @@ mod tests {
             r#"{"ok":false,"error":{"code":"not_found","message":"root not declared: o/r","data":{"slug":"o/r"}}}"#
         );
 
-        let Envelope::Err(err) = serde_json::from_str::<Envelope<DoctorData>>(&bytes).unwrap()
-        else {
-            panic!("expected Err")
-        };
+        let err = serde_json::from_str::<Envelope<DoctorData>>(&bytes)
+            .unwrap()
+            .into_result()
+            .unwrap_err();
         assert_eq!(err.to_string(), "not_found: root not declared: o/r");
         assert_eq!(
             err.data_as::<RootStatusEntry>(),

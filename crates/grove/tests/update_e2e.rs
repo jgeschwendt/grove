@@ -296,6 +296,10 @@ fn slow_the_update_round_trip_gates_and_rolls_back_against_a_real_daemon() {
     assert_eq!(world.pending(), None);
     world.installed(&["ok"]).ok().says(&format!("(v{HONEST})"));
 
+    // 5. `reboot` is `off` then `on`: the same version answers again afterwards.
+    world.installed(&["reboot"]).ok().says("listening");
+    world.installed(&["ok"]).ok().says(&format!("(v{HONEST})"));
+
     world.installed(&["off"]).ok();
 }
 
@@ -335,4 +339,13 @@ fn slow_an_interrupted_flip_is_undone_by_the_next_up() {
         "recovery restored the proven version, and the requested update was already it"
     );
     assert_eq!(world.pending(), None);
+
+    // Recovery dropped `previous` — the version nothing proved — so an explicit
+    // `--rollback` has nowhere to go, and says so at the update exit code.
+    assert_eq!(world.link("previous"), None);
+    world
+        .grove(&["up", "--rollback"])
+        .exits(7)
+        .says("no previous version to roll back to");
+    assert_eq!(world.link("current").as_deref(), Some(HONEST));
 }
