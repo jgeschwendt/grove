@@ -79,10 +79,7 @@ impl TestClock {
     /// A clock frozen at the moment of construction.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            base: Instant::now(),
-            offset_nanos: AtomicU64::new(0),
-        }
+        Self::default()
     }
 
     /// Move time forward by `delta`. Saturates rather than panicking on an absurd
@@ -96,7 +93,10 @@ impl TestClock {
 #[cfg(any(test, feature = "test-util"))]
 impl Default for TestClock {
     fn default() -> Self {
-        Self::new()
+        Self {
+            base: Instant::now(),
+            offset_nanos: AtomicU64::new(0),
+        }
     }
 }
 

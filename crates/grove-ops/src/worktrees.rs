@@ -3,7 +3,7 @@
 //! two-way *additive* — create declared-but-missing, adopt in-git-but-undeclared
 //! — and never deletes. See `docs/worktrees.html`.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -237,15 +237,9 @@ fn checkout_status(code: &Path, name: &str) -> Option<git::Status> {
 /// `pool.size`; doctor/list surface it. Counts registered worktrees whose path passes
 /// under the pool (so a stray non-worktree dir doesn't inflate it).
 pub fn pool_count(home: &Path, slug: &str) -> Result<usize, Error> {
-    let bare = bare_dir(home, slug);
-    if !bare.exists() {
-        return Ok(0);
-    }
-    Ok(git::worktree_list(&bare)
-        .map_err(Error::git)?
-        .into_iter()
-        .filter(|wt| under_pool(home, slug, &wt.path))
-        .count())
+    crate::pool::slots(home, slug)
+        .map(|s| s.len())
+        .map_err(Error::git)
 }
 
 /// Does a git-reported worktree path sit *strictly* under the root's pool?
@@ -402,14 +396,9 @@ fn adoptable_name(code: &Path, trunk: Option<&str>, wt: &Path) -> Option<String>
     let canonical = wt.canonicalize();
     let wt = canonical.as_deref().unwrap_or(wt);
     let mut segs = wt.strip_prefix(code).ok()?.components();
-    let Component::Normal(first) = segs.next()? else {
-        return None; // not a plain child (e.g. `..`)
-    };
-    if segs.next().is_some() {
-        return None; // nested below the code dir — not a direct child
-    }
-    let name = first.to_str()?;
-    (!is_reserved(name) && trunk != Some(name)).then(|| name.to_string())
+    let name = segs.next()?.as_os_str().to_str()?;
+    // A direct child only, never nested below the code dir; a `..` or `.` is dotted.
+    (segs.next().is_none() && !is_reserved(name) && trunk != Some(name)).then(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -487,6 +476,21 @@ mod tests {
         let home = home_with_root(&tmp);
         let err = remove(&home, "o/r", "nope").unwrap_err();
         assert_eq!(err.code(), "not_declared", "{err}");
+    }
+
+    /// A declaration of a root never realized has no checkout and no bare to prune:
+    /// removing it only undeclares.
+    #[test]
+    fn remove_of_a_never_realized_worktree_only_undeclares() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+        manifest::add_root(&manifest_path(&home), "o/r", "u").unwrap();
+        manifest::add_worktree(&manifest_path(&home), "o/r", "feat", "feature/x", None).unwrap();
+        remove(&home, "o/r", "feat").unwrap();
+        assert_eq!(
+            manifest::list_worktrees(&manifest_path(&home), "o/r").unwrap(),
+            vec![]
+        );
     }
 
     /// A root sharing `.envrc` (linked) and `local.json` (copied), neither ignored by
