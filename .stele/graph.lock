@@ -43,7 +43,7 @@
     },
     "files-authoritative": {
       "file": "crates/grove-ops/src/manifest.rs",
-      "line": 301,
+      "line": 302,
       "node": "crates/grove-ops"
     },
     "install-hands-off-to-grove-up": {
@@ -58,7 +58,7 @@
     },
     "loopback-bind-gate": {
       "file": "crates/grove-daemon/src/config.rs",
-      "line": 200,
+      "line": 189,
       "node": "crates/grove-daemon"
     },
     "mutation-guard": {
@@ -83,7 +83,7 @@
     },
     "promote-attach-before-move": {
       "file": "crates/grove-ops/src/pool.rs",
-      "line": 164,
+      "line": 163,
       "node": "crates/grove-ops"
     },
     "push-only": {
@@ -103,7 +103,7 @@
     },
     "reconcile-additive": {
       "file": "crates/grove-ops/src/worktrees.rs",
-      "line": 280,
+      "line": 274,
       "node": "crates/grove-ops"
     },
     "self-update-flip": {
@@ -193,7 +193,7 @@
           "enforced_by": null,
           "id": "files-authoritative",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/manifest.rs:301",
+          "resolved": "crates/grove-ops/src/manifest.rs:302",
           "text": "files are authoritative — manifest.toml is desired state, git on disk is actual state, and there is no database; every daemon-held status, pool count and log line is a cache",
           "verified": {
             "digest": "5fd46bcf3b33924905906bd128156f8b1bde191fe0f71d50ae6283f5ba9674c0",
@@ -535,7 +535,7 @@
           "enforced_by": null,
           "id": "loopback-bind-gate",
           "kind": "invariant",
-          "resolved": "crates/grove-daemon/src/config.rs:200",
+          "resolved": "crates/grove-daemon/src/config.rs:189",
           "text": "the daemon binds only a LITERAL loopback address and refuses a hostname rather than resolving it; there is no override, and the gate runs again at bind so a hand-built Config cannot slip past it",
           "verified": {
             "digest": "8a2d11c743fad6f1aad925953674387b2950cb16240910edeae3f28791ef742e",
@@ -705,7 +705,7 @@
           "enforced_by": null,
           "id": "promote-attach-before-move",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/pool.rs:164",
+          "resolved": "crates/grove-ops/src/pool.rs:163",
           "text": "promote attaches the branch IN the slot before the move, so any worktree that ever reaches the user path carries a branch and an interrupted promote is adoptable rather than a stranded detached orphan",
           "verified": {
             "digest": "d5b0dbaeb7a6dbff80f7e38aea80615759e1bd18570a30bc7733a2de559f15e7",
@@ -717,7 +717,7 @@
           "enforced_by": null,
           "id": "reconcile-additive",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/worktrees.rs:280",
+          "resolved": "crates/grove-ops/src/worktrees.rs:274",
           "text": "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone",
           "verified": {
             "digest": "1e8ca80df6af265e0ec6de4ad6e18440074559e84a2947481c3c5f6d25c10795",
@@ -780,7 +780,7 @@
           "resolved": "crates/grove-ops/src/pool.rs:60",
           "text": "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout inside the code dir and shares materialize only there, so pool.fill adds a slot under roots/<slug>/pool, outside the code tree, and materializes nothing",
           "verified": {
-            "digest": "117190a978b658f0dc47852a264c7a7b0d1be3c94bd7944b087d7a6d4826d29b",
+            "digest": "7c7b0ba99ec47e9950839c6bb188f180a29d639fe8589c494b42b0d212ab2f3a",
             "sha": "7a06ff8509ef968ebe1c67a531883dc1fcd231b4"
           }
         }

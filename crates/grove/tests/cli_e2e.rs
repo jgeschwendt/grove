@@ -489,6 +489,39 @@ fn slow_the_offline_flow_realizes_in_process() {
     grove(&home, bind, &["version"]).ok().says("grove 0.");
 }
 
+/// The daemon's own startup refusal is a daemon failure: a non-loopback bind never
+/// gets as far as a socket, and `grove serve` exits 4 saying why.
+#[test]
+fn serve_refuses_a_non_loopback_bind_at_exit_4() {
+    let tmp = TempDir::new().unwrap();
+    let (home, _) = scratch(&tmp);
+    let run = grove(&home, Some("0.0.0.0:0"), &["serve"]);
+    assert_eq!(run.code, 4, "{}", run.stderr);
+    assert!(run.stderr.contains("non-loopback"), "{}", run.stderr);
+}
+
+/// A daemon that answers the probe and then hangs up mid-snapshot is a transport
+/// failure, which `tree list` answers from the disk without a word on stderr — only a
+/// daemon that answered and could not be understood is worth saying so.
+#[test]
+fn a_daemon_hanging_up_mid_snapshot_lists_from_disk_silently() {
+    use std::io::{Read, Write};
+    let tmp = TempDir::new().unwrap();
+    let (home, _) = scratch(&tmp);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            let _ = s.read(&mut [0u8; 1024]);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 99\r\n\r\n{");
+        }
+    });
+    let run = grove(&home, Some(&bind), &["tree", "list", SLUG])
+        .ok()
+        .says("no worktrees for o/r");
+    assert_eq!(run.stderr, "");
+}
+
 /// A root whose remote will not clone fails the apply: exit 1, and the failure on
 /// stderr, the half an operator pipes somewhere else.
 #[test]

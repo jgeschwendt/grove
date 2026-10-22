@@ -43,11 +43,11 @@ hazards:
 
 - ※ clock-seam → tests/harness_meta.rs:354
 - ※ delete-before-undeclare → src/roots.rs:198
-- ※ files-authoritative → src/manifest.rs:301
+- ※ files-authoritative → src/manifest.rs:302
 - ※ lane-is-callers → src/env.rs:124
 - ※ never-clobber → src/env.rs:439
-- ※ promote-attach-before-move → src/pool.rs:164
-- ※ reconcile-additive → src/worktrees.rs:280
+- ※ promote-attach-before-move → src/pool.rs:163
+- ※ reconcile-additive → src/worktrees.rs:274
 - ※ sync-never-forces → src/roots.rs:843
 - ※ test-reachability → tests/harness_meta.rs:152
 - ※ trunk-recovery-guard → src/roots.rs:778

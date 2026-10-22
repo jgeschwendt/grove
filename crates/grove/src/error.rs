@@ -166,12 +166,16 @@ mod tests {
             "{refused}"
         );
 
-        // A payload with no `reason` still names what it is about.
+        // A payload with no `reason` still names what it is about: every scalar field,
+        // and nothing nested.
         let missing = CliError::from(
-            ApiError::new(ErrorCode::NotFound, "worktree not declared")
-                .with_data(serde_json::json!({"slug": "o/r", "name": "feat"})),
+            ApiError::new(ErrorCode::NotFound, "worktree not declared").with_data(
+                serde_json::json!({"depth": 2, "forced": true, "name": "feat", "nested": {"x": 1}, "slug": "o/r"}),
+            ),
         );
-        assert!(missing.to_string().contains("name=feat"), "{missing}");
-        assert!(missing.to_string().contains("slug=o/r"), "{missing}");
+        assert_eq!(
+            missing.to_string(),
+            "not_found: worktree not declared: depth=2 forced=true name=feat slug=o/r"
+        );
     }
 }

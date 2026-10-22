@@ -637,17 +637,12 @@ mod tests {
 
     const SLUG: &str = "o/r";
 
-    /// A daemon that accepts the connection and never responds — the `Busy` shape.
+    /// A daemon that takes the connection and never responds — the `Busy` shape. The
+    /// listener never accepts: the kernel's backlog completes the handshake, and the
+    /// leak keeps the port held for the life of the test process.
     fn busy() -> ApiClient {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            for s in listener.incoming().flatten() {
-                std::thread::sleep(Duration::from_secs(30));
-                drop(s);
-            }
-        });
-        ApiClient::at(addr, Duration::from_millis(200))
+        let listener = Box::leak(Box::new(TcpListener::bind("127.0.0.1:0").unwrap()));
+        ApiClient::at(listener.local_addr().unwrap(), Duration::from_millis(200))
     }
 
     /// A daemon answering every request with a 200 success envelope — enough for
@@ -799,12 +794,21 @@ mod tests {
         );
     }
 
+    /// Offline, the CLI is the remover: guarded, it refuses a root holding unsaved
+    /// work and deletes nothing; `--force` removes it anyway.
     #[test]
     fn clone_remove_offline_removes_in_process() {
         let tmp = TempDir::new().unwrap();
         let home = testfix::home_with_root(&tmp);
+        std::fs::write(testfix::trunk_dir(&home, SLUG).join("README.md"), "edited").unwrap();
 
-        clone_remove(&home, &offline(), SLUG, false).unwrap();
+        clone_remove(&home, &offline(), SLUG, false).unwrap_err();
+        assert!(
+            grove_ops::roots::bare_dir(&home, SLUG).is_dir(),
+            "guarded refuses"
+        );
+
+        clone_remove(&home, &offline(), SLUG, true).unwrap();
 
         assert!(!home.join("code/o/r").exists(), "offline removes the root");
         assert!(
@@ -1016,7 +1020,8 @@ mod tests {
 
     /// A snapshot row with a real status: the engine status and pool level — neither
     /// of which any disk read can recover — reach the operator, the trunk leads the
-    /// checkouts under its own branch's name, and the daemon's worktrees follow.
+    /// checkouts under its own branch's name, and the daemon's worktrees follow, each
+    /// flagged with its drift.
     #[test]
     fn tree_list_up_renders_the_daemon_snapshot() {
         let body = r#"{"ok":true,"data":{"roots":[{
@@ -1024,7 +1029,9 @@ mod tests {
             "pool":{"observed":0,"target":2},"syncing":false,
             "root":"/h/roots/o/r","trunk":"/h/code/o/r/release-2","trunk_branch":"release/2","worktrees":[
               {"name":"feat","branch":"feature/x","declared":true,"present":false,
-               "path":"/h/code/o/r/feat"}]}],"logs":[]}}"#;
+               "path":"/h/code/o/r/feat"},
+              {"name":"stray","branch":"stray","declared":false,"present":true,
+               "path":"/h/code/o/r/stray"}]}],"logs":[]}}"#;
         let api = ApiClient::at(envelope_server(body), BUDGET);
         let tmp = TempDir::new().unwrap();
 
@@ -1033,7 +1040,8 @@ mod tests {
         let lines = super::listing(tmp.path(), &api, SLUG, false).unwrap();
         assert_eq!(lines[0], "root o/r: cloning — pool 0/2");
         assert_eq!(lines[1], "release-2  release/2 (trunk)", "{lines:?}");
-        assert!(lines[2].starts_with("feat  feature/x"), "{lines:?}");
+        assert_eq!(lines[2], "feat  feature/x (missing)", "{lines:?}");
+        assert_eq!(lines[3], "stray  stray (undeclared)", "{lines:?}");
     }
 
     /// A `degraded` root's reason is on the wire and nowhere else: reconcile refuses a
@@ -1275,7 +1283,8 @@ mod tests {
     }
 
     /// No `--out`: the file lands beside the manifest it is derived from, which is the
-    /// path `tree add` and `tree remove` watch for to call it stale.
+    /// path `tree add` and `tree remove` watch for to call it stale. An `--out` with no
+    /// parent to create is the write's own failure, exit 1.
     #[test]
     fn workspace_defaults_beside_the_manifest() {
         let tmp = TempDir::new().unwrap();
@@ -1288,6 +1297,8 @@ mod tests {
             home.join("grove.code-workspace"),
             super::workspace_path(&home)
         );
+        let err = super::workspace(&home, Some(std::path::Path::new(""))).unwrap_err();
+        assert_eq!(err.exit_code(), 1, "{err}");
     }
 
     /// A declared-but-unrealized checkout is not a folder: an explorer row pointing at

@@ -684,6 +684,7 @@ mod tests {
     use super::*;
     use grove_ops::clock::TestClock;
     use std::net::TcpListener;
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     /// SIGKILLs a spawned fake child on drop, so a failing assert never leaks it.
@@ -781,6 +782,35 @@ mod tests {
         addr
     }
 
+    /// A stranger on the bind: answers every request `200 OK` with `body`, and keeps
+    /// each request it read so the test asserts in its own thread — a panic in the
+    /// listener's fails no test.
+    fn stranger(body: &'static str) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
+        thread::spawn(move || {
+            for mut s in listener.incoming().flatten() {
+                let mut buf = [0u8; 1024];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                seen.lock().unwrap().push(request);
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
+                let _ = s.write_all((head + body).as_bytes());
+            }
+        });
+        (addr, requests)
+    }
+
+    /// Whether `off` probed the stranger's health and never sent it a shutdown POST.
+    fn probed_never_posted(requests: &Mutex<Vec<String>>) -> bool {
+        let requests = requests.lock().unwrap();
+        requests.iter().any(|r| r.starts_with("GET /api/health"))
+            && !requests.iter().any(|r| r.starts_with("POST"))
+    }
+
     #[test]
     fn http_interface_reports_ready_on_200() {
         let home = TempDir::new().unwrap();
@@ -816,21 +846,47 @@ mod tests {
         assert!(!sc.pid_path().exists(), "stale pid file is cleared");
     }
 
+    /// The real probe records the child's start-time identity beside its pid; a probe
+    /// that cannot read one records the bare pid, which reads back liveness-only.
+    /// Either way `off` stops what `on` started.
     #[test]
     fn on_starts_fake_then_off_stops_it() {
+        let probes: [(PidProbe, bool); 2] = [(probe_pid, true), (|_| PidState::Alive(None), false)];
+        for (pid_probe, identity) in probes {
+            let home = TempDir::new().unwrap();
+            // The test owns a listener on the bind port, so readiness connect succeeds.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let sc = ServerControl {
+                pid_probe,
+                ..control(&home, listener.local_addr().unwrap())
+            };
+
+            sc.on().expect("on starts the fake server");
+            let _guard = KillGuard(sc.running_pid());
+            assert!(sc.running_pid().is_some(), "pid file names a live process");
+            let recorded = fs::read_to_string(sc.pid_path()).unwrap();
+            assert_eq!(recorded.contains("\nv2:"), identity, "{recorded:?}");
+
+            sc.off().expect("off stops it");
+            assert!(sc.running_pid().is_none());
+            assert!(!sc.pid_path().exists(), "pid file removed on stop");
+        }
+    }
+
+    /// A launch that fails before any child exists says which step failed and leaves
+    /// no pid file behind — not even an unreadable one it found there.
+    #[test]
+    fn a_failed_launch_clears_the_pid_file() {
         let home = TempDir::new().unwrap();
-        // The test owns a listener on the bind port, so readiness connect succeeds.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let bind = listener.local_addr().unwrap();
-        let sc = control(&home, bind);
+        let sc = control(&home, closed_port());
+        fs::write(sc.pid_path(), "not a pid").unwrap();
+        fs::create_dir(sc.log_path()).unwrap(); // the log cannot be opened for append
 
-        sc.on().expect("on starts the fake server");
-        let _guard = KillGuard(sc.running_pid());
-        assert!(sc.running_pid().is_some(), "pid file names a live process");
+        let err = sc.on().unwrap_err();
 
-        sc.off().expect("off stops it");
-        assert!(sc.running_pid().is_none());
-        assert!(!sc.pid_path().exists(), "pid file removed on stop");
+        assert_eq!(err.exit_code(), 4);
+        assert!(err.to_string().starts_with("open log at"), "{err}");
+        assert!(!sc.pid_path().exists());
     }
 
     /// The start lock must not travel into the daemon we launch. It did in v1: the
@@ -902,8 +958,10 @@ mod tests {
     #[test]
     fn running_pid_treats_eperm_as_running() {
         let home = TempDir::new().unwrap();
-        // EPERM: a live process owned by another user. Must count as running and
-        // its pid file must survive (a live process still holds the port).
+        // EPERM: a live process owned by another user — init, from anyone but root.
+        // Must count as running and its pid file must survive (a live process still
+        // holds the port).
+        assert_eq!(probe_pid(Pid::from_raw(1)), PidState::Foreign);
         let sc = ServerControl {
             pid_probe: |_| PidState::Foreign,
             ..control(&home, closed_port())
@@ -917,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn process_start_time_is_stable_for_a_live_pid() {
+    fn process_start_time_is_stable_for_a_live_pid_and_absent_for_a_dead_one() {
         // The identity token must be deterministic across reads of the same live
         // process — a token that drifts would make a live server look recycled.
         let me = Pid::from_raw(std::process::id().cast_signed());
@@ -925,6 +983,7 @@ mod tests {
         let b = process_start_time(me);
         assert!(a.is_some(), "our own start time is probeable");
         assert_eq!(a, b, "same live pid → same token");
+        assert_eq!(process_start_time(Pid::from_raw(999_999_999)), None);
     }
 
     /// The darwin `ps` probe must pin `LC_ALL`/`TZ`: `lstart`'s string is locale-
@@ -1096,41 +1155,23 @@ mod tests {
 
     /// An unrelated HTTP service on the bind (no grove envelope), or another home's
     /// daemon (`GROVE_HOME` overridden alone, `GROVE_BIND` left at its default): `off`
-    /// keeps its "not running → Ok" contract and POSTs no shutdown at either. Counted
-    /// in the main thread: a panic in the listener's fails no test.
+    /// keeps its "not running → Ok" contract, and POSTs no shutdown at either once
+    /// its identity probe has read the answer.
     #[test]
     fn off_is_a_no_op_when_a_stranger_holds_the_bind() {
-        use std::io::{Read, Write};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         for body in [
             "hello",
             r#"{"ok":true,"data":{"status":"ready","version":"0.1.0","home":"/elsewhere"}}"#,
         ] {
             let home = TempDir::new().unwrap();
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = listener.local_addr().unwrap();
-            let posts = Arc::new(AtomicUsize::new(0));
-            let seen = Arc::clone(&posts);
-            thread::spawn(move || {
-                for mut s in listener.incoming().flatten() {
-                    let mut buf = [0u8; 1024];
-                    let n = s.read(&mut buf).unwrap_or(0);
-                    if buf[..n].starts_with(b"POST") {
-                        seen.fetch_add(1, Ordering::SeqCst);
-                    }
-                    let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
-                    let _ = s.write_all(head.as_bytes());
-                    let _ = s.write_all(body.as_bytes());
-                }
-            });
+            let (addr, requests) = stranger(body);
             let sc = ServerControl {
                 interface: Interface::Http,
                 ..control(&home, addr)
             };
             sc.off()
                 .expect("a foreign listener is a no-op, not an error");
-            assert_eq!(posts.load(Ordering::SeqCst), 0, "{body}");
+            assert!(probed_never_posted(&requests), "{body}");
         }
     }
 
@@ -1138,29 +1179,11 @@ mod tests {
     /// since `grove on`, or the daemon lost its listener and a local service took the
     /// port — and the drain is gated on identity there too: the stranger receives no
     /// shutdown POST, and `off` falls straight through to the signal ladder for the
-    /// process it actually owns. Counted in the main thread, not asserted in the
-    /// listener's: a panic over there fails no test.
+    /// process it actually owns.
     #[test]
     fn off_never_drains_a_stranger_holding_the_bind_of_a_live_pid() {
-        use std::io::{Read, Write};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         let home = TempDir::new().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let posts = Arc::new(AtomicUsize::new(0));
-        let seen = Arc::clone(&posts);
-        thread::spawn(move || {
-            for mut s in listener.incoming().flatten() {
-                let mut buf = [0u8; 1024];
-                let n = s.read(&mut buf).unwrap_or(0);
-                if buf[..n].starts_with(b"POST") {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                }
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello");
-            }
-        });
-
+        let (addr, requests) = stranger("hello");
         let sc = ServerControl {
             interface: Interface::Http,
             ..control(&home, addr)
@@ -1174,9 +1197,8 @@ mod tests {
 
         sc.off().expect("the ladder stops the process we own");
 
-        assert_eq!(
-            posts.load(Ordering::SeqCst),
-            0,
+        assert!(
+            probed_never_posted(&requests),
             "a stranger must never receive the shutdown POST"
         );
         assert!(sc.has_exited(pid), "the signal reached our own process");
@@ -1217,26 +1239,29 @@ mod tests {
     }
 
     #[test]
-    fn escalate_skips_a_recycled_pid() {
-        let home = TempDir::new().unwrap();
-        // Alive, but under a start time that no longer matches the recorded one —
-        // the pid was recycled to an unrelated process inside the grace window.
-        // `escalate` must report it gone WITHOUT signalling the stranger.
-        let sc = ServerControl {
-            pid_probe: |_| PidState::Alive(Some(999)),
-            ..control(&home, closed_port())
-        };
-        fs::write(sc.pid_path(), "4242\nv2:111\n").unwrap();
-        assert!(
-            sc.escalate(
-                Pid::from_raw(4242),
-                Some(111),
-                Signal::SIGKILL,
-                sc.kill_timeout
-            ),
-            "a recycled pid reads as already exited"
-        );
-        assert!(!sc.pid_path().exists(), "the recycled pid file is cleared");
+    fn escalate_skips_a_dead_or_recycled_pid() {
+        // Gone inside the grace window, or alive under a start time that no longer
+        // matches the recorded one — the pid recycled to an unrelated process.
+        // `escalate` must report either gone WITHOUT signalling whatever holds it.
+        let probes: [PidProbe; 2] = [|_| PidState::Dead, |_| PidState::Alive(Some(999))];
+        for pid_probe in probes {
+            let home = TempDir::new().unwrap();
+            let sc = ServerControl {
+                pid_probe,
+                ..control(&home, closed_port())
+            };
+            fs::write(sc.pid_path(), "4242\nv2:111\n").unwrap();
+            assert!(
+                sc.escalate(
+                    Pid::from_raw(4242),
+                    Some(111),
+                    Signal::SIGKILL,
+                    sc.kill_timeout
+                ),
+                "a dead or recycled pid reads as already exited"
+            );
+            assert!(!sc.pid_path().exists(), "its pid file is cleared");
+        }
     }
 
     #[test]

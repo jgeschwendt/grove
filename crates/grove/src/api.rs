@@ -482,19 +482,21 @@ mod tests {
 
     /// A throwaway HTTP server answering every request with `status` and `body`.
     fn server(status: &'static str, body: &'static str) -> SocketAddr {
+        replying(format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
+             content-length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+    }
+
+    /// A throwaway listener writing `reply` verbatim to every request, then hanging up.
+    fn replying(reply: String) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
             for mut s in listener.incoming().flatten() {
                 let _ = s.read(&mut [0u8; 1024]);
-                let _ = s.write_all(
-                    format!(
-                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
-                         content-length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                );
+                let _ = s.write_all(reply.as_bytes());
             }
         });
         addr
@@ -508,18 +510,13 @@ mod tests {
             .unwrap()
     }
 
-    /// A listener that accepts and then never answers — the busy shape: the probe
-    /// connects, then times out.
+    /// A listener that never accepts — the busy shape: the kernel completes the
+    /// handshake into its backlog, so the probe connects, then times out. Leaked, so
+    /// the port stays held for the life of the test process.
     fn hanging_server() -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        thread::spawn(move || {
-            for s in listener.incoming().flatten() {
-                thread::sleep(Duration::from_secs(30));
-                drop(s);
-            }
-        });
-        addr
+        Box::leak(Box::new(TcpListener::bind("127.0.0.1:0").unwrap()))
+            .local_addr()
+            .unwrap()
     }
 
     /// A malformed `GROVE_BIND` is the error `grove on` gives, not `Busy` — while the
@@ -569,16 +566,20 @@ mod tests {
         assert_eq!(client.ready_version().as_deref(), Some("9.9.9"));
     }
 
-    /// The self-update gate's two rejections: a draining 503 and a body that is not a
-    /// success envelope. Both must read as "no version yet", never as an answer.
+    /// The self-update gate's rejections: a draining 503, and a 200 whose body is not
+    /// a success envelope — an error envelope, or not JSON at all. Each must read as
+    /// "no version yet", never as an answer.
     #[test]
     fn ready_version_refuses_anything_but_a_ready_200() {
         let draining = r#"{"ok":false,"error":{"code":"unavailable","message":"draining"}}"#;
-        assert!(
-            ApiClient::at(server("503 Service Unavailable", draining), BUDGET)
-                .ready_version()
-                .is_none()
-        );
+        for status in ["503 Service Unavailable", "200 OK"] {
+            assert!(
+                ApiClient::at(server(status, draining), BUDGET)
+                    .ready_version()
+                    .is_none(),
+                "{status}"
+            );
+        }
         assert!(
             ApiClient::at(server("200 OK", "not json"), BUDGET)
                 .ready_version()
@@ -747,12 +748,35 @@ mod tests {
         assert!(err.to_string().contains("not_found"), "{err}");
     }
 
+    /// A non-2xx is a failure whatever its body says — empty, or a success envelope
+    /// the daemon never writes under one — and the status is what gets reported.
     #[test]
-    fn remove_root_non_2xx_without_a_body_maps_to_api() {
-        let client = ApiClient::at(server("503 Service Unavailable", ""), BUDGET);
-        let err = client.remove_root("o/r", false).unwrap_err();
-        assert_eq!(err.exit_code(), 1);
-        assert!(err.to_string().contains("503"), "{err}");
+    fn remove_root_non_2xx_maps_to_api_whatever_the_body() {
+        for body in ["", r#"{"ok":true,"data":{"removed":"o/r"}}"#] {
+            let client = ApiClient::at(server("503 Service Unavailable", body), BUDGET);
+            let err = client.remove_root("o/r", false).unwrap_err();
+            assert_eq!(err.exit_code(), 1);
+            assert_eq!(
+                err.to_string(),
+                "grove server remove failed (HTTP 503 Service Unavailable)"
+            );
+        }
+    }
+
+    /// Headers, then a hang-up before the promised body: the daemon died mid-answer,
+    /// which is the transport class — exit 4, like a refused connect.
+    #[test]
+    fn a_body_cut_off_mid_response_maps_to_daemon() {
+        let client = ApiClient::at(
+            replying("HTTP/1.1 200 OK\r\ncontent-length: 99\r\n\r\n{".into()),
+            BUDGET,
+        );
+        let err = client.snapshot().unwrap_err();
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string().contains("closed the connection mid-roots"),
+            "{err}"
+        );
     }
 
     /// Transport, not protocol: nothing answered, so exit 4 — the code `install.sh`
@@ -830,6 +854,13 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.exit_code(), 6, "reachable but not ready is Unhealthy");
         assert!(err.to_string().contains("degraded"), "{err}");
+
+        // A success payload behind a failure status: the status wins.
+        let err = ApiClient::at(server("503 Service Unavailable", ready), BUDGET)
+            .ok()
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 6);
+        assert_eq!(err.to_string(), "status ready");
     }
 
     #[test]

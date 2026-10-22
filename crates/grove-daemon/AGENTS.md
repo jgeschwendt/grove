@@ -42,7 +42,7 @@ edges:
 ## Anchors in this territory
 
 - ※ boot-degrade-sticky → src/boot.rs:68
-- ※ loopback-bind-gate → src/config.rs:200
+- ※ loopback-bind-gate → src/config.rs:189
 - ※ mutation-guard → src/guard.rs:96
 - ※ per-root-lane → src/lane.rs:172
 - ※ push-only → src/engine/mod.rs:364
