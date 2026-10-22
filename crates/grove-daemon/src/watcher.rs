@@ -242,13 +242,15 @@ fn watch_manifest(
 mod tests {
     use super::{DEBOUNCE, Watcher};
     use crate::events::EventBus;
+    use crate::logs::LogRing;
     use grove_api::events::Event;
-    use grove_ops::clock::TestClock;
+    use grove_ops::clock::{Clock, Deadline, TestClock};
     use grove_ops::testfix;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
+    use tracing_subscriber::layer::SubscriberExt as _;
 
     /// The watcher's inputs and its one output.
     struct Harness {
@@ -259,12 +261,12 @@ mod tests {
     }
 
     impl Harness {
-        fn start(home: std::path::PathBuf) -> Self {
+        fn start(home: std::path::PathBuf, fs_watch: bool) -> Self {
             let clock = Arc::new(TestClock::new());
             let bus = EventBus::new();
             let events = bus.subscribe();
             let (nudge, nudges) = mpsc::channel(1);
-            let watcher = Watcher::start(home, clock.clone(), bus, nudges, false);
+            let watcher = Watcher::start(home, clock.clone(), bus, nudges, fs_watch);
             Self {
                 watcher: Some(watcher),
                 clock,
@@ -278,20 +280,20 @@ mod tests {
         /// Stepping in a loop rather than once: the watcher arms its debounce when
         /// it *processes* a trigger, which may be after a single `advance` has
         /// already happened — leaving a deadline in a future the frozen clock never
-        /// reaches. Real time has no such race. The iteration bound is what keeps a
+        /// reaches. Real time has no such race. The outer bound is what keeps a
         /// wedged watcher a failing test rather than a hung suite.
         async fn announced(&mut self) -> Vec<String> {
-            for _ in 0..200 {
-                self.clock.advance(DEBOUNCE);
-                if let Ok(event) = tokio::time::timeout(crate::wait::TICK, self.events.recv()).await
-                {
-                    return match event.expect("the bus is live") {
-                        Event::RootsChanged { roots } => roots,
-                        other => panic!("expected roots_changed, got {other:?}"),
-                    };
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    self.clock.advance(DEBOUNCE);
+                    let next = tokio::time::timeout(crate::wait::TICK, self.events.recv());
+                    if let Ok(Ok(Event::RootsChanged { roots })) = next.await {
+                        return roots;
+                    }
                 }
-            }
-            panic!("no announcement arrived");
+            })
+            .await
+            .expect("no announcement arrived")
         }
 
         async fn stop(mut self) {
@@ -304,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn a_watcher_announces_the_declared_set_at_boot() {
         let tmp = TempDir::new().unwrap();
-        let mut harness = Harness::start(testfix::home_with_root(&tmp));
+        let mut harness = Harness::start(testfix::home_with_root(&tmp), false);
         assert_eq!(harness.announced().await, vec![testfix::SLUG.to_owned()]);
         harness.stop().await;
     }
@@ -316,7 +318,7 @@ mod tests {
     async fn a_missing_home_is_created_and_announces_nothing() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("brand-new");
-        let mut harness = Harness::start(home.clone());
+        let mut harness = Harness::start(home.clone(), false);
         assert!(harness.announced().await.is_empty());
         assert!(home.is_dir(), "the home is created at init");
         harness.stop().await;
@@ -327,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn a_burst_of_nudges_debounces_into_one_announcement() {
         let tmp = TempDir::new().unwrap();
-        let mut harness = Harness::start(testfix::home_with_root(&tmp));
+        let mut harness = Harness::start(testfix::home_with_root(&tmp), false);
         harness.announced().await; // the boot announcement
 
         for _ in 0..3 {
@@ -348,16 +350,35 @@ mod tests {
         harness.stop().await;
     }
 
-    /// A root declared out of band — the offline `grove clone add` case — is
-    /// announced on the next nudge, which is how the engine set learns to start an
-    /// engine for it.
+    /// A home that can be neither created nor watched is logged and survived: the
+    /// failed boot adopt announces nothing (a set we could not read must not reach a
+    /// consumer), and once the home is repaired with a root declared out of band —
+    /// the offline `grove clone add` case — a nudge, the reliable path, announces it.
     #[tokio::test]
-    async fn a_nudge_re_reads_the_declared_set() {
+    async fn an_unusable_home_is_logged_and_a_nudge_re_reads_it_once_repaired() {
+        let ring = Arc::new(LogRing::new(
+            Arc::new(TestClock::new()),
+            tracing::Level::INFO,
+        ));
+        let _logs =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(ring.layer()));
+        let mut lines = ring.subscribe();
         let tmp = TempDir::new().unwrap();
-        let home = tmp.path().join("home");
-        let mut harness = Harness::start(home.clone());
-        assert!(harness.announced().await.is_empty());
+        // A file where the home's parent belongs.
+        let blocker = tmp.path().join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        let home = blocker.join("home");
 
+        let mut harness = Harness::start(home.clone(), true);
+        for message in [
+            "could not create the grove home",
+            "manifest watcher unavailable",
+            "roots adopt failed",
+        ] {
+            assert_eq!(lines.recv().await.unwrap().message, message);
+        }
+
+        std::fs::remove_file(&blocker).unwrap();
         grove_ops::manifest::add_root(
             &grove_ops::roots::manifest_path(&home),
             "o/later",
@@ -365,33 +386,74 @@ mod tests {
         )
         .unwrap();
         harness.nudge.send(()).await.unwrap();
-
-        assert_eq!(harness.announced().await, vec!["o/later".to_owned()]);
+        assert_eq!(harness.announced().await, ["o/later"]);
         harness.stop().await;
     }
 
-    /// An adopt whose home is unreadable logs and **skips the broadcast**: announcing
-    /// a declared set we could not read would push a wrong set to every consumer.
-    #[tokio::test]
-    async fn a_failed_adopt_announces_nothing() {
-        let tmp = TempDir::new().unwrap();
-        let home = tmp.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        // A directory where the manifest belongs: every read of it fails.
-        std::fs::create_dir_all(grove_ops::roots::manifest_path(&home)).unwrap();
+    /// A clock on which every deadline has already passed — a zero debounce — and
+    /// which reports its first reading.
+    struct Expired {
+        clock: TestClock,
+        read: Mutex<Option<oneshot::Sender<()>>>,
+    }
 
-        let mut harness = Harness::start(home);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(
-            harness.events.try_recv().is_err(),
-            "a failed adopt is silent, not a wrong announcement"
-        );
+    impl Clock for Expired {
+        fn now(&self) -> Instant {
+            if let Some(read) = self.read.lock().unwrap().take() {
+                read.send(()).unwrap();
+            }
+            self.clock.now()
+        }
 
-        // And the watcher is still alive: a later trigger is still accepted.
-        harness.nudge.send(()).await.unwrap();
-        harness.clock.advance(DEBOUNCE);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        harness.stop().await;
+        fn deadline(&self, _: Duration) -> Deadline {
+            Deadline::at(self.now())
+        }
+    }
+
+    /// A trigger that fires while an adopt is running is honored once that adopt
+    /// lands: one more pass, with nothing further asking for it.
+    #[test]
+    fn a_trigger_during_an_adopt_runs_one_more_pass_after_it() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // The runtime's one blocking thread is taken, so the boot adopt queues
+            // behind it: the watcher is mid-run until this is released.
+            let (unblock, blocked) = std::sync::mpsc::channel::<()>();
+            let occupant = tokio::task::spawn_blocking(move || blocked.recv());
+            let (read, first_read) = oneshot::channel();
+            let clock = Arc::new(Expired {
+                clock: TestClock::new(),
+                read: Mutex::new(Some(read)),
+            });
+            let tmp = TempDir::new().unwrap();
+            let bus = EventBus::new();
+            let mut events = bus.subscribe();
+            // Queued before the watcher starts, so its first pass takes it — and, the
+            // debounce being zero, fires it — while the boot adopt is still running.
+            let (nudge, nudges) = mpsc::channel(1);
+            nudge.send(()).await.unwrap();
+            let watcher = Watcher::start(testfix::home_with_root(&tmp), clock, bus, nudges, false);
+            // On a current-thread runtime the watcher's first pass runs to its next
+            // await before this task resumes.
+            first_read.await.unwrap();
+
+            unblock.send(()).unwrap();
+            occupant.await.unwrap().unwrap();
+            for pass in ["boot", "the trigger it held"] {
+                let event = tokio::time::timeout(Duration::from_secs(10), events.recv()).await;
+                assert_eq!(
+                    event.expect(pass).unwrap(),
+                    Event::RootsChanged {
+                        roots: vec![testfix::SLUG.to_owned()]
+                    }
+                );
+            }
+            watcher.shutdown().await;
+        });
     }
 
     /// A retired mailbox **parks**; it does not keep answering.

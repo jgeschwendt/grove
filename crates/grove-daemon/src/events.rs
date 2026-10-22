@@ -80,7 +80,7 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::{CAPACITY, EventBus};
-    use grove_api::events::{Event, TaskKind, TaskOutcome};
+    use grove_api::events::{Event, LogLevel, LogLine, TaskKind, TaskOutcome};
     use tokio::sync::broadcast::error::TryRecvError;
 
     fn roots(slug: &str) -> Event {
@@ -115,9 +115,22 @@ mod tests {
     /// and must not be an error the producer has to handle.
     #[tokio::test]
     async fn publishing_with_no_subscribers_is_not_a_failure() {
-        let bus = EventBus::new();
+        let bus = EventBus::default();
         bus.publish(roots("o/r"));
         assert_eq!(bus.subscribers(), 0);
+    }
+
+    /// Only the state events belong on the bus; a debug build names the stray.
+    #[test]
+    #[should_panic(expected = "only state events belong on the bus: log")]
+    fn a_non_state_event_is_refused() {
+        EventBus::new().publish(Event::Log(LogLine {
+            at_ms: 0,
+            level: LogLevel::Info,
+            target: "grove".into(),
+            message: "stray".into(),
+            fields: vec![],
+        }));
     }
 
     /// A subscriber that stops reading loses the overflow rather than stalling the

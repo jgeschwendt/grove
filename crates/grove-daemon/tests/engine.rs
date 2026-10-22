@@ -1207,6 +1207,19 @@ async fn the_engine_set_mirrors_the_declared_roots() {
         "a root with no engine contributes no status at all"
     );
 
+    // A set that fell behind the bus cannot replay what it missed, so it re-reads the
+    // manifest — and finds the root declared while it lagged, unannounced.
+    declare(&home, "o/d", &missing);
+    for _ in 0..=grove_daemon::events::CAPACITY {
+        room.deps
+            .events
+            .publish(Event::RootSyncChanged { slug: "o/a".into() });
+    }
+    until("the lagged set to re-read the manifest", async || {
+        (set.slugs().await == ["o/a", "o/c", "o/d"]).then_some(())
+    })
+    .await;
+
     set.shutdown();
 }
 
