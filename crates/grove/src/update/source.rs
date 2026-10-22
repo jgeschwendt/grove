@@ -172,10 +172,10 @@ impl GitHub {
     /// `stable` follows `<web>/<repo>/releases/latest` — a redirect to the tag page,
     /// and one that excludes prereleases — and reads the version off the final URL.
     /// Any other channel is the highest `v*-<channel>.N` prerelease (the suffix rule
-    /// `scripts/install.sh` uses, though it reads only the first page), walked page by
-    /// page: releases come newest-first, so the
-    /// highest of a channel lives on the first page that carries the channel at all,
-    /// and a short page (< `RELEASES_PER_PAGE`) is the last one.
+    /// `scripts/install.sh` uses, though it reads only the first page), taken over every
+    /// page: releases come newest-first, not highest-first, so a backport canary
+    /// published after a newer line's can sit a page ahead of the highest. A short page
+    /// (< `RELEASES_PER_PAGE`) is the last one.
     fn channel_version(&self, channel: &str) -> Result<String, CliError> {
         let Self {
             repo,
@@ -191,20 +191,19 @@ impl GitHub {
                 CliError::Update(format!("could not resolve latest stable release ({url})"))
             });
         }
+        let mut best = None;
         for page in 1..=MAX_RELEASE_PAGES {
             let body = get_text(
                 &client,
                 &format!("{api}/repos/{repo}/releases?per_page={RELEASES_PER_PAGE}&page={page}"),
             )?;
-            match page_best(&body, channel)? {
-                (Some(v), _) => return Ok(v),
-                (None, n) if n < RELEASES_PER_PAGE => break,
-                _ => {}
+            let (found, n) = page_best(&body, channel)?;
+            best = best.into_iter().chain(found).max_by_key(|v| version_key(v));
+            if n < RELEASES_PER_PAGE {
+                break;
             }
         }
-        Err(CliError::Update(format!(
-            "no {channel} releases found on {repo}"
-        )))
+        best.ok_or_else(|| CliError::Update(format!("no {channel} releases found on {repo}")))
     }
 }
 
@@ -324,11 +323,16 @@ fn http_client(auth: Option<&str>) -> Result<Client, CliError> {
         .map_err(|e| CliError::Update(format!("build http client: {e}")))
 }
 
-/// May a redirect land here? `https` anywhere; `http` only to a loopback host with no username.
+/// May a redirect land here? `https` anywhere; `http` only to a loopback host with no
+/// userinfo — the same refusal [`install_source`] makes of any `@` in a base.
 fn hop_is_allowed(url: &reqwest::Url) -> bool {
     match url.scheme() {
         "https" => true,
-        "http" => url.username().is_empty() && is_loopback_host(url.host_str().unwrap_or("")),
+        "http" => {
+            url.username().is_empty()
+                && url.password().is_none()
+                && is_loopback_host(url.host_str().unwrap_or(""))
+        }
         _ => false,
     }
 }
@@ -452,12 +456,15 @@ mod tests {
         let sidecar = format!("{:X}  t.tar.gz\n", Sha256::digest(b"bundle"));
         let huge = vec![b'x'; usize::try_from(MAX_TEXT_BYTES + 1).unwrap()];
         let huge_sha = format!("{:x}", Sha256::digest(&huge));
-        // A full first page of non-matching (stable) tags; the canary is on page 2,
-        // among tags that must not match it.
-        let page1: Vec<_> = (0..RELEASES_PER_PAGE)
+        // A full page of stable tags (`full/r` serves it forever). `o/r`'s first page
+        // swaps one for a backport canary published after the highest, which sits on
+        // page 2 among tags that must not match it.
+        let mut tags: Vec<_> = (0..RELEASES_PER_PAGE)
             .map(|i| serde_json::json!({ "tag_name": format!("v0.0.{i}") }))
             .collect();
-        let page1 = serde_json::to_vec(&page1).unwrap();
+        let full = serde_json::to_vec(&tags).unwrap();
+        tags[0] = serde_json::json!({ "tag_name": "v0.0.9-canary.31" });
+        let page1 = serde_json::to_vec(&tags).unwrap();
         let page2 = r#"[{"tag_name":"v0.1.0-canary.30"},{"tag_name":"v0.1.1-canary.1"},
             {"tag_name":"v0.9.0-canary"},{"tag_name":"v0.9.0-canary.x"},
             {"tag_name":"v9.9.9-canary."},{"tag_name":"v0.9.0-beta.5"},{"tag_name":"v0.9.0"}]"#;
@@ -477,7 +484,7 @@ mod tests {
             p if p.starts_with("/repos/x/") => Err("/hop/9".into()),
             p if p.starts_with("/repos/full/") => {
                 full_hits.fetch_add(1, Relaxed);
-                Ok(page1.clone())
+                Ok(full.clone())
             }
             p if p.ends_with("&page=1") => Ok(page1.clone()),
             p if p.ends_with("&page=2") => Ok(page2.into()),
@@ -580,6 +587,7 @@ mod tests {
             ("http://127.0.0.1@evil.com/x", false),
             ("http://[::1]@evil.com/x", false),
             ("http://user@127.0.0.1:8080/x", false),
+            ("http://:pw@127.0.0.1/x", false),
         ] {
             match install_source(Some(url.into())) {
                 Ok(src) => assert!(ok && src == BundleSource::BaseUrl(url.into()), "{url}"),
