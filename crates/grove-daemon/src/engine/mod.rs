@@ -62,7 +62,7 @@ use grove_ops::roots::{Applied, SyncReport};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::events::EventBus;
-use crate::lane::{LaneError, Lanes, Priority};
+use crate::lane::{Lanes, Priority};
 
 use permits::Poke;
 pub use permits::{ClonePermit, ClonePermits};
@@ -112,23 +112,7 @@ pub struct StatusInfo {
 pub enum EngineError {
     /// The driver is gone — the root was undeclared, or the daemon is shutting down.
     NoEngine,
-    /// The root's lane refused or lost the op.
-    Lane(LaneError),
-    /// The op ran and failed.
-    Ops(grove_ops::Error),
 }
-
-impl std::fmt::Display for EngineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoEngine => f.write_str("no engine is running for this root"),
-            Self::Lane(e) => write!(f, "{e}"),
-            Self::Ops(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for EngineError {}
 
 /// Everything an engine needs from the daemon around it. One value, cloned per
 /// engine — the fields are all handles.
@@ -527,10 +511,10 @@ impl Driver {
                             grove_ops::roots::sync(&home, &slug)
                         }
                     };
-                    match lanes.run(&slug, Priority::Background, job).await {
-                        Ok(report) => BgOutcome::Sync(report),
-                        Err(_) => BgOutcome::Crashed,
-                    }
+                    lanes
+                        .run(&slug, Priority::Background, job)
+                        .await
+                        .map_or(BgOutcome::Crashed, BgOutcome::Sync)
                 }
                 TaskKind::Fill => {
                     let job = {
@@ -550,10 +534,10 @@ impl Driver {
                             }
                         }
                     };
-                    match lanes.run(&slug, Priority::Background, job).await {
-                        Ok(count) => BgOutcome::Fill(count),
-                        Err(_) => BgOutcome::Crashed,
-                    }
+                    lanes
+                        .run(&slug, Priority::Background, job)
+                        .await
+                        .map_or(BgOutcome::Crashed, BgOutcome::Fill)
                 }
             };
             finish(&tx, kind, outcome, None);
@@ -568,22 +552,22 @@ impl Driver {
     /// started/finished pair brackets a held permit exactly.
     fn bg_done(&mut self, kind: TaskKind, outcome: BgOutcome, permit: Option<ClonePermit>) {
         self.bg = None;
-        // A deferred reconcile never ran: nothing to report, nothing to publish. It
-        // is re-armed and the driver parks for a poke. Parked here, with the slot
-        // already free, rather than in the lane job: a poke sent before this deferral
-        // landed would find `bg` occupied and be declined, and the driver would wait
-        // for a wake-up already spent. A permit freed since the failed try is not
-        // lost either — the park itself pokes for it.
-        if matches!(outcome, BgOutcome::Deferred) {
-            self.deps.clones.park(&self.tx);
-            self.reconcile_pending = true;
-            self.status = next_status(
-                self.status,
-                Transition::Derive(disk_status(&self.deps.home, &self.slug)),
-            );
-            return;
-        }
         let result = match outcome {
+            // A deferred reconcile never ran: nothing to report, nothing to publish.
+            // It is re-armed and the driver parks for a poke. Parked here, with the
+            // slot already free, rather than in the lane job: a poke sent before this
+            // deferral landed would find `bg` occupied and be declined, and the driver
+            // would wait for a wake-up already spent. A permit freed since the failed
+            // try is not lost either — the park itself pokes for it.
+            BgOutcome::Deferred => {
+                self.deps.clones.park(&self.tx);
+                self.reconcile_pending = true;
+                self.status = next_status(
+                    self.status,
+                    Transition::Derive(disk_status(&self.deps.home, &self.slug)),
+                );
+                return;
+            }
             BgOutcome::Reconcile(applied, pool) => {
                 // Applied first and separately, so a pool read that succeeded still
                 // lands when the reconcile beside it errored.
@@ -603,7 +587,6 @@ impl Driver {
             }
             BgOutcome::Fill(count) => self.fill_done(count),
             BgOutcome::Crashed => self.bg_crashed(kind),
-            BgOutcome::Deferred => unreachable!("handled above"),
         };
         self.publish(Event::TaskFinished {
             slug: self.slug.to_string(),
