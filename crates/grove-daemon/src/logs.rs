@@ -64,15 +64,6 @@ pub struct LogRing {
     tx: broadcast::Sender<LogLine>,
 }
 
-impl std::fmt::Debug for LogRing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LogRing")
-            .field("level", &self.level)
-            .field("held", &self.lines().len())
-            .finish_non_exhaustive()
-    }
-}
-
 impl LogRing {
     /// A ring capturing at `level`, stamping through `clock`.
     #[must_use]
@@ -83,12 +74,6 @@ impl LogRing {
             lines: Mutex::new(VecDeque::with_capacity(CAPACITY)),
             tx: broadcast::channel(CHANNEL_DEPTH).0,
         }
-    }
-
-    /// The level at or above which lines are captured.
-    #[must_use]
-    pub const fn level(&self) -> Level {
-        self.level
     }
 
     /// Append one line, evicting the oldest once full, and publish it.
@@ -162,7 +147,7 @@ impl LogRing {
 }
 
 /// The `tracing` layer half of a [`LogRing`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LogLayer {
     ring: Arc<LogRing>,
 }
@@ -217,22 +202,6 @@ impl Visit for Collector {
 
     fn record_str(&mut self, field: &Field, value: &str) {
         self.push(field, value);
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.push(field, &value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.push(field, &value.to_string());
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.push(field, &value.to_string());
-    }
-
-    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.push(field, &value.to_string());
     }
 }
 
@@ -297,6 +266,7 @@ mod tests {
     use grove_ops::clock::{TEST_EPOCH_SECS, TestClock};
     use std::sync::Arc;
     use tracing::Level;
+    use tracing::level_filters::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
 
     fn ring(level: Level) -> Arc<LogRing> {
@@ -340,16 +310,25 @@ mod tests {
     }
 
     /// Debug is dropped by default — the ring is what an operator reads, not a
-    /// firehose — and raising the level turns it back on.
+    /// firehose — even beside a sibling layer that wants everything; raising the
+    /// level turns it back on, each line keeping its own level.
     #[test]
     fn debug_is_dropped_at_the_default_level_and_kept_when_asked_for() {
-        for (level, want) in [(DEFAULT_LEVEL, 0), (Level::DEBUG, 1)] {
+        for (level, want) in [
+            (DEFAULT_LEVEL, &[][..]),
+            (Level::DEBUG, &[LogLevel::Debug][..]),
+            (Level::TRACE, &[LogLevel::Debug, LogLevel::Trace][..]),
+        ] {
             let ring = ring(level);
-            let subscriber = tracing_subscriber::registry().with(ring.layer());
+            let subscriber = tracing_subscriber::registry()
+                .with(ring.layer())
+                .with(LevelFilter::TRACE);
             tracing::subscriber::with_default(subscriber, || {
                 tracing::debug!("chatter");
+                tracing::trace!("more");
             });
-            assert_eq!(ring.recent().len(), want, "at {level}");
+            let levels: Vec<_> = ring.recent().into_iter().map(|l| l.level).collect();
+            assert_eq!(levels, want, "at {level}");
         }
     }
 

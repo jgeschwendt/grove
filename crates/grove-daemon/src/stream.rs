@@ -37,7 +37,6 @@
 //! its own frame — which costs a redundant re-read and nothing else, because every
 //! state event is level-triggered.
 
-use std::convert::Infallible;
 use std::path::Path;
 use std::time::Duration;
 
@@ -114,25 +113,19 @@ pub enum Frame {
 }
 
 impl Frame {
-    /// Render for the wire. Infallible: these types always serialize, and a
-    /// connection is not the place to discover otherwise, so the impossible case
-    /// becomes a comment rather than a torn-down stream.
+    /// Render for the wire. The error is the one `json_data` names and never
+    /// produces: every [`Event`] is plain derived data — no map keyed by anything but
+    /// a string, no hand-written `Serialize` — so serializing one cannot fail.
     fn into_sse(self) -> SseResult {
-        Ok(match self {
-            Self::Beat => SseEvent::default().comment("beat"),
-            Self::Event(event) => match serde_json::to_string(&event) {
-                Ok(data) => SseEvent::default().event(event.name()).data(data),
-                Err(e) => {
-                    tracing::error!(error = %e, "an event would not serialize");
-                    SseEvent::default().comment("unserializable")
-                }
-            },
-        })
+        match self {
+            Self::Beat => Ok(SseEvent::default().comment("beat")),
+            Self::Event(event) => SseEvent::default().event(event.name()).json_data(&event),
+        }
     }
 }
 
-/// A frame, or the error type axum's `Sse` insists on.
-type SseResult = Result<SseEvent, Infallible>;
+/// A frame, or the error axum's `Sse` insists on.
+type SseResult = Result<SseEvent, axum::Error>;
 
 /// The per-connection producer.
 ///
@@ -374,13 +367,13 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
 /// read is the same one `roots::list` already did to produce this row, and the bare's
 /// `HEAD` is a ref file rather than a working tree the engine could be mid-clone in.
 ///
-/// A root whose bare has no answer yet — declared and unrealized, or mid-clone — still
-/// has to draw a row. It falls back to [`grove_ops::roots::trunk_dir`]'s own guess and
-/// names the branch after the directory that guess picked, so the path and the branch
-/// stay one story instead of pairing a guessed path with a blank branch. That name is
-/// the folded one, so a slash-bearing trunk reads back here as `feature-x` rather than
-/// `feature/x` — a placeholder for a root that has no branch to report yet, not a ref
-/// anything may resolve. It is replaced by the real branch the moment the bare answers.
+/// A root whose bare has no answer yet — declared and unrealized, or mid-clone — never
+/// reaches the fallback: [`git::default_branch`] already answers it `main`. Only a git
+/// that cannot be run at all fails [`grove_ops::roots::trunk`], and that row still has
+/// to draw: it takes [`grove_ops::roots::trunk_dir`]'s own guess and names the branch
+/// after the directory that guess picked, so the path and the branch stay one story
+/// instead of pairing a guessed path with a blank branch. That name is the folded one
+/// (`feature-x`, not `feature/x`) — a placeholder, not a ref anything may resolve.
 fn trunk_view(home: &Path, slug: &str) -> (String, String) {
     grove_ops::roots::trunk(home, slug).map_or_else(
         |_| {
@@ -446,8 +439,10 @@ mod tests {
     use crate::app::{AppState, Daemon};
     use crate::config::Config;
     use crate::events::CAPACITY;
+    use grove_api::RootStatus;
     use grove_api::events::{Event, LogLevel, LogLine, TaskKind};
     use grove_ops::clock::{Clock, TestClock};
+    use grove_ops::roots::{manifest_path, trunk_dir};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -483,37 +478,71 @@ mod tests {
     }
 
     /// A UI must render without a second request, so the first thing down the wire is
-    /// the whole world.
+    /// the whole world — a declared root nothing has cloned or driven yet included,
+    /// as an `unknown` row on the `main` trunk an absent bare is guessed at. An unreadable
+    /// manifest is a snapshot of no roots, not a connection that never opens.
     #[tokio::test]
     async fn the_first_frame_is_a_snapshot() {
-        let home = TempDir::new().unwrap();
-        let (_state, _clock, mut rx) = attach(&home).await;
-        assert!(matches!(
-            next(&mut rx).await,
-            Frame::Event(Event::Snapshot(_))
-        ));
+        for (manifest, rows) in [("[roots.\"o/r\"]\nurl = \"https://h/o/r\"\n", 1), ("[", 0)] {
+            let home = TempDir::new().unwrap();
+            std::fs::write(manifest_path(home.path()), manifest).unwrap();
+            let (_state, _clock, mut rx) = attach(&home).await;
+            let Frame::Event(Event::Snapshot(snapshot)) = next(&mut rx).await else {
+                panic!("expected the snapshot first")
+            };
+            assert_eq!(snapshot.roots.len(), rows);
+            for row in snapshot.roots {
+                assert_eq!(row.status, RootStatus::Unknown);
+                assert_eq!(row.trunk_branch, "main");
+                assert_eq!(
+                    row.trunk,
+                    trunk_dir(home.path(), "o/r").display().to_string()
+                );
+            }
+        }
     }
 
-    /// The lag path: a connection that falls behind the bounded bus is **resynced**,
-    /// not silently short a few events. Nothing reads `rx` until the publisher has
-    /// overrun both the bus and the channel in front of it, which is the only way to
-    /// produce a real `Lagged` rather than simulate one.
+    /// The lag paths: a connection that falls behind the bounded bus is **resynced**,
+    /// not silently short a few events, and one that falls behind the log channel is
+    /// told how many lines it lost. Nothing reads `rx` until the publisher has overrun
+    /// both the channel and the one in front of it, which is the only way to produce
+    /// a real `Lagged` rather than simulate one.
     #[tokio::test]
     async fn a_lagging_connection_is_resynced_rather_than_left_short() {
-        let home = TempDir::new().unwrap();
-        let (state, _clock, mut rx) = attach(&home).await;
+        for logs in [false, true] {
+            let home = TempDir::new().unwrap();
+            let (state, _clock, mut rx) = attach(&home).await;
 
-        for n in 0..(CAPACITY + STREAM_DEPTH) * 4 {
-            state.events.publish(Event::TaskStarted {
-                slug: format!("o/{n}"),
-                kind: TaskKind::Reconcile,
-            });
-        }
+            for n in 0..(CAPACITY + STREAM_DEPTH) * 4 {
+                if logs {
+                    state.logs.record(LogLine {
+                        at_ms: 1,
+                        level: LogLevel::Info,
+                        target: "grove_daemon::engine".into(),
+                        message: format!("line {n}"),
+                        fields: Vec::new(),
+                    });
+                } else {
+                    state.events.publish(Event::TaskStarted {
+                        slug: format!("o/{n}"),
+                        kind: TaskKind::Reconcile,
+                    });
+                }
+            }
 
-        let mut seen = 0;
-        while !matches!(next(&mut rx).await, Frame::Event(Event::Resync(_))) {
-            seen += 1;
-            assert!(seen < 1000, "the resync never came");
+            for seen in 0.. {
+                assert!(seen < 1000, "the lag was never reported");
+                match next(&mut rx).await {
+                    Frame::Event(Event::Resync(_)) if !logs => break,
+                    Frame::Event(Event::Log(line)) if line.fields.len() == 1 => {
+                        assert_eq!(line.level, LogLevel::Warn);
+                        assert_eq!(line.fields[0].name, "missed");
+                        assert!(line.fields[0].value.parse::<u64>().unwrap() > 0);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -551,18 +580,16 @@ mod tests {
             Frame::Event(Event::Snapshot(_))
         ));
 
-        state.logs.record(LogLine {
+        let line = LogLine {
             at_ms: 1,
             level: LogLevel::Warn,
             target: "grove_daemon::engine".into(),
             message: "root sync failed".into(),
             fields: Vec::new(),
-        });
-
-        let Frame::Event(Event::Log(line)) = next(&mut rx).await else {
-            panic!("expected a log frame")
         };
-        assert_eq!(line.message, "root sync failed");
+        state.logs.record(line.clone());
+
+        assert_eq!(next(&mut rx).await, Frame::Event(Event::Log(line)));
     }
 
     /// **…including a producer parked on a full channel** — the case the drain arm
@@ -607,23 +634,30 @@ mod tests {
     /// forever. This pins the ordinary path (the producer is parked on a `recv`); the
     /// parked-on-`send` path is beside it, and the connection-level bound that covers
     /// a peer which cannot be written to at all lives in `tests/drain.rs`.
+    ///
+    /// A drain that lands before the opening snapshot is sent — a connect racing the
+    /// stop — ends the stream without it.
     #[tokio::test]
     async fn a_drain_ends_every_open_stream() {
-        let home = TempDir::new().unwrap();
-        let (state, _clock, mut rx) = attach(&home).await;
-        assert!(matches!(
-            next(&mut rx).await,
-            Frame::Event(Event::Snapshot(_))
-        ));
+        for opened in [true, false] {
+            let home = TempDir::new().unwrap();
+            let (state, _clock, mut rx) = attach(&home).await;
+            if opened {
+                assert!(matches!(
+                    next(&mut rx).await,
+                    Frame::Event(Event::Snapshot(_))
+                ));
+            }
 
-        state.shutdown.fire();
+            state.shutdown.fire();
 
-        assert!(
-            tokio::time::timeout(Duration::from_secs(5), rx.recv())
-                .await
-                .expect("the producer notices the drain")
-                .is_none(),
-            "the channel closes rather than going quiet"
-        );
+            assert!(
+                tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                    .await
+                    .expect("the producer notices the drain")
+                    .is_none(),
+                "the channel closes rather than going quiet"
+            );
+        }
     }
 }

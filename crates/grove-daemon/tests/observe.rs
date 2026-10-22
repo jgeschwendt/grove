@@ -411,11 +411,13 @@ async fn slow_the_roots_route_answers_the_snapshot_shape() {
 }
 
 /// The log tail: the ring travels in the snapshot, and a line recorded afterwards
-/// arrives as its own frame on an already-open connection.
+/// arrives as its own frame on an already-open connection — after the heartbeat a
+/// silent connection writes as a bare comment line.
 #[tokio::test]
 async fn the_stream_carries_the_log_ring_and_the_lines_after_it() {
     let tmp = TempDir::new().unwrap();
-    let daemon = Harness::start(tmp.path(), false).await;
+    let clock = Arc::new(TestClock::new());
+    let daemon = Harness::start_with(tmp.path(), false, Arc::clone(&clock) as Arc<dyn Clock>).await;
     daemon.state.logs.record(line("before the connection"));
 
     let mut frames = daemon.stream().await;
@@ -428,6 +430,10 @@ async fn the_stream_carries_the_log_ring_and_the_lines_after_it() {
             .any(|l| l.message == "before the connection"),
         "the ring is queryable through the snapshot"
     );
+
+    clock.advance(grove_daemon::stream::HEARTBEAT);
+    let beat = tokio::time::timeout(BUDGET, frames.response.chunk()).await;
+    assert_eq!(&beat.unwrap().unwrap().unwrap()[..], b": beat\n\n");
 
     daemon.state.logs.record(line("after the connection"));
     let frame = frames.until("the new line", |f| f.event == "log").await;
