@@ -328,9 +328,14 @@ impl Updater {
     /// is written before `current` moves and outlives any rejection, so three states
     /// are distinguishable:
     ///
-    /// - it names something other than `current` → the process died before the
-    ///   rename. Nothing moved, but `current` may itself be unvouched — `up` flips
-    ///   forward off a version whose re-gate just rejected it — so re-gate it in place.
+    /// - a **forward** marker names something other than `current` → the process died
+    ///   before the rename. Nothing moved, but `current` may itself be unvouched — `up`
+    ///   flips forward off a version whose re-gate just rejected it — so re-gate it in
+    ///   place.
+    /// - a **rollback** marker naming `previous`, `from` the unproven `current` → the
+    ///   rollback died before its rename, so `current` is still the version the gate
+    ///   rejected: finish the rollback, exactly as for an unproven forward flip. With
+    ///   no `from`, a manual rollback off a proven `current` died there: re-gate it.
     /// - it names `current` and moved **forward** → the flip landed and no gate has
     ///   vouched for it. `current` is unproven: roll back to the version that *was*
     ///   proven, or re-gate it in place when there is none.
@@ -357,9 +362,17 @@ impl Updater {
             return Ok(Recovery::None);
         };
 
-        let landed_forward = pending.kind == Flip::Forward && pending.version == current;
-        let (proven, outcome) = match self.layout.previous_version() {
-            _ if !landed_forward => {
+        let previous = self.layout.previous_version();
+        let undo = match pending.kind {
+            Flip::Forward => pending.version == current,
+            Flip::Rollback => {
+                pending.from.as_ref() == Some(&current)
+                    && pending.version != current
+                    && previous.as_ref() == Some(&pending.version)
+            }
+        };
+        let (proven, outcome) = match previous {
+            _ if !undo => {
                 println!(
                     "grove: {current} has no healthy verdict since an interrupted update; re-gating it"
                 );
@@ -371,10 +384,7 @@ impl Updater {
                 // to re-gate whatever it targets, and if that target is `restored`
                 // itself, a failed gate would roll back onto it and force-start it.
                 self.layout.forget_previous();
-                println!(
-                    "grove: {} has no healthy verdict; rolled back to {restored}",
-                    pending.version
-                );
+                println!("grove: {current} has no healthy verdict; rolled back to {restored}");
                 (restored, Recovery::Undid)
             }
             // Nothing to fall back to (a first install). `current` stays where it is —
@@ -1222,6 +1232,50 @@ mod tests {
             !calls.is_empty(),
             "an interrupted rollback must never be laundered into an un-gated exit 0"
         );
+        assert!(layout.pending_version().is_none());
+    }
+
+    /// The rollback's other crash window: `Layout::rollback` writes its marker before
+    /// the rename, so a death in between leaves `current` on the rejected version under
+    /// a rollback marker naming the proven one. Re-gating `current` in place would vouch
+    /// for the release that failed to start the moment nothing is running to reject it.
+    #[test]
+    fn a_rollback_that_died_before_its_rename_is_finished_not_regated() {
+        let home = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (up, _p) = updater(&home, &src, Bounce::Healthy);
+        up.up(Some("0.3.1")).unwrap();
+        let layout = Layout::new(home.path());
+        layout
+            .install_bundle("0.4.0", &fake_bundle("0.4.0"))
+            .unwrap();
+        layout.flip_to("0.4.0").unwrap(); // the gate rejected it; roll_back began
+        let marker = "to=0.3.1\nkind=rollback\nfrom=0.4.0\n";
+        fs::write(home.path().join("pending"), marker).unwrap();
+        // The same death in a manual `grove up --rollback` off the PROVEN 0.4.0 leaves
+        // no `from`: its `current` is re-gated where it stands, never rolled off.
+        let manual = TempDir::new().unwrap();
+        let (up, _p) = updater(&manual, &src, Bounce::Healthy);
+        up.up(Some("0.3.1")).unwrap();
+        up.up(Some("0.4.0")).unwrap();
+        fs::write(manual.path().join("pending"), "to=0.3.1\nkind=rollback\n").unwrap();
+        let (operator, probe) = updater(&manual, &src, Bounce::NotRunning);
+        operator.up(Some("0.4.0")).unwrap();
+        assert_eq!(probe.calls.borrow().len(), 1, "one re-gate, no flip");
+        let layout_m = Layout::new(manual.path());
+        assert_eq!(layout_m.current_version().as_deref(), Some("0.4.0"));
+        assert_eq!(layout_m.previous_version().as_deref(), Some("0.3.1"));
+
+        let (next, probe) = updater(&home, &src, Bounce::NotRunning);
+        next.up(Some("0.3.1")).unwrap();
+
+        assert_eq!(
+            probe.calls.borrow()[0].0,
+            "0.3.1",
+            "the gate ran on the proven one"
+        );
+        assert_eq!(layout.current_version().as_deref(), Some("0.3.1"));
+        assert!(layout.previous_version().is_none(), "nothing proved 0.4.0");
         assert!(layout.pending_version().is_none());
     }
 
