@@ -977,13 +977,13 @@ mod tests {
 
         // Bounded spin (≈1 s) rather than a wall-clock read: `Instant::now()` lives
         // only in `clock.rs`, and the harness meta-check enforces that.
-        for _ in 0..200 {
-            if interrupt.load(Ordering::Relaxed) {
-                return;
+        let tripped = (0..200).any(|_| {
+            interrupt.load(Ordering::Relaxed) || {
+                thread::sleep(Duration::from_millis(5));
+                false
             }
-            thread::sleep(Duration::from_millis(5));
-        }
-        panic!("watchdog never tripped on an expired deadline");
+        });
+        assert!(tripped, "watchdog never tripped on an expired deadline");
     }
 
     /// Every porcelain-v2 line kind in one fixture: headers, an index-only change
@@ -1442,7 +1442,8 @@ mod tests {
     }
 
     /// The `root.sync` git triple: fetch moves the remote-tracking ref, the ff
-    /// moves the checkout, and re-running reports `AlreadyCurrent` (idempotent).
+    /// moves the checkout, and re-running reports `AlreadyCurrent` (idempotent). An
+    /// upstream git cannot merge at all is a fault, not an outcome.
     #[test]
     fn fetch_then_fast_forward_updates_a_trunk_checkout() {
         let tmp = TempDir::new().unwrap();
@@ -1479,6 +1480,27 @@ mod tests {
         assert_eq!(
             fast_forward(&trunk, "origin/main").unwrap(),
             FastForward::AlreadyCurrent
+        );
+        let err = fast_forward(&trunk, "origin/nope").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("git merge --ff-only"),
+            "{err:#}"
+        );
+    }
+
+    /// Adoption recovers a root's url from its bare; a remote the bare does not carry
+    /// is an error naming it, never an empty url.
+    #[test]
+    fn remote_url_reads_a_configured_remote_and_names_a_missing_one() {
+        let tmp = TempDir::new().unwrap();
+        let bare = tmp.path().join("repo.git");
+        git(tmp.path(), &["init", "-q", "--bare", "repo.git"]);
+        git(&bare, &["remote", "add", "origin", "https://x/o/r.git"]);
+        assert_eq!(remote_url(&bare, "origin").unwrap(), "https://x/o/r.git");
+        let err = remote_url(&bare, "nope").unwrap_err().to_string();
+        assert!(
+            err.starts_with(&format!("no remote nope in {}: ", bare.display())),
+            "{err}"
         );
     }
 
@@ -1552,8 +1574,9 @@ mod tests {
         // by worktree") — accept both.
         let rendered = format!("{err:#}");
         assert!(
-            rendered.contains("already checked out")
-                || rendered.contains("already used by worktree"),
+            ["already checked out", "already used by worktree"]
+                .iter()
+                .any(|cause| rendered.contains(cause)),
             "surfaces the real cause, not a new-branch error: {err:#}"
         );
         assert!(!b.exists(), "no worktree minted");

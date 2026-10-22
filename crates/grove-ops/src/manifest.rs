@@ -9,6 +9,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
@@ -679,9 +680,8 @@ fn root_table_mut<'a>(doc: &'a mut DocumentMut, slug: &str) -> Result<&'a mut Ta
 /// is dropped (RAII — a bail mid-edit or a panic never wedges the next writer).
 fn with_lock<T>(manifest_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock_path = manifest_path.with_extension("toml.lock");
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent).context("create manifest dir")?;
-    }
+    // The manifest's directory too: `write_doc` publishes beside this lock and relies on it.
+    std::fs::create_dir_all(lock_path.with_file_name("")).context("create manifest dir")?;
     // O_NOFOLLOW: refuse a symlinked lock path so a pre-placed symlink can't
     // redirect us into truncating an arbitrary file.
     //
@@ -700,7 +700,7 @@ fn with_lock<T>(manifest_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T
         Mode::RUSR | Mode::WUSR,
     )
     .with_context(|| format!("open manifest lock {}", lock_path.display()))?;
-    acquire(&lock, &lock_path)?;
+    acquire(&lock, &lock_path, LOCK_BUDGET)?;
     let result = f();
     drop(lock); // releases the advisory lock
     result
@@ -715,17 +715,17 @@ fn with_lock<T>(manifest_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T
 /// with the HTTP request never answering and the CLI printing nothing. Inside the
 /// client's own op budget, so the operator gets grove's diagnosis rather than a
 /// transport timeout.
-const LOCK_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+const LOCK_BUDGET: Duration = Duration::from_secs(15);
 
-/// Take the exclusive lock, bounded by [`LOCK_BUDGET`].
+/// Take the exclusive lock, bounded by `budget` ([`LOCK_BUDGET`] in production).
 ///
 /// Non-blocking + retry rather than a blocking `flock`: there is no way to bound the
 /// blocking form, and `alarm`/`SIGALRM` is not a thing a library may install in a
 /// process it does not own. The poll interval is short enough to be invisible at the
 /// scale of a real critical section.
-fn acquire(lock: &impl rustix::fd::AsFd, lock_path: &Path) -> Result<()> {
+fn acquire(lock: &impl rustix::fd::AsFd, lock_path: &Path, budget: Duration) -> Result<()> {
     let clock = crate::clock::SystemClock;
-    let deadline = crate::clock::Clock::deadline(&clock, LOCK_BUDGET);
+    let deadline = crate::clock::Clock::deadline(&clock, budget);
     loop {
         match flock(lock, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => return Ok(()),
@@ -734,10 +734,10 @@ fn acquire(lock: &impl rustix::fd::AsFd, lock_path: &Path) -> Result<()> {
                     bail!(
                         "manifest lock {} is held by another process (waited {}s)",
                         lock_path.display(),
-                        LOCK_BUDGET.as_secs()
+                        budget.as_secs()
                     );
                 }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => return Err(e).context("lock manifest"),
         }
@@ -754,9 +754,6 @@ fn read_doc(path: &Path) -> Result<DocumentMut> {
 
 fn write_doc(path: &Path, doc: &mut DocumentMut) -> Result<()> {
     sort_doc(doc);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("create manifest dir")?;
-    }
     replace(path, &render(doc))
 }
 
@@ -1117,10 +1114,10 @@ mod tests {
     /// The READ side rejects them too. A hand-edited manifest is declared input, and
     /// what the reconciler reads here goes straight to `git worktree add` — where
     /// `branch = "-D"` with a base reaches `git branch -D <base>` and force-deletes
-    /// it from the bare. Skipped, like an unsafe name: doctor's audit is where the
-    /// operator sees the row named.
+    /// it from the bare. Skipped, like an unsafe name or a row with no `branch` to
+    /// realize: doctor's audit is where the operator sees each one named.
     #[test]
-    fn list_worktrees_skips_a_flag_shaped_branch_or_base() {
+    fn list_worktrees_skips_a_flag_shaped_or_missing_branch_or_base_and_audit_names_each() {
         let tmp = TempDir::new().unwrap();
         let path = manifest(&tmp);
         std::fs::write(
@@ -1128,6 +1125,7 @@ mod tests {
             "[roots.\"o/r\"]\nurl = \"u\"\n\
              [roots.\"o/r\".worktrees.evil]\nbranch = \"-D\"\nbase = \"main\"\n\
              [roots.\"o/r\".worktrees.alsoevil]\nbranch = \"feat\"\nbase = \"-D\"\n\
+             [roots.\"o/r\".worktrees.nobranch]\nbase = \"main\"\n\
              [roots.\"o/r\".worktrees.fine]\nbranch = \"feature/x\"\n",
         )
         .unwrap();
@@ -1138,6 +1136,12 @@ mod tests {
             .map(|w| w.name)
             .collect();
         assert_eq!(names, vec!["fine".to_string()]);
+        let flagged: Vec<_> = audit(&path)
+            .unwrap()
+            .into_iter()
+            .filter_map(|i| i.item)
+            .collect();
+        assert_eq!(flagged, ["alsoevil", "evil", "nobranch"]);
     }
 
     #[test]
@@ -1191,29 +1195,32 @@ mod tests {
 
     /// `trunk` reaches `git worktree add` as a commit-ish, so it is validated like
     /// `branch`/`base`: the read side drops an unusable value (the root still
-    /// converges on its bare's HEAD) and `audit` is where the operator sees it named.
+    /// converges on its bare's HEAD) and `audit` is where the operator sees it named —
+    /// a flag-shaped name and a non-string value alike.
     #[test]
     fn an_invalid_trunk_is_dropped_on_read_and_reported_by_audit() {
         let tmp = TempDir::new().unwrap();
         let path = manifest(&tmp);
-        std::fs::write(
-            &path,
-            "[roots.\"o/r\"]\nurl = \"u\"\ntrunk = \"--orphan\"\n",
-        )
-        .unwrap();
+        for trunk in ["\"--orphan\"", "1"] {
+            std::fs::write(
+                &path,
+                format!("[roots.\"o/r\"]\nurl = \"u\"\ntrunk = {trunk}\n"),
+            )
+            .unwrap();
 
-        assert_eq!(
-            list(&path).unwrap()[0].trunk,
-            None,
-            "unusable reads as absent"
-        );
-        let audited = audit(&path).unwrap();
-        assert!(
-            audited
-                .iter()
-                .any(|i| i.slug == "o/r" && i.item.is_none() && i.reason.contains("trunk")),
-            "{audited:?}"
-        );
+            assert_eq!(
+                list(&path).unwrap()[0].trunk,
+                None,
+                "unusable reads as absent"
+            );
+            let audited = audit(&path).unwrap();
+            assert!(
+                audited
+                    .iter()
+                    .any(|i| i.slug == "o/r" && i.item.is_none() && i.reason.contains("trunk")),
+                "{audited:?}"
+            );
+        }
     }
 
     #[test]
@@ -1476,9 +1483,33 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_missing_file_is_a_noop() {
+    fn canonicalize_missing_file_is_a_noop_and_an_unreadable_one_errs() {
         let tmp = TempDir::new().unwrap();
         assert!(!canonicalize(&manifest(&tmp)).unwrap());
+        std::fs::create_dir(manifest(&tmp)).unwrap();
+        let err = canonicalize(&manifest(&tmp)).unwrap_err();
+        assert_eq!(err.to_string(), "read manifest");
+    }
+
+    /// A writer that cannot take the lock inside its budget gives up naming the lock,
+    /// rather than hanging every mutation behind a wedged holder.
+    #[test]
+    fn a_lock_held_past_the_budget_is_a_named_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        let lock_path = path.with_extension("toml.lock");
+        let err = with_lock(&path, || {
+            let other = open(&lock_path, OFlags::WRONLY, Mode::empty())?;
+            acquire(&other, &lock_path, Duration::ZERO)
+        })
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "manifest lock {} is held by another process (waited 0s)",
+                lock_path.display()
+            )
+        );
     }
 
     #[test]
@@ -1595,6 +1626,17 @@ mod tests {
         );
         assert_eq!(out, input, "the value is untouched");
         assert_eq!(normalize_blank_lines(&out), out, "idempotent");
+    }
+
+    /// A `\`-escaped quote neither closes a string nor ends a `"""` one: what follows
+    /// it is still string content, so a bracket there opens nothing and a `[` line
+    /// after it is still inside the value.
+    #[test]
+    fn normalize_blank_lines_honors_backslash_escapes_in_basic_strings() {
+        let input = "a = \"\\\"[\"\n[t]\n";
+        assert_eq!(normalize_blank_lines(input), "a = \"\\\"[\"\n\n[t]\n");
+        let input = "s = \"\"\"\n\\\"\"\"\n[not-a-header]\n\"\"\"\n";
+        assert_eq!(normalize_blank_lines(input), input);
     }
 
     #[test]
@@ -1782,8 +1824,10 @@ mod tests {
         add_worktree(&path, "o/r", "feat", "feature/x", None).unwrap();
 
         add_share(&path, "o/r", "symlink", &[".env", "tsconfig.base.json"]).unwrap();
-        // Re-adding is idempotent (merge + dedup).
+        // Re-adding is idempotent (merge + dedup); removing from a directive never
+        // declared is a no-op.
         add_share(&path, "o/r", "symlink", &[".env"]).unwrap();
+        remove_share(&path, "o/r", "copy", ".env").unwrap();
         assert_eq!(list_shares(&path, "o/r").unwrap().len(), 2);
 
         remove_share(&path, "o/r", "symlink", ".env").unwrap();

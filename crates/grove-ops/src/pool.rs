@@ -77,12 +77,11 @@ pub fn fill(home: &Path, slug: &str) -> Result<usize, Error> {
     // promoted off, so it has to sit where a cold checkout would start; reading HEAD
     // directly would seed a root that has just declared a new trunk onto the old one.
     let tip = roots::trunk(home, slug).map_err(Error::git)?.branch;
-    let slot = free_slot(home, slug).map_err(Error::io)?;
-    if let Some(parent) = slot.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))
-            .map_err(Error::io)?;
-    }
+    let pool = pool_dir(home, slug);
+    std::fs::create_dir_all(&pool)
+        .with_context(|| format!("create {}", pool.display()))
+        .map_err(Error::io)?;
+    let slot = free_slot(&pool);
     git::worktree_add_detached(&bare, &slot, &tip).map_err(Error::git)?;
     worktrees::pool_count(home, slug)
 }
@@ -235,15 +234,15 @@ pub(crate) fn pool_dir(home: &Path, slug: &str) -> PathBuf {
 
 /// The lowest-index free `<pool>/slot-<n>` path — collision-free and stable, so a
 /// crashed-then-retried fill reuses the same name rather than racing ahead.
-fn free_slot(home: &Path, slug: &str) -> Result<PathBuf> {
-    let pool = pool_dir(home, slug);
-    for n in 0.. {
+fn free_slot(pool: &Path) -> PathBuf {
+    let mut n = 0;
+    loop {
         let cand = pool.join(format!("slot-{n}"));
         if !cand.exists() {
-            return Ok(cand);
+            return cand;
         }
+        n += 1;
     }
-    unreachable!("0.. is unbounded")
 }
 
 #[cfg(test)]
@@ -355,11 +354,18 @@ mod tests {
         assert_eq!(count, 1, "pool refilled");
     }
 
+    /// Only `fill` treats a missing bare as a fault: there is nothing to reclaim and
+    /// nothing to promote, so those converge quietly and the caller goes cold.
     #[test]
-    fn fill_errors_when_the_bare_is_missing() {
+    fn fill_errors_when_the_bare_is_missing_while_reclaim_and_promote_find_no_slot() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
-        assert!(fill(&home, "o/r").is_err(), "not ready → clean error");
+        assert_eq!(fill(&home, "o/r").unwrap_err().code(), "not_ready");
+        assert_eq!(reclaim(&home, "o/r").unwrap(), 0);
+        assert_eq!(
+            promote(&home, "o/r", "feat", "feature/x", None).unwrap(),
+            Promotion::Cold(ColdReason::Empty)
+        );
     }
 
     #[test]
