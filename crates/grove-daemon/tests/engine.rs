@@ -24,10 +24,13 @@ use grove_daemon::engine;
 use grove_daemon::engine::{ClonePermits, Deps, Engine};
 use grove_daemon::events::EventBus;
 use grove_daemon::lane::{DEFAULT_IDLE, Lanes, Priority};
+use grove_daemon::logs::LogRing;
 use grove_ops::clock::SystemClock;
 use grove_ops::testfix;
 use tempfile::TempDir;
 use tokio::sync::{broadcast, oneshot};
+use tracing::Level;
+use tracing_subscriber::layer::SubscriberExt;
 
 const SLUG: &str = "o/r";
 
@@ -353,10 +356,24 @@ async fn a_terminal_fault_degrades_where_a_transient_one_re_derives() {
     let tmp = TempDir::new().unwrap();
     let (home, _src) = declared_home(&tmp);
     let room = Room::new(home);
+    // The operator's log, on this thread — which is where the driver runs.
+    let ring = Arc::new(LogRing::new(Arc::new(SystemClock), Level::WARN));
+    let _log = tracing::subscriber::set_default(tracing_subscriber::registry().with(ring.layer()));
 
     // invalid_input: the slug never reaches git — `reconcile_one` refuses it.
     let terminal = room.start("../escape");
     settles_on(&terminal, RootStatus::Degraded).await;
+    assert!(
+        ring.recent()
+            .iter()
+            .any(|line| line.message.contains("terminal")
+                && line
+                    .fields
+                    .iter()
+                    .any(|f| f.name == "code" && f.value == "invalid_input")),
+        "the degrade is logged with the fault's category: {:?}",
+        ring.recent()
+    );
 
     // not_declared: transient, so the engine trusts disk (nothing there) and waits.
     let transient = room.start("o/never-declared");
@@ -456,8 +473,8 @@ async fn a_legacy_root_degrades_with_its_reason_and_clears_after_doctor_fix() {
 // ── sync ────────────────────────────────────────────────────────────────────────
 
 /// The note's whole life: absent after a clean sync, set when the trunk diverges,
-/// and cleared by the next clean one. Carried law 9 — a diverged trunk is reported,
-/// never forced — is what the middle step pins.
+/// cleared by the next clean one, and `failed` when the fetch is. Carried law 9 — a
+/// diverged trunk is reported, never forced — is what the second step pins.
 #[tokio::test]
 async fn slow_the_sync_note_is_set_by_a_diverged_trunk_and_cleared_by_a_clean_sync() {
     let tmp = TempDir::new().unwrap();
@@ -502,6 +519,18 @@ async fn slow_the_sync_note_is_set_by_a_diverged_trunk_and_cleared_by_a_clean_sy
     })
     .await;
     assert_eq!(engine.sync_info().await.unwrap().note, None);
+
+    // A remote that is gone fails the fetch, and the note says so.
+    std::fs::remove_dir_all(&src).unwrap();
+    engine.sync().await.unwrap();
+    collect_until(&mut room.events, "the failed sync to finish", |e| {
+        is_finished(e, TaskKind::Sync)
+    })
+    .await;
+    assert_eq!(
+        engine.sync_info().await.unwrap().note,
+        Some(SyncNote::Failed)
+    );
 }
 
 /// `sync` is accept-only (invariant `push-only`): it answers as soon as the request
@@ -705,6 +734,72 @@ async fn slow_a_lowered_pool_target_reclaims_its_slots() {
         (grove_ops::worktrees::pool_count(&home, SLUG).ok() == Some(0)).then_some(())
     })
     .await;
+}
+
+/// A failed fill latches until the next event — the level condition is still true,
+/// and without the latch the root would spin on git — and the fill that event
+/// dispatches re-observes disk: a slot laid meanwhile makes it a no-op, never a
+/// second slot. The event is a sync precisely because a sync, unlike a reconcile,
+/// does not re-read the pool, so the driver's hint is still the stale one.
+#[tokio::test]
+async fn a_failed_fill_waits_for_an_event_and_its_retry_re_observes_disk() {
+    let tmp = TempDir::new().unwrap();
+    let (home, _src) = declared_home(&tmp);
+    let mut room = Room::new(home.clone());
+    let engine = room.start(SLUG);
+    settles_on(&engine, RootStatus::Ready).await;
+    collect_until(&mut room.events, "the clone to finish", |e| {
+        is_finished(e, TaskKind::Reconcile)
+    })
+    .await;
+
+    // A file where the pool belongs, so no slot can be laid.
+    let pool = testfix::pool_dir(&home, SLUG);
+    std::fs::write(&pool, "").unwrap();
+    grove_ops::manifest::set_pool_size(&grove_ops::roots::manifest_path(&home), SLUG, 1).unwrap();
+    engine.roots_changed();
+    let seen = collect_until(&mut room.events, "the fill to fail", |e| {
+        is_finished(e, TaskKind::Fill)
+    })
+    .await;
+    assert!(
+        seen.ends_with(&[Event::TaskFinished {
+            slug: SLUG.into(),
+            kind: TaskKind::Fill,
+            outcome: TaskOutcome::Failed
+        }]),
+        "{seen:?}"
+    );
+
+    std::fs::remove_file(&pool).unwrap();
+    grove_ops::pool::fill(&home, SLUG).unwrap();
+    engine.sync().await.unwrap();
+    let seen = collect_until(&mut room.events, "the retried fill to finish", |e| {
+        is_finished(e, TaskKind::Fill)
+    })
+    .await;
+    assert!(
+        seen.ends_with(&[Event::TaskFinished {
+            slug: SLUG.into(),
+            kind: TaskKind::Fill,
+            outcome: TaskOutcome::Ok
+        }]),
+        "{seen:?}"
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|e| matches!(
+                e,
+                Event::TaskStarted {
+                    kind: TaskKind::Fill,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the latch held until the sync: {seen:?}"
+    );
+    assert_eq!(grove_ops::worktrees::pool_count(&home, SLUG).unwrap(), 1);
 }
 
 // ── the clone bound ─────────────────────────────────────────────────────────────

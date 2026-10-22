@@ -462,7 +462,8 @@ async fn roots_remove_404s_an_undeclared_slug() {
 }
 
 /// v1 `roots_controller_test.exs:34` — the declared root goes, on disk and in the
-/// manifest, and the reconcile nudge that tears its engine down follows.
+/// manifest, and the reconcile nudge that tears its engine down follows. Unsaved work
+/// refuses the remove until the caller says `force`.
 #[tokio::test]
 async fn roots_remove_deletes_a_declared_root_from_disk() {
     let tmp = TempDir::new().unwrap();
@@ -475,10 +476,30 @@ async fn roots_remove_deletes_a_declared_root_from_disk() {
         "the fixture checkouts are on disk to begin with"
     );
     assert!(root.is_dir(), "and so is what grove owns for the root");
+    std::fs::write(
+        testfix::trunk_dir(&home, testfix::SLUG).join("README.md"),
+        "edit",
+    )
+    .unwrap();
+
+    let error = err_body(
+        daemon
+            .post("/api/roots/remove", &json!({"slug": testfix::SLUG}))
+            .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+    )
+    .await;
+    assert_eq!(error.code, ErrorCode::RemoveFailed);
+    let reason = error.data.unwrap()["reason"].to_string();
+    assert!(reason.contains("unsaved work"), "{reason}");
+    assert!(code.is_dir(), "a guarded remove deleted nothing");
 
     let data: RemoveRootData = ok_body(
         daemon
-            .post("/api/roots/remove", &json!({"slug": testfix::SLUG}))
+            .post(
+                "/api/roots/remove",
+                &json!({"slug": testfix::SLUG, "force": true}),
+            )
             .await,
         StatusCode::OK,
     )
@@ -549,6 +570,33 @@ async fn slow_roots_sync_accepts_and_the_engine_fast_forwards_the_trunk() {
     assert!(synced.is_ok(), "the accepted sync never reached the trunk");
 
     daemon.state.shutdown.fire();
+}
+
+/// A manifest that will not read is "I cannot tell", never "no such root": every route
+/// that decides declaredness off it answers its own 422 with the reason, not a 404.
+#[tokio::test]
+async fn an_unreadable_manifest_is_a_422_never_a_404() {
+    let tmp = TempDir::new().unwrap();
+    let home = testfix::home_with_root(&tmp);
+    let manifest = grove_ops::roots::manifest_path(&home);
+    std::fs::remove_file(&manifest).unwrap();
+    std::fs::create_dir_all(&manifest).unwrap();
+    let daemon = Harness::ready(&home).await;
+
+    for (path, code) in [
+        ("/api/roots/remove", ErrorCode::RemoveFailed),
+        ("/api/roots/sync", ErrorCode::SyncFailed),
+        ("/api/worktrees/remove", ErrorCode::RemoveFailed),
+    ] {
+        let body = json!({"slug": testfix::SLUG, "name": "feat"});
+        let error = err_body(
+            daemon.post(path, &body).await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+        .await;
+        assert_eq!(error.code, code, "{path}");
+        assert!(error.data.unwrap()["reason"].is_string(), "{path}");
+    }
 }
 
 /// The remove routes' rule, applied to sync: grove-ops would happily fetch nothing for
@@ -771,6 +819,19 @@ async fn worktrees_remove_503s_when_the_root_lane_is_saturated() {
     assert!(error.message.contains("busy"), "{}", error.message);
     assert_eq!(error.data, Some(json!({"slug": testfix::SLUG})));
 
+    // A doctor that named the root is answered strictly: the root's pass could not
+    // run, and an empty report would read as "nothing wrong".
+    let error = err_body(
+        daemon
+            .post("/api/doctor", &json!({"slug": testfix::SLUG}))
+            .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+    )
+    .await;
+    assert_eq!(error.code, ErrorCode::DoctorFailed);
+    let reason = error.data.unwrap()["reason"].to_string();
+    assert!(reason.contains("busy"), "{reason}");
+
     release.send(()).unwrap();
     holder.await.unwrap().unwrap();
     for handle in queued {
@@ -865,7 +926,7 @@ async fn doctor_accepts_a_body_less_post() {
 /// two flags this route branches on both default to false. The route already 422s a
 /// malformed body, so refusing an undeclared one keeps one rule instead of two.
 #[tokio::test]
-async fn doctor_422s_a_body_sent_without_a_json_content_type() {
+async fn doctor_reads_a_body_only_under_a_json_content_type() {
     let tmp = TempDir::new().unwrap();
     let daemon = Harness::ready(tmp.path()).await;
 
@@ -882,6 +943,23 @@ async fn doctor_422s_a_body_sent_without_a_json_content_type() {
         error.message,
         "doctor request body must be sent as application/json"
     );
+
+    // Axum's own `Json` rule decides what declares JSON: a `+json` structured suffix
+    // does, parameters and case aside; another `application/` type does not.
+    for (content_type, status) in [
+        ("Application/vnd.grove+JSON; charset=utf-8", StatusCode::OK),
+        ("application/xml", StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let response = daemon
+            .client
+            .post(daemon.url("/api/doctor"))
+            .header("content-type", content_type)
+            .body(r#"{"dry_run":true}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{content_type}");
+    }
 }
 
 /// The other half of the same rule: a declared body that does not parse is the client

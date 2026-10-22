@@ -20,7 +20,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use grove_api::routes::{
     DoctorData, DoctorRequest, HealthData, HealthStatus, ReconcileData, RemoveRootData,
     RemoveRootRequest, RemoveWorktreeData, RemoveWorktreeRequest, ShutdownData, SyncData,
@@ -151,49 +151,28 @@ pub async fn reconcile(State(state): State<AppState>) -> Reply<ReconcileData> {
 pub async fn sync(
     State(state): State<AppState>,
     body: Result<Json<SyncRequest>, JsonRejection>,
-) -> Response {
+) -> Result<Reply<SyncData>, Response> {
     let Ok(Json(request)) = body else {
-        return invalid_request("missing slug");
+        return Err(invalid_request("missing slug"));
     };
-    let home = state.config.home.clone();
     let slug = request.slug;
-
-    let declared = match ops({
-        let (home, slug) = (home, slug.clone());
-        move || grove_ops::roots::list(&home).map(|roots| roots.iter().any(|r| r.slug == slug))
+    declared(&state, &slug, |e| {
+        failed(ErrorCode::SyncFailed, "sync failed", e)
     })
-    .await
-    {
-        Err(response) => return response,
-        // The manifest would not read at all. Not a 404 — "I cannot tell" is not
-        // "no such root" — so it answers the same 422 a failed op does, with the
-        // reason the operator needs to fix it.
-        Ok(Err(e)) => return sync_failed(&e.to_string()),
-        Ok(Ok(declared)) => declared,
-    };
-    if !declared {
-        return error_response(
-            StatusCode::NOT_FOUND,
-            ApiError::new(ErrorCode::NotFound, "root not declared")
-                .with_data(json!({"slug": slug})),
-        );
-    }
+    .await?;
 
     // `None` covers both shapes of "nothing is driving this root": no engine room at
-    // all, and an engine room that has not started this slug's driver yet.
+    // all, and an engine room that has not started this slug's driver yet. A driver
+    // that disappears between the lookup and the send — an undeclare landing
+    // mid-request — is the same case one instant later, and answers as such rather
+    // than inventing a fourth outcome.
     let engine = match state.engines.get() {
         Some(engines) => engines.engine(&slug).await,
         None => None,
     };
-    let Some(engine) = engine else {
-        return no_engine(&slug);
-    };
-    match engine.sync().await {
-        Ok(()) => Reply::ok(SyncData::ACCEPTED).into_response(),
-        // The driver disappeared between the lookup and the send — an undeclare
-        // landing mid-request. That is the no-engine case one instant later, and it
-        // answers as such rather than inventing a fourth outcome.
-        Err(_) => no_engine(&slug),
+    match engine {
+        Some(engine) if engine.sync().await.is_ok() => Ok(Reply::ok(SyncData::ACCEPTED)),
+        _ => Err(no_engine(&slug)),
     }
 }
 
@@ -201,54 +180,32 @@ pub async fn sync(
 pub async fn remove_root(
     State(state): State<AppState>,
     body: Result<Json<RemoveRootRequest>, JsonRejection>,
-) -> Response {
+) -> Result<Reply<RemoveRootData>, Response> {
     let Ok(Json(request)) = body else {
-        return invalid_request("missing slug");
+        return Err(invalid_request("missing slug"));
     };
-    let home = state.config.home.clone();
     let slug = request.slug;
     let removal = if request.force {
         grove_ops::roots::Removal::Forced
     } else {
         grove_ops::roots::Removal::Guarded
     };
-
-    let declared = match ops({
-        let (home, slug) = (home.clone(), slug.clone());
-        move || grove_ops::roots::list(&home).map(|roots| roots.iter().any(|r| r.slug == slug))
-    })
-    .await
-    {
-        Err(response) => return response,
-        Ok(Err(e)) => return remove_failed(&e),
-        Ok(Ok(declared)) => declared,
-    };
-    if !declared {
-        return error_response(
-            StatusCode::NOT_FOUND,
-            ApiError::new(ErrorCode::NotFound, "root not declared")
-                .with_data(json!({"slug": slug})),
-        );
-    }
+    let remove_failed = |e: grove_ops::Error| failed(ErrorCode::RemoveFailed, "remove failed", e);
+    declared(&state, &slug, remove_failed).await?;
 
     // On the lane: delete-on-disk-then-undeclare must not interleave with this
     // root's in-flight reconcile, which would otherwise observe the half-deleted
     // root as declared-but-missing and re-clone what the operator just removed.
-    match lane(&state, &slug, {
-        let (home, slug) = (home, slug.clone());
+    lane(&state, &slug, {
+        let (home, slug) = (state.config.home.clone(), slug.clone());
         move || grove_ops::roots::remove(&home, &slug, removal)
     })
-    .await
-    {
-        Err(response) => response,
-        Ok(Err(e)) => remove_failed(&e),
-        Ok(Ok(())) => {
-            // The nudge v1 sent the watcher: a removed root's engine is torn down by
-            // the reconcile pass that follows, never by an explicit stop call.
-            state.reconcile.poke();
-            Reply::ok(RemoveRootData { removed: slug }).into_response()
-        }
-    }
+    .await?
+    .map_err(remove_failed)?;
+    // The nudge v1 sent the watcher: a removed root's engine is torn down by the
+    // reconcile pass that follows, never by an explicit stop call.
+    state.reconcile.poke();
+    Ok(Reply::ok(RemoveRootData { removed: slug }))
 }
 
 /// `POST /api/worktrees/remove` — git-remove one worktree, then undeclare it. No
@@ -256,47 +213,59 @@ pub async fn remove_root(
 pub async fn remove_worktree(
     State(state): State<AppState>,
     body: Result<Json<RemoveWorktreeRequest>, JsonRejection>,
-) -> Response {
+) -> Result<Reply<RemoveWorktreeData>, Response> {
     let Ok(Json(request)) = body else {
-        return invalid_request("missing slug or name");
+        return Err(invalid_request("missing slug or name"));
     };
-    let home = state.config.home.clone();
     let (slug, name) = (request.slug, request.name);
 
-    // On the lane, unlike the root check above: listing worktrees runs `git worktree
-    // list` and one `git status` per tree against the same repository the engine may
-    // be mid-reconcile in.
-    let declared = match lane(&state, &slug, {
-        let (home, slug, name) = (home.clone(), slug.clone(), name.clone());
+    // On the lane, unlike the root check: listing worktrees runs `git worktree list`
+    // and one `git status` per tree against the same repository the engine may be
+    // mid-reconcile in. The check and the remove are one job, so nothing queued on
+    // the lane runs between them.
+    lane(&state, &slug, {
+        let (home, slug, name) = (state.config.home.clone(), slug.clone(), name.clone());
         move || {
-            grove_ops::worktrees::list(&home, &slug)
-                .map(|trees| trees.iter().any(|w| w.name == name && w.declared))
+            grove_ops::worktrees::list(&home, &slug)?
+                .iter()
+                .any(|w| w.name == name && w.declared)
+                .then(|| grove_ops::worktrees::remove(&home, &slug, &name))
+                .transpose()
         }
     })
-    .await
-    {
-        Err(response) => return response,
-        Ok(Err(e)) => return remove_failed(&e),
-        Ok(Ok(declared)) => declared,
-    };
-    if !declared {
-        return error_response(
+    .await?
+    .map_err(|e| failed(ErrorCode::RemoveFailed, "remove failed", e))?
+    .ok_or_else(|| {
+        error_response(
             StatusCode::NOT_FOUND,
             ApiError::new(ErrorCode::NotFound, "worktree not declared")
                 .with_data(json!({"slug": slug, "name": name})),
-        );
-    }
+        )
+    })?;
+    Ok(Reply::ok(RemoveWorktreeData { removed: name }))
+}
 
-    match lane(&state, &slug, {
-        let (home, slug, name) = (home, slug.clone(), name.clone());
-        move || grove_ops::worktrees::remove(&home, &slug, &name)
-    })
-    .await
-    {
-        Err(response) => response,
-        Ok(Err(e)) => remove_failed(&e),
-        Ok(Ok(())) => Reply::ok(RemoveWorktreeData { removed: name }).into_response(),
-    }
+/// The declaredness check the root routes share: read off the manifest, off any lane
+/// (see the module doc), and an undeclared slug is a 404 with the slug in
+/// `error.data`. A manifest that will not read at all is `failed`'s to answer — "I
+/// cannot tell" is not "no such root".
+async fn declared(
+    state: &AppState,
+    slug: &str,
+    failed: impl FnOnce(grove_ops::Error) -> Response,
+) -> Result<(), Response> {
+    let (home, owned) = (state.config.home.clone(), slug.to_owned());
+    ops(move || grove_ops::roots::list(&home).map(|roots| roots.iter().any(|r| r.slug == owned)))
+        .await?
+        .map_err(failed)?
+        .then_some(())
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                ApiError::new(ErrorCode::NotFound, "root not declared")
+                    .with_data(json!({"slug": slug})),
+            )
+        })
 }
 
 /// `POST /api/doctor` — diagnose (`dry_run`) or converge the worktree environment,
@@ -339,43 +308,37 @@ pub async fn remove_worktree(
 /// event moved it. The migration is that event, so this route delivers it — the same
 /// `roots_changed` a manifest change sends, and the reason `--fix` is the whole of
 /// the operator's recovery rather than `--fix` plus a restart.
-pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let request = match doctor_request(&headers, &body) {
-        Ok(request) => request,
-        Err(message) => return invalid_request(message),
-    };
+pub async fn doctor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Reply<DoctorData>, Response> {
+    let request = doctor_request(&headers, &body).map_err(invalid_request)?;
     let home = state.config.home.clone();
     let scoped = request.slug.is_some();
 
     // A named slug must be a declared root before it keys a lane or builds a path: the
     // raw string would otherwise migrate a foreign checkout named by absolute path, or
     // run `o/r/` on a lane `o/r`'s engine does not serialize against.
-    let slugs = match ops({
+    let slugs: Vec<_> = ops({
         let (home, slug) = (home.clone(), request.slug.clone());
         move || match slug {
             Some(slug) => grove_ops::roots::declared(&home, &slug).map(|root| vec![root]),
             None => grove_ops::roots::list(&home),
         }
     })
-    .await
-    {
-        Err(response) => return response,
-        Ok(Err(e)) => return doctor_failed(&e.to_string()),
-        Ok(Ok(roots)) => roots.into_iter().map(|root| root.slug).collect::<Vec<_>>(),
-    };
+    .await?
+    .map_err(doctor_failed)?
+    .into_iter()
+    .map(|root| root.slug)
+    .collect();
 
-    let mut data = DoctorData::default();
     // The manifest is one file, so its check is one row for the whole run — off any
     // lane, because it reads no git and must answer even when every root is wedged.
-    match ops({
-        let home = home.clone();
-        move || grove_ops::doctor::manifest_checks(&home)
-    })
-    .await
-    {
-        Err(response) => return response,
-        Ok(checks) => data.checks = checks,
-    }
+    let mut data = DoctorData {
+        checks: ops(move || grove_ops::doctor::manifest_checks(&home)).await?,
+        ..DoctorData::default()
+    };
 
     // Spawned first, awaited after: the roots run on their own lanes concurrently,
     // and awaiting the handles in order is what keeps the report in declared order.
@@ -403,7 +366,7 @@ pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Byt
             }
             // The caller named this root; an empty report would read as "nothing
             // wrong" about the one thing it asked about.
-            Err(reason) if scoped => return doctor_failed(&reason),
+            Err(reason) if scoped => return Err(doctor_failed(reason)),
             Err(reason) => data.checks.push(unavailable_root(&slug, reason)),
         }
     }
@@ -415,13 +378,13 @@ pub async fn doctor(State(state): State<AppState>, headers: HeaderMap, body: Byt
         // `statuses` — that is what the operator's `--fix` just cleared — and the
         // nudge is what turns it `ready` without waiting for an unrelated event.
         for slug in migrated {
-            if let Some(engine) = engines.engine(&slug).await {
+            engines.engine(&slug).await.inspect(|engine| {
                 tracing::info!(slug = %slug, "root migrated off the legacy layout; re-deriving");
                 engine.roots_changed();
-            }
+            });
         }
     }
-    Reply::ok(data).into_response()
+    Ok(Reply::ok(data))
 }
 
 /// One root's doctor pass: the share converge, the pool read, and the plumbing
@@ -459,8 +422,7 @@ async fn root_pass(
 
     let deadline = state.clock.deadline(DOCTOR_BUDGET);
     match crate::wait::within(deadline, &*state.clock, job).await {
-        Some(Ok(Ok(pass))) => Ok(pass),
-        Some(Ok(Err(e))) => Err(e.to_string()),
+        Some(Ok(pass)) => pass.map_err(|e| e.to_string()),
         Some(Err(e)) => Err(e.to_string()),
         None => Err(format!(
             "the root exceeded doctor's {}s budget",
@@ -548,12 +510,15 @@ pub async fn method_not_allowed() -> Response {
 /// vocabulary, so it answers 500 `error` rather than being dressed up as a domain
 /// failure.
 async fn ops<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T, Response> {
-    tokio::task::spawn_blocking(call).await.map_err(|e| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ApiError::new(ErrorCode::Error, format!("ops task failed: {e}")),
-        )
-    })
+    tokio::task::spawn_blocking(call).await.map_err(task_failed)
+}
+
+/// An op that produced no result at all.
+fn task_failed(e: impl std::fmt::Display) -> Response {
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        ApiError::new(ErrorCode::Error, format!("ops task failed: {e}")),
+    )
 }
 
 /// Run a grove-ops call on `slug`'s lane, serialized against every other writer for
@@ -580,10 +545,7 @@ async fn lane<T: Send + 'static>(
                 ApiError::new(ErrorCode::Unavailable, e.to_string())
                     .with_data(json!({"slug": slug})),
             ),
-            LaneError::Lost => error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ApiError::new(ErrorCode::Error, format!("ops task failed: {e}")),
-            ),
+            LaneError::Lost => task_failed(e),
         })
 }
 
@@ -611,31 +573,19 @@ fn no_engine(slug: &str) -> Response {
     )
 }
 
-/// A sync request that could not be decided because the manifest would not read.
-fn sync_failed(reason: &str) -> Response {
-    error_response(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        ApiError::new(ErrorCode::SyncFailed, "sync failed").with_data(json!({"reason": reason})),
-    )
-}
-
 /// A doctor run that reached the ops layer and failed there.
-fn doctor_failed(reason: &str) -> Response {
-    error_response(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        ApiError::new(ErrorCode::DoctorFailed, "doctor failed")
-            .with_data(json!({"reason": reason})),
-    )
+fn doctor_failed(reason: impl std::fmt::Display) -> Response {
+    failed(ErrorCode::DoctorFailed, "doctor failed", reason)
 }
 
-/// The failure both remove routes share. `error.data.reason` carries the ops
+/// A request that reached the ops layer and failed there — a remove, a doctor run,
+/// or a sync whose manifest would not read. `error.data.reason` carries the ops
 /// message; the category (`grove_ops::Error::code`) stays out of the HTTP code,
 /// which classifies the *request*, not the operation.
-fn remove_failed(e: &grove_ops::Error) -> Response {
+fn failed(code: ErrorCode, message: &str, reason: impl std::fmt::Display) -> Response {
     error_response(
         StatusCode::UNPROCESSABLE_ENTITY,
-        ApiError::new(ErrorCode::RemoveFailed, "remove failed")
-            .with_data(json!({"reason": e.to_string()})),
+        ApiError::new(code, message).with_data(json!({"reason": reason.to_string()})),
     )
 }
 
