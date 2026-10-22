@@ -122,6 +122,7 @@ mod tests {
 
     /// Only the state events belong on the bus; a debug build names the stray.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "only state events belong on the bus: log")]
     fn a_non_state_event_is_refused() {
         EventBus::new().publish(Event::Log(LogLine {
