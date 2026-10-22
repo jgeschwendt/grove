@@ -39,6 +39,18 @@ missing_errors_doc = "allow"
 # CLI dispatch handlers keep a uniform `Result` signature even when infallible.
 unnecessary_wraps = "allow"
 
+# The self-update bundle path — gzip, tar and the sha256 sidecar over a whole debug
+# `grove` binary (~50 MB) — runs ten times slower unoptimized. The two update_e2e
+# tests spent ~30 s of CPU and set the CI suite's wall clock on it; optimized, ~9 s.
+# Only the bundle's codec and digest crates: gix's sha1/zlib were measured too and
+# bought nothing.
+[profile.dev.package]
+adler2.opt-level = 3
+flate2.opt-level = 3
+miniz_oxide.opt-level = 3
+sha2.opt-level = 3
+simd-adler32.opt-level = 3
+
 # The install bundle ships one binary; size and startup are worth the link time.
 [profile.release]
 lto = true
