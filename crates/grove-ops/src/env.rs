@@ -554,7 +554,10 @@ fn gc_worktree<Fd: AsFd>(
 ) {
     let declared_paths: HashSet<&str> = declared.iter().map(|s| s.path.as_str()).collect();
     // Enumerate names via the path (read-only); the unlink decision is fd-pinned.
-    for entry in std::fs::read_dir(wt_path).into_iter().flatten().flatten() {
+    let Ok(entries) = std::fs::read_dir(wt_path) else {
+        return;
+    };
+    for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name_str) = name.to_str() else {
             continue;
@@ -1657,19 +1660,23 @@ mod tests {
     }
 
     /// `unlay` takes back only a file it can match to its trunk source: one whose source
-    /// is absent, or is no regular file, is the user's and stays.
+    /// is absent, or is no regular file, is the user's and stays. A share whose parent
+    /// the worktree lacks was never laid, and the shares after it are still taken back.
     #[test]
     fn unlay_keeps_a_file_it_cannot_match_to_a_trunk_source() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
         std::fs::create_dir(wt(&home, "feat").join("cfg")).unwrap();
         mkfifo(&wt(&home, "main").join("odd"));
+        std::os::unix::fs::symlink("../main/.env", wt(&home, "feat").join(".env")).unwrap();
+        declare(&home, &["gone/x", ".env"]);
         declare_copy(&home, &["cfg/x", "odd"]);
         for p in ["cfg/x", "odd"] {
             std::fs::write(wt(&home, "feat").join(p), "mine").unwrap();
         }
 
         unlay(&home, "o/r", "feat").unwrap();
+        assert!(std::fs::symlink_metadata(wt(&home, "feat").join(".env")).is_err());
         for p in ["cfg/x", "odd"] {
             assert_eq!(
                 std::fs::read_to_string(wt(&home, "feat").join(p)).unwrap(),

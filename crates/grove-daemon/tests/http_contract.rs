@@ -584,6 +584,7 @@ async fn an_unreadable_manifest_is_a_422_never_a_404() {
     let daemon = Harness::ready(&home).await;
 
     for (path, code) in [
+        ("/api/doctor", ErrorCode::DoctorFailed),
         ("/api/roots/remove", ErrorCode::RemoveFailed),
         ("/api/roots/sync", ErrorCode::SyncFailed),
         ("/api/worktrees/remove", ErrorCode::RemoveFailed),
@@ -772,12 +773,12 @@ async fn worktrees_remove_removes_a_declared_worktree() {
 /// The lane's backpressure, seen from the wire: a root whose foreground queue is at
 /// its bound answers 503 `unavailable` rather than growing without limit. v1's
 /// `ops_busy`, in the readiness vocabulary — "come back", not "your request was
-/// wrong".
+/// wrong". A doctor scoped to that root answers 422 `doctor_failed`, "busy".
 ///
 /// The lane is held by one blocking job and then filled to its depth, so the request
 /// under test is the one that finds no room.
 #[tokio::test]
-async fn worktrees_remove_503s_when_the_root_lane_is_saturated() {
+async fn a_saturated_root_lane_503s_a_remove_and_fails_a_scoped_doctor() {
     let tmp = TempDir::new().unwrap();
     let home = testfix::home_with_root(&tmp);
     let daemon = Harness::ready(&home).await;
@@ -944,11 +945,13 @@ async fn doctor_reads_a_body_only_under_a_json_content_type() {
         "doctor request body must be sent as application/json"
     );
 
-    // Axum's own `Json` rule decides what declares JSON: a `+json` structured suffix
-    // does, parameters and case aside; another `application/` type does not.
+    // Grove's `is_json` mirrors axum's `Json` rule: an `application/…+json` structured
+    // suffix declares JSON, parameters and case aside; another `application/` type, or
+    // a `+json` suffix on another top-level type, does not.
     for (content_type, status) in [
         ("Application/vnd.grove+JSON; charset=utf-8", StatusCode::OK),
         ("application/xml", StatusCode::UNPROCESSABLE_ENTITY),
+        ("text/x+json", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
         let response = daemon
             .client

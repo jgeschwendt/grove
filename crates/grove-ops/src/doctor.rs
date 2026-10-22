@@ -697,6 +697,8 @@ mod tests {
     };
     use crate::layout::Half;
     use crate::{git, manifest, pool, roots, testfix};
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
@@ -1260,11 +1262,17 @@ symlink = ["../../etc/passwd"]
         let orphan = home.join("code/x/y");
         std::fs::create_dir_all(&orphan).unwrap();
         std::fs::write(orphan.join(".DS_Store"), "").unwrap();
-        // Nor is anything a slug segment cannot be made of: a dotted org or repo.
-        for dotted in ["code/.cache/y/main", "code/x/.y/main"] {
-            std::fs::create_dir_all(home.join(dotted)).unwrap();
+        // Nor is anything a slug segment cannot be made of — a dotted org or repo — or
+        // an org grove cannot read.
+        for skipped in ["code/.cache/y/main", "code/x/.y/main", "code/z/y/main"] {
+            std::fs::create_dir_all(home.join(skipped)).unwrap();
         }
-        assert_eq!(orphan_code_checks(&home, None)[0].status, CheckStatus::Ok);
+        let z = |m| std::fs::set_permissions(home.join("code/z"), Permissions::from_mode(m));
+        z(0).unwrap();
+        let out = orphan_code_checks(&home, None);
+        z(0o755).unwrap();
+        std::fs::remove_dir_all(home.join("code/z")).unwrap();
+        assert_eq!(out[0].status, CheckStatus::Ok, "{out:?}");
 
         std::fs::create_dir_all(orphan.join("main")).unwrap();
         let out = orphan_code_checks(&home, None);

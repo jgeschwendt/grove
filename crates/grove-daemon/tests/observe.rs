@@ -38,16 +38,20 @@ impl Harness {
     /// mailbox is left unclaimed, which is what tells `serve` to start the watcher and
     /// the engines. The shutdown route is disarmed unless a test asks for it.
     async fn start(home: &Path, shutdown: bool) -> Self {
-        Self::start_with(home, shutdown, Arc::new(SystemClock)).await
+        Self::start_with(home, shutdown, Arc::new(SystemClock), true).await
     }
 
     /// The same, on a clock the caller drives — how a 30-second budget is exercised
-    /// without a 30-second test.
-    async fn start_with(home: &Path, shutdown: bool, clock: Arc<dyn Clock>) -> Self {
+    /// without a 30-second test — and with the engine room only when `room` asks: without
+    /// it, no watcher announces the boot roots onto a stream a test is reading.
+    async fn start_with(home: &Path, shutdown: bool, clock: Arc<dyn Clock>, room: bool) -> Self {
         let config = Config::new(home, SocketAddr::from(([127, 0, 0, 1], 0)))
             .unwrap()
             .with_shutdown_enabled(shutdown);
-        let daemon = Daemon::bind(config, clock).await.unwrap();
+        let mut daemon = Daemon::bind(config, clock).await.unwrap();
+        if !room {
+            daemon.take_nudges();
+        }
         let addr = daemon.local_addr().unwrap();
         let state = daemon.state().clone();
         state.boot.mark_ready();
@@ -132,10 +136,10 @@ struct Frame {
 }
 
 impl Frames {
-    /// The next `event:`-carrying frame, skipping comments.
+    /// The next frame. A comment reads back whole as its `event`, with no data.
     async fn next(&mut self) -> Frame {
         loop {
-            while let Some(split) = self.buffer.find("\n\n") {
+            if let Some(split) = self.buffer.find("\n\n") {
                 let raw = self.buffer[..split].to_owned();
                 self.buffer.drain(..split + 2);
                 let mut event = None;
@@ -147,13 +151,17 @@ impl Frames {
                         data.push_str(payload.trim());
                     }
                 }
-                if let Some(event) = event {
-                    return Frame {
+                return match event {
+                    Some(event) => Frame {
                         event,
                         data: serde_json::from_str(&data)
                             .unwrap_or_else(|e| panic!("frame data is JSON: {e}: {data}")),
-                    };
-                }
+                    },
+                    None => Frame {
+                        event: raw,
+                        data: Value::Null,
+                    },
+                };
             }
             let chunk = tokio::time::timeout(BUDGET, self.response.chunk())
                 .await
@@ -417,7 +425,13 @@ async fn slow_the_roots_route_answers_the_snapshot_shape() {
 async fn the_stream_carries_the_log_ring_and_the_lines_after_it() {
     let tmp = TempDir::new().unwrap();
     let clock = Arc::new(TestClock::new());
-    let daemon = Harness::start_with(tmp.path(), false, Arc::clone(&clock) as Arc<dyn Clock>).await;
+    let daemon = Harness::start_with(
+        tmp.path(),
+        false,
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        false,
+    )
+    .await;
     daemon.state.logs.record(line("before the connection"));
 
     let mut frames = daemon.stream().await;
@@ -432,8 +446,7 @@ async fn the_stream_carries_the_log_ring_and_the_lines_after_it() {
     );
 
     clock.advance(grove_daemon::stream::HEARTBEAT);
-    let beat = tokio::time::timeout(BUDGET, frames.response.chunk()).await;
-    assert_eq!(&beat.unwrap().unwrap().unwrap()[..], b": beat\n\n");
+    assert_eq!(frames.next().await.event, ": beat");
 
     daemon.state.logs.record(line("after the connection"));
     let frame = frames.until("the new line", |f| f.event == "log").await;
@@ -635,7 +648,8 @@ async fn slow_a_wedged_root_is_reported_rather_than_failing_the_whole_run() {
     let tmp = TempDir::new().unwrap();
     let home = testfix::home_with_root(&tmp);
     let clock = Arc::new(TestClock::new());
-    let daemon = Harness::start_with(&home, false, Arc::clone(&clock) as Arc<dyn Clock>).await;
+    let daemon =
+        Harness::start_with(&home, false, Arc::clone(&clock) as Arc<dyn Clock>, true).await;
 
     // The engine has to exist before the wedge, or the root would have no status to
     // report and the assertion below would pass for the wrong reason.
