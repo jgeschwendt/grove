@@ -37,6 +37,7 @@
 //! its own frame — which costs a redundant re-read and nothing else, because every
 //! state event is level-triggered.
 
+use std::convert::Infallible;
 use std::path::Path;
 use std::time::Duration;
 
@@ -113,19 +114,25 @@ pub enum Frame {
 }
 
 impl Frame {
-    /// Render for the wire. The error is the one `json_data` names and never
-    /// produces: every [`Event`] is plain derived data — no map keyed by anything but
-    /// a string, no hand-written `Serialize` — so serializing one cannot fail.
+    /// Render for the wire. Infallible: these types always serialize, and a
+    /// connection is not the place to discover otherwise, so the impossible case
+    /// becomes a comment rather than a torn-down stream.
     fn into_sse(self) -> SseResult {
-        match self {
-            Self::Beat => Ok(SseEvent::default().comment("beat")),
-            Self::Event(event) => SseEvent::default().event(event.name()).json_data(&event),
-        }
+        Ok(match self {
+            Self::Beat => SseEvent::default().comment("beat"),
+            Self::Event(event) => match serde_json::to_string(&event) {
+                Ok(data) => SseEvent::default().event(event.name()).data(data),
+                Err(e) => {
+                    tracing::error!(error = %e, "an event would not serialize");
+                    SseEvent::default().comment("unserializable")
+                }
+            },
+        })
     }
 }
 
-/// A frame, or the error axum's `Sse` insists on.
-type SseResult = Result<SseEvent, axum::Error>;
+/// A frame, or the error type axum's `Sse` insists on.
+type SseResult = Result<SseEvent, Infallible>;
 
 /// The per-connection producer.
 ///
@@ -368,25 +375,20 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
 /// `HEAD` is a ref file rather than a working tree the engine could be mid-clone in.
 ///
 /// A root whose bare has no answer yet — declared and unrealized, or mid-clone — never
-/// reaches the fallback: [`git::default_branch`] already answers it `main`. Only a git
-/// that cannot be run at all fails [`grove_ops::roots::trunk`], and that row still has
-/// to draw: it takes [`grove_ops::roots::trunk_dir`]'s own guess and names the branch
-/// after the directory that guess picked, so the path and the branch stay one story
-/// instead of pairing a guessed path with a blank branch. That name is the folded one
-/// (`feature-x`, not `feature/x`) — a placeholder, not a ref anything may resolve.
+/// fails [`grove_ops::roots::trunk`]: [`git::default_branch`] answers it `main`. Only a
+/// git that cannot run at all does, and that row draws `<code>/main` on `main`, the
+/// same guess [`grove_ops::roots::trunk_dir`] makes.
 fn trunk_view(home: &Path, slug: &str) -> (String, String) {
-    grove_ops::roots::trunk(home, slug).map_or_else(
+    let (dir, branch) = grove_ops::roots::trunk(home, slug).map_or_else(
         |_| {
-            let dir = grove_ops::roots::trunk_dir(home, slug);
-            let branch = dir
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            (dir.display().to_string(), branch)
+            (
+                grove_ops::roots::code_dir(home, slug).join("main"),
+                "main".into(),
+            )
         },
-        |trunk| (trunk.dir.display().to_string(), trunk.branch),
-    )
+        |trunk| (trunk.dir, trunk.branch),
+    );
+    (dir.display().to_string(), branch)
 }
 
 /// Everything a row reads out of the running engine, as one value: what the two
@@ -442,7 +444,7 @@ mod tests {
     use grove_api::RootStatus;
     use grove_api::events::{Event, LogLevel, LogLine, TaskKind};
     use grove_ops::clock::{Clock, TestClock};
-    use grove_ops::roots::{manifest_path, trunk_dir};
+    use grove_ops::roots::{code_dir, manifest_path};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -479,7 +481,7 @@ mod tests {
 
     /// A UI must render without a second request, so the first thing down the wire is
     /// the whole world — a declared root nothing has cloned or driven yet included,
-    /// as an `unknown` row on the `main` trunk an absent bare is guessed at. An unreadable
+    /// as an `unknown` row on the `main` trunk an absent bare answers. An unreadable
     /// manifest is a snapshot of no roots, not a connection that never opens.
     #[tokio::test]
     async fn the_first_frame_is_a_snapshot() {
@@ -496,7 +498,10 @@ mod tests {
                 assert_eq!(row.trunk_branch, "main");
                 assert_eq!(
                     row.trunk,
-                    trunk_dir(home.path(), "o/r").display().to_string()
+                    code_dir(home.path(), "o/r")
+                        .join("main")
+                        .display()
+                        .to_string()
                 );
             }
         }

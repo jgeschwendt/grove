@@ -39,11 +39,10 @@ missing_errors_doc = "allow"
 # CLI dispatch handlers keep a uniform `Result` signature even when infallible.
 unnecessary_wraps = "allow"
 
-# The self-update bundle path — gzip, tar and the sha256 sidecar over a whole debug
-# `grove` binary (~50 MB) — runs ten times slower unoptimized. The two update_e2e
-# tests spent ~30 s of CPU and set the CI suite's wall clock on it; optimized, ~9 s.
-# Only the bundle's codec and digest crates: gix's sha1/zlib were measured too and
-# bought nothing.
+# The self-update bundle path gzips, tars and sha256s the whole ~54 MB debug `grove`
+# binary. Optimizing its codec and digest crates, measured alone: the interrupted flip
+# 13.2 s → 1.4 s, the round trip 17.9 s → 7.5 s (5 s of that is the deliberate gate).
+# gix's sha1/zlib were measured too, with no gain.
 [profile.dev.package]
 adler2.opt-level = 3
 flate2.opt-level = 3
