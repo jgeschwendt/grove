@@ -147,7 +147,8 @@ impl Set {
                 },
                 event = events.recv() => match event {
                     Ok(Event::RootsChanged { roots }) => self.reconcile(roots),
-                    Ok(_) => {}
+                    // `Closed` cannot arrive: `self.deps.events` is a live sender.
+                    Ok(_) | Err(broadcast::error::RecvError::Closed) => {}
                     // We missed events. Every one of them was level-triggered, so the
                     // recovery is not to replay them but to re-read the world — which
                     // is exactly what a `roots_changed` would have asked for.
@@ -157,7 +158,6 @@ impl Set {
                             self.reconcile(declared);
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
                 },
             }
         }

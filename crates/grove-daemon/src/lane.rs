@@ -179,16 +179,6 @@ pub struct Lanes {
     inflight: Arc<watch::Sender<usize>>,
 }
 
-impl std::fmt::Debug for Lanes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Lanes")
-            .field("active", &self.active())
-            .field("inflight", &self.inflight())
-            .field("idle", &self.idle)
-            .finish_non_exhaustive()
-    }
-}
-
 impl Lanes {
     /// Lanes reaping after `idle`, timing off `clock`.
     #[must_use]
@@ -298,12 +288,8 @@ impl Lanes {
     /// than return and leave the process blocking on runtime drop with nothing said.
     /// Callers bound it — see [`crate::Daemon::serve`].
     pub async fn quiesced(&self) {
-        let mut rx = self.inflight.subscribe();
-        while *rx.borrow_and_update() > 0 {
-            if rx.changed().await.is_err() {
-                return;
-            }
-        }
+        // Never `Err`: that needs the sender dropped, and `&self` holds it.
+        let _ = self.inflight.subscribe().wait_for(|n| *n == 0).await;
     }
 
     /// A poisoned registry is not a reason to stop serving: the guarded value is a
@@ -322,14 +308,8 @@ impl Lanes {
 /// still outstanding.
 fn shed(e: mpsc::error::TrySendError<Job>) -> LaneError {
     match e {
-        mpsc::error::TrySendError::Full(job) => {
-            drop(job);
-            LaneError::Busy
-        }
-        mpsc::error::TrySendError::Closed(job) => {
-            drop(job);
-            LaneError::Lost
-        }
+        mpsc::error::TrySendError::Full(_job) => LaneError::Busy,
+        mpsc::error::TrySendError::Closed(_job) => LaneError::Lost,
     }
 }
 
@@ -383,20 +363,13 @@ async fn run_lane(mut lane: Lane) {
             job
         } else {
             let deadline = lane.clock.deadline(lane.idle);
+            // No `None` arms: every sender lives in this lane's registry entry, which
+            // only `reap` removes — and a reaped lane has already left this loop.
             tokio::select! {
                 biased;
-                job = lane.foreground.recv() => match job {
-                    Some(job) => job,
-                    None => break,
-                },
-                job = lane.read.recv() => match job {
-                    Some(job) => job,
-                    None => break,
-                },
-                job = lane.background.recv() => match job {
-                    Some(job) => job,
-                    None => break,
-                },
+                Some(job) = lane.foreground.recv() => job,
+                Some(job) = lane.read.recv() => job,
+                Some(job) = lane.background.recv() => job,
                 () = wait::until(deadline, &*lane.clock) => {
                     if reap(&lane) {
                         break;
@@ -435,75 +408,102 @@ mod tests {
     use super::{DEFAULT_IDLE, FOREGROUND_DEPTH, LaneError, Lanes, Priority, READ_DEPTH};
     use grove_ops::clock::{SystemClock, TestClock};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
 
-    fn lanes() -> Lanes {
-        Lanes::new(Arc::new(SystemClock), DEFAULT_IDLE)
+    fn lanes() -> Arc<Lanes> {
+        Arc::new(Lanes::new(Arc::new(SystemClock), DEFAULT_IDLE))
     }
 
-    /// A lane appears on first use and answers.
+    /// Park `o/r`'s lane on a `priority` op until the returned sender fires. Resolves
+    /// once the op is *running*, so whatever is submitted next queues behind it.
+    async fn hold(
+        lanes: &Arc<Lanes>,
+        priority: Priority,
+    ) -> (oneshot::Sender<()>, JoinHandle<Result<(), LaneError>>) {
+        let (release, held) = oneshot::channel::<()>();
+        let (started, running) = oneshot::channel();
+        let lanes = Arc::clone(lanes);
+        let holder = tokio::spawn(async move {
+            lanes
+                .run("o/r", priority, move || {
+                    started.send(()).unwrap();
+                    let _ = held.blocking_recv();
+                })
+                .await
+        });
+        running.await.unwrap();
+        (release, holder)
+    }
+
+    /// Yield until `n` jobs are accepted and unfinished — the spawned submissions
+    /// have landed in their queues.
+    async fn accepted(lanes: &Lanes, n: usize) {
+        while lanes.inflight() < n {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A lane appears on first use and answers, one per root.
     #[tokio::test]
     async fn a_lane_spawns_lazily_and_runs_the_op() {
         let lanes = lanes();
         assert_eq!(lanes.active(), 0);
-
-        let answer = lanes
-            .run("o/r", Priority::Foreground, || 41 + 1)
-            .await
-            .unwrap();
-
-        assert_eq!(answer, 42);
-        assert!(lanes.is_active("o/r"));
-        assert_eq!(lanes.active(), 1, "one root, one lane");
+        for slug in ["o/b", "o/a"] {
+            assert_eq!(
+                lanes.run(slug, Priority::Foreground, || 41 + 1).await,
+                Ok(42)
+            );
+        }
+        assert!(lanes.is_active("o/a"));
+        assert_eq!(lanes.active(), 2, "one root, one lane");
+        assert_eq!(lanes.active_slugs(), ["o/a", "o/b"], "named in order");
     }
 
     /// The invariant itself: two ops on one root never overlap, and they run in the
     /// order they were submitted. The first op parks until the test releases it, so
-    /// an implementation that ran them concurrently would record an overlap.
+    /// an implementation that ran them concurrently would see two live at once.
     #[tokio::test]
     async fn two_ops_on_one_root_run_strictly_in_order() {
-        let lanes = Arc::new(lanes());
+        let lanes = lanes();
         let live = Arc::new(AtomicUsize::new(0));
-        let overlaps = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
         let (release, held) = oneshot::channel::<()>();
 
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut handles = Vec::new();
         for (n, gate) in [(0, Some(held)), (1, None)] {
-            let (lanes, live, overlaps, order) = (
+            let (lane, live, peak, order) = (
                 Arc::clone(&lanes),
                 Arc::clone(&live),
-                Arc::clone(&overlaps),
+                Arc::clone(&peak),
                 Arc::clone(&order),
             );
             handles.push(tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Foreground, move || {
-                        if live.fetch_add(1, Ordering::SeqCst) != 0 {
-                            overlaps.fetch_add(1, Ordering::SeqCst);
-                        }
-                        // The first op blocks its lane until released — on a
-                        // blocking thread, which is where lane ops run.
-                        if let Some(gate) = gate {
-                            let _ = gate.blocking_recv();
-                        }
-                        order.lock().unwrap().push(n);
-                        live.fetch_sub(1, Ordering::SeqCst);
-                    })
-                    .await
-                    .unwrap();
+                lane.run("o/r", Priority::Foreground, move || {
+                    peak.fetch_max(live.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                    // The first op blocks its lane until released — on a
+                    // blocking thread, which is where lane ops run.
+                    if let Some(gate) = gate {
+                        let _ = gate.blocking_recv();
+                    }
+                    order.lock().unwrap().push(n);
+                    live.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await
+                .unwrap();
             }));
             // Submission order is the queue order, so the two spawns are sequenced.
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            accepted(&lanes, n + 1).await;
         }
 
         release.send(()).unwrap();
         for handle in handles {
             handle.await.unwrap();
         }
-        assert_eq!(overlaps.load(Ordering::SeqCst), 0, "the ops overlapped");
+        assert_eq!(peak.load(Ordering::SeqCst), 1, "the ops overlapped");
         assert_eq!(*order.lock().unwrap(), vec![0, 1], "out of order");
     }
 
@@ -511,19 +511,8 @@ mod tests {
     /// other. The second op only completes because the first is still parked.
     #[tokio::test]
     async fn ops_on_two_roots_interleave() {
-        let lanes = Arc::new(lanes());
-        let (release, held) = oneshot::channel::<()>();
-        let first = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/one", Priority::Foreground, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let lanes = lanes();
+        let (release, holder) = hold(&lanes, Priority::Foreground).await;
 
         let other = tokio::time::timeout(
             Duration::from_secs(5),
@@ -535,51 +524,42 @@ mod tests {
 
         assert_eq!(other, "done");
         release.send(()).unwrap();
-        first.await.unwrap().unwrap();
+        holder.await.unwrap().unwrap();
     }
 
     /// Foreground drains ahead of background — but never by preempting the op
     /// already running. The lane is held by a background op; the foreground and
-    /// background jobs queued behind it come out foreground-first.
+    /// background jobs queued behind it come out foreground-first, and neither runs
+    /// before the held op is released.
     #[tokio::test]
     async fn foreground_drains_first_without_preempting() {
-        let lanes = Arc::new(lanes());
+        let lanes = lanes();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let (release, held) = oneshot::channel::<()>();
-
-        let holder = {
-            let (lanes, order) = (Arc::clone(&lanes), Arc::clone(&order));
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Background, move || {
-                        let _ = held.blocking_recv();
-                        order.lock().unwrap().push("in-flight");
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let released = Arc::new(AtomicBool::new(false));
+        let (release, holder) = hold(&lanes, Priority::Background).await;
 
         // Queue background *first*, then foreground: the order they come out in is
         // the priority's doing, not arrival order.
-        let queued: Vec<_> = [Priority::Background, Priority::Foreground]
-            .into_iter()
-            .map(|priority| {
-                let (lanes, order) = (Arc::clone(&lanes), Arc::clone(&order));
-                let label = if priority == Priority::Foreground {
-                    "fg"
-                } else {
-                    "bg"
-                };
-                tokio::spawn(async move {
-                    lanes
-                        .run("o/r", priority, move || order.lock().unwrap().push(label))
-                        .await
+        let mut queued = Vec::new();
+        for (priority, label) in [(Priority::Background, "bg"), (Priority::Foreground, "fg")] {
+            let (lane, order, released) = (
+                Arc::clone(&lanes),
+                Arc::clone(&order),
+                Arc::clone(&released),
+            );
+            queued.push(tokio::spawn(async move {
+                lane.run("o/r", priority, move || {
+                    order
+                        .lock()
+                        .unwrap()
+                        .push((label, released.load(Ordering::SeqCst)));
                 })
-            })
-            .collect();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+                .await
+            }));
+            accepted(&lanes, queued.len() + 1).await;
+        }
 
+        released.store(true, Ordering::SeqCst);
         release.send(()).unwrap();
         holder.await.unwrap().unwrap();
         for handle in queued {
@@ -587,8 +567,8 @@ mod tests {
         }
         assert_eq!(
             *order.lock().unwrap(),
-            vec!["in-flight", "fg", "bg"],
-            "the in-flight op finished first, then foreground before background"
+            vec![("fg", true), ("bg", true)],
+            "both waited out the in-flight op, then foreground ran before background"
         );
     }
 
@@ -596,19 +576,8 @@ mod tests {
     /// queue fills to its depth, and the next submission is `Busy`.
     #[tokio::test]
     async fn a_full_foreground_queue_answers_busy() {
-        let lanes = Arc::new(lanes());
-        let (release, held) = oneshot::channel::<()>();
-        let holder = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Foreground, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let lanes = lanes();
+        let (release, holder) = hold(&lanes, Priority::Foreground).await;
 
         let mut queued = Vec::new();
         for _ in 0..FOREGROUND_DEPTH {
@@ -617,7 +586,7 @@ mod tests {
                 lanes.run("o/r", Priority::Foreground, || ()).await
             }));
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        accepted(&lanes, 1 + FOREGROUND_DEPTH).await;
 
         assert_eq!(
             lanes.run("o/r", Priority::Foreground, || ()).await,
@@ -630,6 +599,7 @@ mod tests {
             let lanes = Arc::clone(&lanes);
             tokio::spawn(async move { lanes.run("o/r", Priority::Background, || ()).await })
         };
+        accepted(&lanes, 2 + FOREGROUND_DEPTH).await;
 
         release.send(()).unwrap();
         holder.await.unwrap().unwrap();
@@ -654,6 +624,32 @@ mod tests {
             lanes.run("o/r", Priority::Foreground, || "alive").await,
             Ok("alive")
         );
+    }
+
+    /// A lane that went away with its runtime answers `Lost` on every tier rather
+    /// than queueing work nothing will ever run.
+    #[test]
+    fn a_lane_gone_with_its_runtime_answers_lost() {
+        let lanes = lanes();
+        let runtime = || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+        };
+        runtime()
+            .block_on(lanes.run("o/r", Priority::Foreground, || ()))
+            .unwrap();
+        let after = runtime();
+        for priority in [Priority::Foreground, Priority::Read, Priority::Background] {
+            let lost = after.block_on(lanes.run("o/r", priority, || ()));
+            assert_eq!(lost, Err(LaneError::Lost), "{priority:?}");
+        }
+        assert_eq!(
+            LaneError::Lost.to_string(),
+            "the operation did not complete"
+        );
+        assert_eq!(lanes.inflight(), 0, "a refused job holds no slot");
     }
 
     /// The idle reap, on the fake clock: a lane that has done its work goes away
@@ -735,19 +731,8 @@ mod tests {
     /// wedged".
     #[tokio::test]
     async fn a_read_flood_sheds_without_taking_the_mutation_queue() {
-        let lanes = Arc::new(lanes());
-        let (release, held) = oneshot::channel::<()>();
-        let holder = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Foreground, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let lanes = lanes();
+        let (release, holder) = hold(&lanes, Priority::Foreground).await;
 
         // Far more reads than the read tier can hold — the polling UI.
         let mut reads = Vec::new();
@@ -757,7 +742,7 @@ mod tests {
                 lanes.run("o/r", Priority::Read, || ()).await
             }));
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        accepted(&lanes, 1 + READ_DEPTH).await;
 
         assert_eq!(
             lanes.run("o/r", Priority::Read, || ()).await,
@@ -769,6 +754,7 @@ mod tests {
             let lanes = Arc::clone(&lanes);
             tokio::spawn(async move { lanes.run("o/r", Priority::Foreground, || "removed").await })
         };
+        accepted(&lanes, 2 + READ_DEPTH).await;
 
         release.send(()).unwrap();
         holder.await.unwrap().unwrap();
@@ -779,108 +765,43 @@ mod tests {
         }
     }
 
-    /// A read whose caller has given up is dropped at the head of the lane. The lane
-    /// is held while the read's future is dropped, so the job is definitely queued
-    /// when its waiter goes away.
+    /// An op whose caller gave up while it was queued: a read is dropped at the head
+    /// of the lane, since its answer would reach nobody; a mutation still runs, since
+    /// a git write half-applied because a client disconnected is the damage grove
+    /// refuses to do.
     #[tokio::test]
-    async fn an_abandoned_read_is_not_run() {
-        let lanes = Arc::new(lanes());
-        let ran = Arc::new(AtomicUsize::new(0));
-        let (release, held) = oneshot::channel::<()>();
-        let holder = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Foreground, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    async fn an_abandoned_op_runs_only_if_it_is_a_mutation() {
+        for (priority, runs) in [(Priority::Read, 0), (Priority::Foreground, 1)] {
+            let lanes = lanes();
+            let ran = Arc::new(AtomicUsize::new(0));
+            let (release, holder) = hold(&lanes, Priority::Foreground).await;
 
-        {
+            // Submitted by the first poll, then given up on — exactly as
+            // `wait::within` does at the snapshot budget.
             let counted = Arc::clone(&ran);
-            let read = lanes.run("o/r", Priority::Read, move || {
+            let op = lanes.run("o/r", priority, move || {
                 counted.fetch_add(1, Ordering::SeqCst);
             });
-            // Give up on it, exactly as `wait::within` does at the snapshot budget.
-            assert!(
-                tokio::time::timeout(Duration::from_millis(50), read)
-                    .await
-                    .is_err()
-            );
+            assert!(tokio::time::timeout(Duration::ZERO, op).await.is_err());
+
+            release.send(()).unwrap();
+            holder.await.unwrap().unwrap();
+            // A later op proves the lane drained past the abandoned one.
+            lanes.run("o/r", Priority::Read, || ()).await.unwrap();
+            assert_eq!(ran.load(Ordering::SeqCst), runs, "{priority:?}");
         }
-
-        release.send(()).unwrap();
-        holder.await.unwrap().unwrap();
-        // A later op proves the lane drained past the abandoned read.
-        lanes.run("o/r", Priority::Read, || ()).await.unwrap();
-        assert_eq!(
-            ran.load(Ordering::SeqCst),
-            0,
-            "a read nobody is waiting for must not spend a lane slot"
-        );
-    }
-
-    /// A *mutation* whose caller gave up still runs: a git write half-applied because
-    /// a client disconnected is the damage grove refuses to do.
-    #[tokio::test]
-    async fn an_abandoned_mutation_still_runs() {
-        let lanes = Arc::new(lanes());
-        let ran = Arc::new(AtomicUsize::new(0));
-        let (release, held) = oneshot::channel::<()>();
-        let holder = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Foreground, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        {
-            let counted = Arc::clone(&ran);
-            let mutation = lanes.run("o/r", Priority::Foreground, move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            });
-            assert!(
-                tokio::time::timeout(Duration::from_millis(50), mutation)
-                    .await
-                    .is_err()
-            );
-        }
-
-        release.send(()).unwrap();
-        holder.await.unwrap().unwrap();
-        lanes.run("o/r", Priority::Foreground, || ()).await.unwrap();
-        assert_eq!(ran.load(Ordering::SeqCst), 1, "the mutation still applied");
     }
 
     /// Quiescence is what a bounded drain waits on: it is immediate when nothing is
     /// in flight, and it does not resolve while a job is still running.
     #[tokio::test]
     async fn quiescence_reports_work_still_in_flight() {
-        let lanes = Arc::new(lanes());
+        let lanes = lanes();
         tokio::time::timeout(Duration::from_secs(5), lanes.quiesced())
             .await
             .expect("an idle registry is already quiescent");
 
-        let (release, held) = oneshot::channel::<()>();
-        let job = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Background, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let (release, holder) = hold(&lanes, Priority::Background).await;
         assert_eq!(lanes.inflight(), 1);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), lanes.quiesced())
@@ -890,7 +811,7 @@ mod tests {
         );
 
         release.send(()).unwrap();
-        job.await.unwrap().unwrap();
+        holder.await.unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(5), lanes.quiesced())
             .await
             .expect("the job landed");
@@ -901,19 +822,8 @@ mod tests {
     /// would leave the drain permanently convinced work was outstanding.
     #[tokio::test]
     async fn a_shed_job_is_not_counted_as_in_flight() {
-        let lanes = Arc::new(lanes());
-        let (release, held) = oneshot::channel::<()>();
-        let holder = {
-            let lanes = Arc::clone(&lanes);
-            tokio::spawn(async move {
-                lanes
-                    .run("o/r", Priority::Read, move || {
-                        let _ = held.blocking_recv();
-                    })
-                    .await
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let lanes = lanes();
+        let (release, holder) = hold(&lanes, Priority::Read).await;
 
         let mut queued = Vec::new();
         for _ in 0..READ_DEPTH {
@@ -922,15 +832,14 @@ mod tests {
                 lanes.run("o/r", Priority::Read, || ()).await
             }));
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let before = lanes.inflight();
+        accepted(&lanes, 1 + READ_DEPTH).await;
         assert_eq!(
             lanes.run("o/r", Priority::Read, || ()).await,
             Err(LaneError::Busy)
         );
         assert_eq!(
             lanes.inflight(),
-            before,
+            1 + READ_DEPTH,
             "the shed job took no lasting slot"
         );
 
@@ -957,11 +866,11 @@ mod tests {
     async fn advance_until(clock: &TestClock, step: Duration, condition: impl Fn() -> bool) {
         for _ in 0..200 {
             if condition() {
-                return;
+                break;
             }
             clock.advance(step);
             tokio::time::sleep(crate::wait::TICK).await;
         }
-        panic!("condition never held");
+        assert!(condition(), "condition never held");
     }
 }

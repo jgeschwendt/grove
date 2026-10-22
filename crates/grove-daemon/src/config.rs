@@ -80,10 +80,7 @@ impl Config {
         // home the CLI beside it resolves, and a divergence here would be a split
         // brain nothing fails on until the two disagree.
         let home = grove_ops::home();
-        let bind = match std::env::var("GROVE_BIND") {
-            Ok(raw) => parse_bind(&raw)?,
-            Err(_) => DEFAULT_BIND,
-        };
+        let bind = bind_value(std::env::var("GROVE_BIND").ok().as_deref())?;
         let mut config = Self::new(home, bind)?;
         config.fs_watch = flag("GROVE_MANIFEST_FS_WATCH", true);
         // An unparseable or zero limit falls back to the default rather than
@@ -104,13 +101,6 @@ impl Config {
     #[must_use]
     pub fn with_shutdown_enabled(mut self, enabled: bool) -> Self {
         self.enable_shutdown = enabled;
-        self
-    }
-
-    /// Report this version instead of the compiled-in one.
-    #[must_use]
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
         self
     }
 
@@ -141,13 +131,6 @@ impl Config {
         self.drain_budget = budget;
         self
     }
-
-    /// Capture log lines at `level` and above into the ring.
-    #[must_use]
-    pub fn with_log_level(mut self, level: Level) -> Self {
-        self.log_level = level;
-        self
-    }
 }
 
 /// An on/off environment flag, read through [`flag_value`].
@@ -169,6 +152,12 @@ fn flag_value(raw: Option<&str>, default: bool) -> bool {
             "0" | "false" | "no" | "off"
         )
     })
+}
+
+/// `GROVE_BIND`'s rule, apart from the environment read for [`flag_value`]'s reason:
+/// absent is [`DEFAULT_BIND`], present must pass [`parse_bind`].
+fn bind_value(raw: Option<&str>) -> Result<SocketAddr, Error> {
+    raw.map_or(Ok(DEFAULT_BIND), parse_bind)
 }
 
 /// Parse a `GROVE_BIND` value. **Literal addresses only** — a hostname is refused
@@ -225,6 +214,9 @@ mod tests {
         assert!(parse_bind("127.9.9.9:1234").is_ok());
         assert!(parse_bind("[::1]:7777").is_ok());
         assert_eq!(DEFAULT_BIND, SocketAddr::from(([127, 0, 0, 1], 7777)));
+        // An unset `GROVE_BIND` is the default; a set one is parsed, gate and all.
+        assert_eq!(super::bind_value(None).unwrap(), DEFAULT_BIND);
+        assert!(super::bind_value(Some("0.0.0.0:7777")).is_err());
     }
 
     /// The gate itself: a routable address is refused at startup, loudly, with no

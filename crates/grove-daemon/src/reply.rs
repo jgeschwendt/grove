@@ -106,6 +106,20 @@ mod tests {
         );
     }
 
+    /// A body that cannot be serialized still answers in the envelope, at 500.
+    #[tokio::test]
+    async fn an_unserializable_reply_is_an_error_envelope() {
+        let response = Reply::ok(std::collections::HashMap::from([((1, 2), 3)])).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_of(response).await,
+            json!({"ok": false, "error": {
+                "code": "error",
+                "message": "response serialization failed: key must be a string"
+            }})
+        );
+    }
+
     #[tokio::test]
     async fn a_failure_reply_carries_the_code_message_and_data() {
         let response = error_response(
