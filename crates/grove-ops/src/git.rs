@@ -132,26 +132,21 @@ pub fn git_command() -> Command {
 }
 
 /// [`git_command`] at `dir`, which must itself be the repository — a bare, or a
-/// checkout holding its own `.git` — with git's upward discovery fenced at `dir`'s
-/// parent (`GIT_CEILING_DIRECTORIES`). Unfenced, a `dir` that exists but is no
-/// repository — an emptied or half-deleted bare, a checkout that lost its `.git` —
-/// resolves to whatever repo encloses the grove home, and `~` is one on a dotfiles
-/// machine: adopt would declare its origin, a fetch or `worktree add` would write into
-/// it. Every spawn here addresses its repo through this, fenced at the RESOLVED parent
-/// so a symlinked `dir` cannot point the walk past it. A parent holding `:` (git's
-/// list separator) splits into entries that fence nothing — grove's own layout never
-/// composes one.
+/// checkout holding its own `.git` — named explicitly (`--git-dir`), so git never
+/// discovers one. Discovering, a `dir` that exists but is no repository — an emptied
+/// or half-deleted bare, a checkout that lost its `.git` — resolves to whatever repo
+/// encloses the grove home, and `~` is one on a dotfiles machine: adopt would declare
+/// its origin, a fetch or `worktree add` would write into it. Every spawn here
+/// addresses its repo through this. Not `GIT_CEILING_DIRECTORIES`: it is a
+/// `:`-separated list with no escape, so a slug or home holding `:` fenced nothing.
 fn git_in(dir: &Path) -> Command {
     let mut cmd = git_command();
-    if let Some(parent) = std::fs::canonicalize(dir)
-        .or_else(|_| std::path::absolute(dir))
-        .ok()
-        .as_deref()
-        .and_then(Path::parent)
-    {
-        cmd.env("GIT_CEILING_DIRECTORIES", parent);
-    }
     cmd.arg("-C").arg(dir);
+    if dir.join(".git").exists() {
+        cmd.args(["--git-dir=.git", "--work-tree=."]);
+    } else {
+        cmd.arg("--git-dir=.");
+    }
     cmd
 }
 
