@@ -1237,16 +1237,32 @@ mod tests {
         );
     }
 
+    /// A conflict with no backup name left — all thousand taken, or one too long to
+    /// stat — is an error row that leaves the real file where it is.
     #[test]
-    fn fix_force_backs_up_then_links_uniquely() {
+    fn fix_force_backs_up_then_links_uniquely_or_not_at_all() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        std::fs::write(wt(&home, "feat").join(".env"), "ORIGINAL").unwrap();
+        let feat = wt(&home, "feat");
+        std::fs::write(feat.join(".env"), "ORIGINAL").unwrap();
         // A prior backup already exists — the new one must not overwrite it.
-        std::fs::write(wt(&home, "feat").join(".env.grove-bak"), "OLD BACKUP").unwrap();
-        declare(&home, &[".env"]);
+        std::fs::write(feat.join(".env.grove-bak"), "OLD BACKUP").unwrap();
+        std::fs::write(feat.join(".full"), "KEPT").unwrap();
+        std::fs::write(feat.join(".full.grove-bak"), "").unwrap();
+        for n in 1..1000 {
+            std::fs::write(feat.join(format!(".full.grove-bak-{n}")), "").unwrap();
+        }
+        let long = format!(".{}", "l".repeat(249));
+        std::fs::write(feat.join(&long), "KEPT").unwrap();
+        declare(&home, &[".env", ".full", &long]);
 
         let out = materialize(&home, Some("o/r"), Fix::Force).unwrap();
+        for (path, why) in [(".full", "no free backup name"), (&*long, "stat")] {
+            let row = find(&out, Some("feat"), path);
+            assert_eq!(row.status, ShareStatus::Error, "{path}");
+            assert!(row.reason.as_deref().unwrap().contains(why), "{row:?}");
+            assert_eq!(std::fs::read_to_string(feat.join(path)).unwrap(), "KEPT");
+        }
         assert_ne!(
             find(&out, Some("feat"), ".env").status,
             ShareStatus::Conflict
@@ -1324,17 +1340,21 @@ mod tests {
 
     /// A slug, root or worktree the walk cannot open is one error row saying why, and no
     /// link is laid: a bad slug never builds a path, a trunk that is missing or no
-    /// directory has nothing to link through, an unreadable manifest declares nothing,
-    /// and a worktree grove may not open is skipped.
+    /// directory has nothing to link through, nor has a code dir grove may not read,
+    /// an unreadable manifest declares nothing, and a worktree grove may not open is
+    /// skipped.
     #[test]
     fn what_the_walk_cannot_open_is_an_error_row() {
         use std::os::unix::fs::PermissionsExt;
-        fn mode(home: &Path, m: u32) {
-            std::fs::set_permissions(wt(home, "feat"), std::fs::Permissions::from_mode(m)).unwrap();
+        fn mode(path: &Path, m: u32) {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(m)).unwrap();
         }
         type Case = (&'static str, Option<&'static str>, &'static str, fn(&Path));
-        let cases: [Case; 5] = [
+        let cases: [Case; 6] = [
             ("../x", None, "invalid slug", |_| {}),
+            ("o/r", None, "open root", |home| {
+                mode(&code_dir(home, "o/r"), 0o100);
+            }),
             ("o/r", None, "trunk missing", |home| {
                 std::fs::remove_dir_all(wt(home, "main")).unwrap();
             }),
@@ -1345,7 +1365,9 @@ mod tests {
             ("o/r", None, "read shares", |home| {
                 std::fs::write(manifest_path(home), "not = = toml").unwrap();
             }),
-            ("o/r", Some("feat"), "open worktree", |home| mode(home, 0)),
+            ("o/r", Some("feat"), "open worktree", |home| {
+                mode(&wt(home, "feat"), 0);
+            }),
         ];
         for (slug, worktree, why, break_it) in cases {
             let tmp = TempDir::new().unwrap();
@@ -1354,7 +1376,8 @@ mod tests {
             break_it(&home);
 
             let out = materialize(&home, Some(slug), Fix::Safe).unwrap();
-            mode(&home, 0o755);
+            mode(&code_dir(&home, "o/r"), 0o755);
+            mode(&wt(&home, "feat"), 0o755);
             let row = out.iter().find(|o| o.status.is_error()).expect(why);
             assert_eq!(row.worktree.as_deref(), worktree, "{why}");
             assert!(row.reason.as_deref().unwrap().contains(why), "{row:?}");

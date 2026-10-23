@@ -540,8 +540,10 @@ mod tests {
         );
     }
 
+    /// A rollback swaps `current` and `previous`; with no `current` left, it points
+    /// one at `previous` and leaves `previous` be.
     #[test]
-    fn rollback_swaps_current_and_previous() {
+    fn rollback_swaps_current_and_previous_or_restores_a_missing_current() {
         let home = TempDir::new().unwrap();
         let layout = Layout::new(home.path());
         install(&layout, "0.3.1");
@@ -553,6 +555,11 @@ mod tests {
         assert_eq!(restored, "0.3.1");
         assert_eq!(layout.current_version().as_deref(), Some("0.3.1"));
         // previous now points at what was current — roll forward is possible.
+        assert_eq!(layout.previous_version().as_deref(), Some("0.4.0"));
+
+        fs::remove_file(layout.current_link()).unwrap();
+        assert_eq!(layout.rollback().unwrap(), "0.4.0");
+        assert_eq!(layout.current_version().as_deref(), Some("0.4.0"));
         assert_eq!(layout.previous_version().as_deref(), Some("0.4.0"));
     }
 
@@ -688,7 +695,7 @@ mod tests {
     #[test]
     fn fsync_tree_walks_a_nested_dir() {
         // The durability barrier must fsync every file + dir without error over a
-        // realistic (nested) extracted tree.
+        // realistic (nested) extracted tree — skipping a symlink, dangling or not.
         let home = TempDir::new().unwrap();
         let layout = Layout::new(home.path());
         layout
@@ -697,6 +704,7 @@ mod tests {
         let dir = layout.version_path("0.4.0");
         fs::create_dir_all(dir.join("lib/nested")).unwrap();
         fs::write(dir.join("lib/nested/x"), b"data").unwrap();
+        std::os::unix::fs::symlink("gone", dir.join("lib/dangling")).unwrap();
         assert!(fsync_tree(&dir).is_ok());
     }
 
@@ -704,6 +712,10 @@ mod tests {
     fn installed_versions_sort_by_version_not_lexically() {
         let home = TempDir::new().unwrap();
         let layout = Layout::new(home.path());
+        assert!(
+            layout.installed_versions().is_empty(),
+            "no versions dir yet"
+        );
         for v in ["0.9.0", "0.10.0", "0.2.0", ".0.11.0.tmp"] {
             install(&layout, v);
         }
