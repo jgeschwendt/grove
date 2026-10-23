@@ -206,15 +206,8 @@ pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
     // Validate before building a path we `remove_dir_all` — a traversal slug
     // must never reach the filesystem here.
     declared(home, slug)?;
-    if let Some(other) = list(home)?
-        .into_iter()
-        .find(|r| r.slug != slug && manifest::nests(&r.slug, slug))
-    {
-        return Err(Error::Conflict(format!(
-            "{slug} nests with declared root {}, so one's directories sit inside the \
-             other's; undeclare one by editing the manifest",
-            other.slug
-        )));
+    if let Some(why) = nesting(home, slug)? {
+        return Err(Error::Conflict(why));
     }
     if removal == Removal::Guarded {
         let unsaved = unsaved_work(home, slug);
@@ -234,6 +227,21 @@ pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
         }
     }
     manifest::remove_root(&manifest_path(home), slug).map_err(Error::io)
+}
+
+/// Why `slug` must not touch disk, when another declared root nests with it
+/// ([`manifest::nests`]): one's directories sit inside the other's.
+fn nesting(home: &Path, slug: &str) -> Result<Option<String>, Error> {
+    Ok(list(home)?
+        .into_iter()
+        .find(|r| r.slug != slug && manifest::nests(&r.slug, slug))
+        .map(|other| {
+            format!(
+                "{slug} nests with declared root {}, so one's directories sit inside the \
+                 other's; undeclare one by editing the manifest",
+                other.slug
+            )
+        }))
 }
 
 /// The worktrees under `slug` that hold work a `remove_dir_all` would destroy:
@@ -306,8 +314,16 @@ fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
 ///
 /// `Err` is reserved for not-declared / lookup faults; a clone or guard failure is
 /// an `Ok(Applied{status: Failed})` so one wedged root never aborts the rest.
+///
+/// A root nesting with another declared one — a hand edit `add_root` never saw — is
+/// such a failure before anything is claimed, created or deleted: its directories are
+/// the other's, so a clone would write into the other's bare and a failed realize's
+/// cleanup would delete it.
 pub fn reconcile_one(home: &Path, slug: &str) -> Result<Applied, Error> {
     let root = declared(home, slug)?;
+    if let Some(why) = nesting(home, slug)? {
+        return Ok(failed(slug, why));
+    }
 
     // One realizer per root for the whole of this call, not only its clone: the
     // `cloning` marker's lock, once taken — on a crashed clone's leftover here, by a
@@ -1639,6 +1655,43 @@ mod tests {
                 "{removal:?} kept o/r's bare"
             );
         }
+    }
+
+    /// The same hand edit, met by the realizer: `o/r/bare`'s clone would land inside
+    /// `o/r`'s bare and a failed one's cleanup would delete it. Both slugs refuse
+    /// before anything is claimed, created or deleted.
+    #[test]
+    fn reconcile_one_refuses_a_slug_pair_that_nests_and_touches_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let home = crate::testfix::home_with_root(&tmp);
+        let path = manifest_path(&home);
+        let url = tmp.path().join("src");
+        let edited = std::fs::read_to_string(&path).unwrap()
+            + &format!("[roots.\"o/r/bare\"]\nurl = {:?}\n", url.to_str().unwrap());
+        std::fs::write(&path, edited).unwrap();
+        let bare = bare_dir(&home, "o/r");
+        let snapshot = || {
+            let mut names: Vec<_> = std::fs::read_dir(&bare)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            names.sort();
+            let tip = git::rev_parse(&bare, "refs/heads/main").unwrap();
+            (names, std::fs::read(bare.join("HEAD")).unwrap(), tip)
+        };
+        let before = snapshot();
+
+        for (slug, other) in [("o/r/bare", "o/r"), ("o/r", "o/r/bare")] {
+            let applied = reconcile_one(&home, slug).unwrap();
+            assert_eq!(applied.status, ReconcileStatus::Failed, "{slug}");
+            let error = applied.error.unwrap();
+            assert!(
+                error.contains(&format!("declared root {other},")),
+                "{error}"
+            );
+        }
+        assert_eq!(snapshot(), before, "o/r's bare is untouched");
+        assert!(!code_dir(&home, "o/r/bare").exists(), "nothing was created");
     }
 
     /// `tree remove` refuses a dirty checkout (git's own guard); a root remove wipes

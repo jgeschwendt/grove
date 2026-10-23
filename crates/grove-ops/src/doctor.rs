@@ -784,6 +784,25 @@ symlink = ["../../etc/passwd"]
         );
     }
 
+    /// A nesting pair is two valid declarations that are invalid together — the
+    /// realizer refuses both — so it is named once, on the later slug, naming the
+    /// other; a sibling sharing only a prefix (`o/rr`) is not a pair.
+    #[test]
+    fn a_nested_slug_pair_is_named_once() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            roots::manifest_path(tmp.path()),
+            "[roots.\"o/r\"]\nurl = \"u\"\n[roots.\"o/r/bare\"]\nurl = \"u\"\n\
+             [roots.\"o/rr\"]\nurl = \"u\"\n",
+        )
+        .unwrap();
+        let out = manifest_checks(tmp.path());
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].status, CheckStatus::Invalid);
+        assert_eq!(out[0].slug.as_deref(), Some("o/r/bare"));
+        assert!(out[0].detail.as_ref().unwrap().contains("`o/r`"), "{out:?}");
+    }
+
     /// A file that will not parse is one finding, not an error the caller has to
     /// handle: doctor's job is to say what is wrong with a home.
     #[test]

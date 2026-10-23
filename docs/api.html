@@ -427,7 +427,7 @@ a diagnosis.</p>
 <table data-table>
 <thead><tr><th><code class="code">check</code></th><th>asks</th></tr></thead>
 <tbody>
-<tr><td><code class="code">manifest</code></td><td>does <code class="code">manifest.toml</code> parse, and does every declaration pass the validators</td></tr>
+<tr><td><code class="code">manifest</code></td><td>does <code class="code">manifest.toml</code> parse, does every declaration pass the validators, and does no slug nest with another (one <code class="code">invalid</code> row per pair, on the later slug, naming the other)</td></tr>
 <tr><td><code class="code">install_under_home</code></td><td>is an install tree (<code class="code">current</code>, <code class="code">versions/</code>) sitting in the workspace instead of <code class="code">$GROVE_INSTALL</code></td></tr>
 <tr><td><code class="code">legacy_layout</code></td><td>is this root on a superseded layout generation, and which one</td></tr>
 <tr><td><code class="code">orphan_code</code></td><td>which code dirs hold something with no root directory behind them</td></tr>
