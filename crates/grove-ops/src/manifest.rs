@@ -67,9 +67,13 @@ pub enum ShareMode {
 /// against path traversal from a crafted clone URL or a hand-edited / git-synced
 /// manifest (e.g. `../../etc`). Canonical, not merely safe: `o/r/` names `o/r`'s
 /// directories but is a different manifest key and lane key, so a slug that passes is
-/// the only spelling of its root.
+/// the only spelling of its root. ASCII only: APFS folds case across all of Unicode
+/// and ignores normalization, so `o/Ä` beside `o/ä` (or NFC beside NFD) is one
+/// directory under two keys, a twin [`nests`]' ASCII folding cannot see — and a
+/// remove of one deletes the other. No forge path a clone URL yields is non-ASCII.
 pub fn validate_slug(slug: &str) -> Result<()> {
-    let safe = !slug.contains('\\')
+    let safe = slug.is_ascii()
+        && !slug.contains('\\')
         && !slug.bytes().any(|b| b.is_ascii_control())
         && slug
             .split('/')
@@ -78,8 +82,8 @@ pub fn validate_slug(slug: &str) -> Result<()> {
         Ok(())
     } else {
         bail!(
-            "invalid slug {slug:?}: must be a relative path with no '..', '.', empty or \
-             absolute parts"
+            "invalid slug {slug:?}: must be an ASCII relative path with no '..', '.', empty \
+             or absolute parts"
         );
     }
 }
@@ -1287,7 +1291,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = manifest(&tmp);
         let bad = ["../escape", "a/../../b", "/abs", "..", "", "a\\b"];
-        for bad in bad.into_iter().chain(["o/r/", "o//r", "./o/r", "o/./r"]) {
+        // APFS twins of `o/Ä` and NFC `o/é` that ASCII folding cannot see
+        let twins = ["o/\u{c4}", "o/\u{e4}", "o/\u{e9}", "o/e\u{301}"];
+        for bad in bad
+            .into_iter()
+            .chain(["o/r/", "o//r", "./o/r", "o/./r"])
+            .chain(twins)
+        {
             assert!(add_root(&path, bad, "u").is_err(), "should reject {bad:?}");
         }
         // a literal dotted name is fine (not traversal)
