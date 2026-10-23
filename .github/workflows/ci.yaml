@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Actions are pinned by commit (the tag in a trailing comment): a moved tag cannot
+# change what runs. CI only reads, so its token cannot write either.
+permissions:
+  contents: read
+
 jobs:
   check-and-test:
     runs-on: ubuntu-latest
@@ -23,14 +28,14 @@ jobs:
     # repeat the same cold build forever.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       # mise installs rust without the rustfmt/clippy components; `check` needs both.
       # The same task `mise run setup` depends on, so a fresh machine and CI install
       # one list — and running it as a task puts it on the PINNED toolchain, since
       # mise's rust backend works by exporting RUSTUP_TOOLCHAIN.
       - run: mise run components
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run check
       # The `ci` nextest profile runs the `slow_*` tier the default profile skips,
       # and reports slow tests in the summary.
@@ -55,10 +60,10 @@ jobs:
     # dep tree before `Swatinem/rust-cache` has anything to restore.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: mise run components
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run check
       - run: mise run test
         env:
@@ -72,9 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run smoke
 
   # The architecture graph: `check` proves the committed lock still describes the code
@@ -102,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history: the freshness fallback for parser-less languages counts
           # commits touching an anchored region since the claim's verified SHA, which a
@@ -111,11 +116,12 @@ jobs:
       # mise must be on PATH: stele's liveness assertions resolve each node's
       # `mise run ...` / `mise exec ...` commands and fail the check when the
       # runner they name is absent (v1 carried the same step for the same reason).
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       # Pinned, not `latest`: the lock format and the assertion suite are versioned, so
       # an unpinned installer would let a stele release fail this repo's CI without a
-      # commit here. Installs one static binary to ~/.local/bin, which is not on the
-      # runner's PATH by default — hence the absolute path below.
-      - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
+      # commit here; the installer is v0.3.0's own commit, not a mutable `main`. Installs
+      # one static binary to ~/.local/bin, which is not on the runner's PATH by default —
+      # hence the absolute path below.
+      - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/c7882176f321809064205db5b6474827834c5a34/scripts/install.sh | bash -s v0.3.0
       - run: ~/.local/bin/stele check
       - run: ~/.local/bin/stele emit --check

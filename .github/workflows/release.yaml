@@ -78,12 +78,12 @@ jobs:
       # HEAD, stamp it with the tag's version and publish it as that tag's asset —
       # which release.sh's stamp guard cannot catch, since the binary does report the
       # version it was told to stamp.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-tags: true
-      - uses: jdx/mise-action@v2
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # The tag IS the version. Stamp [workspace.package] — the single source every
       # crate reads and the value CARGO_PKG_VERSION bakes into the binary — so the
