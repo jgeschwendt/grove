@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use gix::refs::transaction::PreviousValue;
 
 use crate::clock::{Clock, Deadline, SystemClock};
 
@@ -33,8 +34,18 @@ const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 600;
 /// there would need the curl backend (libcurl/OpenSSL) or the async-clone-with-
 /// progress phase. We accept that gap rather than regress to a blunt cap.
 pub fn clone_bare(url: &str, dest: &Path) -> Result<String> {
-    let mut prepare =
-        gix::prepare_clone_bare(url, dest).with_context(|| format!("prepare clone of {url}"))?;
+    // gix 0.90 clones bare the way `git clone --bare` does — remote heads mirrored to
+    // local heads, no fetch refspec. grove wants the non-bare layout (see
+    // `clone_bare_writes_remote_tracking_layout`): tracking refs under a persisted
+    // refspec here, the default branch's head and upstream after the fetch.
+    let mut prepare = gix::prepare_clone_bare(url, dest)
+        .with_context(|| format!("prepare clone of {url}"))?
+        .configure_remote(|remote| {
+            remote.with_refspecs(
+                Some("+refs/heads/*:refs/remotes/origin/*"),
+                gix::remote::Direction::Fetch,
+            )
+        });
 
     let interrupt = Arc::new(AtomicBool::new(false));
     // The clone's budget is read off the clock seam, not `Instant::now()`: production
@@ -58,6 +69,28 @@ pub fn clone_bare(url: &str, dest: &Path) -> Result<String> {
         .ok()
         .flatten()
         .map_or_else(|| "main".to_string(), |name| name.shorten().to_string());
+
+    // An empty remote has no tip: HEAD stays unborn, exactly as `git clone` leaves it.
+    let tracking = format!("refs/remotes/origin/{branch}");
+    if let Some(mut tip) = repo.try_find_reference(tracking.as_str())? {
+        let id = tip.peel_to_id()?.detach();
+        for name in [
+            format!("refs/heads/{branch}"),
+            "refs/remotes/origin/HEAD".into(),
+        ] {
+            repo.reference(name, id, PreviousValue::Any, format!("clone: from {url}"))?;
+        }
+        let mut cmd = git_in(dest);
+        cmd.args([
+            "branch",
+            "--quiet",
+            "--set-upstream-to",
+            &tracking,
+            "--",
+            &branch,
+        ]);
+        check_status(&run_git(cmd, None, "git branch -u")?, "git branch -u")?;
+    }
 
     Ok(branch)
 }
@@ -1107,6 +1140,62 @@ mod tests {
         assert!(dest.join("HEAD").exists());
         assert!(gix::open(&dest).unwrap().is_bare());
         assert_eq!(branch, "main");
+    }
+
+    /// The bare's layout is git's non-bare clone layout, not `git clone --bare`'s:
+    /// every remote branch under `refs/remotes/origin/`, the remote default-branch
+    /// ref (direct, as 0.89 wrote it), a persisted fetch refspec (`--track` needs it
+    /// to map the ref back to a remote) and only the default branch as a local head,
+    /// tracking its upstream.
+    #[test]
+    fn clone_bare_writes_remote_tracking_layout() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        git(&src, &["branch", "feature"]);
+
+        let bare = tmp.path().join("repo.git");
+        clone_bare(src.to_str().unwrap(), &bare).unwrap();
+
+        let out = |repo: &Path, args: &[&str]| {
+            let out = git_command()
+                .arg("-C")
+                .arg(repo)
+                .args(args)
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap()
+        };
+        assert_eq!(
+            out(&bare, &["for-each-ref", "--format=%(refname) %(symref)"]),
+            "refs/heads/main \n\
+             refs/remotes/origin/HEAD \n\
+             refs/remotes/origin/feature \n\
+             refs/remotes/origin/main \n"
+        );
+        assert_eq!(
+            out(
+                &bare,
+                &["config", "--local", "--get-regexp", r"^(remote|branch)\."]
+            ),
+            format!(
+                "remote.origin.url {}\n\
+                 remote.origin.fetch +refs/heads/*:refs/remotes/origin/*\n\
+                 branch.main.remote origin\n\
+                 branch.main.merge refs/heads/main\n",
+                src.canonicalize().unwrap().display()
+            )
+        );
+
+        // An empty remote has no tip to write back: the clone succeeds on an unborn HEAD.
+        let empty = tmp.path().join("empty");
+        git(tmp.path(), &["init", "-q", "-b", "main", "empty"]);
+        let empty_bare = tmp.path().join("empty.git");
+        assert_eq!(
+            clone_bare(empty.to_str().unwrap(), &empty_bare).unwrap(),
+            "main"
+        );
+        assert_eq!(out(&empty_bare, &["for-each-ref"]), "");
     }
 
     #[test]

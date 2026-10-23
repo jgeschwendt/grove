@@ -17,7 +17,7 @@ test-util = ["dep:tempfile"]
 
 [dependencies]
 anyhow = "1"
-gix = { version = "0.89", default-features = false, features = [
+gix = { version = "0.90", default-features = false, features = [
   "blocking-network-client",
   "blocking-http-transport-reqwest-rust-tls",
   # gix split hash backends (0.84) behind features; with default-features off we
