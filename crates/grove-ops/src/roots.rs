@@ -1972,6 +1972,10 @@ mod tests {
 
         let slug = "o/hollow";
         std::fs::create_dir_all(bare_dir(&home, slug)).unwrap();
+        // a bare linked to a hollow dir deeper in the enclosing repo is fenced there too
+        std::fs::create_dir_all(enc.join("deep/hollow")).unwrap();
+        std::fs::create_dir_all(root_dir(&home, "o/linked")).unwrap();
+        std::os::unix::fs::symlink(enc.join("deep/hollow"), bare_dir(&home, "o/linked")).unwrap();
         assert!(adopt(&home).unwrap().is_empty(), "no origin of its own");
         manifest::add_root(&manifest_path(&home), slug, src.to_str().unwrap()).unwrap();
         declare_trunk(&home, slug, "dev");
