@@ -306,6 +306,10 @@ simply moved.</p>
 <code class="code">Ok(Applied { status: Failed })</code>, so one wedged root never aborts a sweep;
 <code class="code">grove_ops::apply</code> (the offline <code class="code">grove apply</code>) relies on that to report a failed root
 beside its healthy neighbours.</p>
+<p class="docs-note">A root that nests with another declared root — a hand edit <code class="code">add_root</code> never saw —
+is <code class="code">failed</code> naming the other before anything is claimed, created or deleted, since its
+directories are the other's: a clone would write into the other's bare and a failed
+realize's cleanup would delete it.</p>
 <p class="docs-note">A root that is not already present is decided by reading <em>both</em> of its directories, not
 the manifest: a bare that is not at <code class="code">roots/&lt;slug&gt;/bare</code> is not the same as nothing being
 there. Four answers, cheapest and least destructive first — only the last two write

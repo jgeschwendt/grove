@@ -268,6 +268,25 @@ pub fn audit(path: &Path) -> Result<Vec<Invalid>> {
             }
         }
     }
+    // A nesting pair `add_root` would have refused, named once, on the later slug: the
+    // realizer refuses both and `roots::remove` either, until one is undeclared.
+    let slugs: Vec<&str> = roots
+        .iter()
+        .map(|(slug, _)| slug)
+        .filter(|slug| validate_slug(slug).is_ok())
+        .collect();
+    for (i, outer) in slugs.iter().enumerate() {
+        for inner in slugs[i + 1..].iter().filter(|s| nests(outer, s)) {
+            out.push(Invalid {
+                slug: (*inner).to_owned(),
+                item: None,
+                reason: format!(
+                    "nests with declared root `{outer}`: one root's directories sit inside \
+                     the other's, so neither is realized or removed; undeclare one"
+                ),
+            });
+        }
+    }
 
     out.sort_by(|a, b| a.slug.cmp(&b.slug).then_with(|| a.item.cmp(&b.item)));
     Ok(out)
