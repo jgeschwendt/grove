@@ -37,7 +37,7 @@ TARGET="${arch}-${os}"
 BIND="127.0.0.1:1"
 
 WORK=$(mktemp -d)
-trap 'kill ${SRV:-} 2>/dev/null; rm -rf "$WORK"' EXIT
+trap 'kill ${SRV:-} 2>/dev/null || :; rm -rf "$WORK"' EXIT
 FIX="$WORK/release"
 HOME_DIR="$WORK/home"
 GH="$WORK/grovehome"
