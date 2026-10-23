@@ -174,7 +174,8 @@ pub fn git_command() -> Command {
 }
 
 /// [`git_command`] at `dir`, which must itself be the repository — a bare, or a
-/// checkout holding its own `.git` — named explicitly (`--git-dir`), so git never
+/// checkout holding its own `.git` — named explicitly (`--git-dir`, or `--bare`, which
+/// also keeps a bare lacking `core.bare` from passing as a work tree), so git never
 /// discovers one. Discovering, a `dir` that exists but is no repository — an emptied
 /// or half-deleted bare, a checkout that lost its `.git` — resolves to whatever repo
 /// encloses the grove home, and `~` is one on a dotfiles machine: adopt would declare
@@ -187,7 +188,7 @@ fn git_in(dir: &Path) -> Command {
     if dir.join(".git").exists() {
         cmd.args(["--git-dir=.git", "--work-tree=."]);
     } else {
-        cmd.arg("--git-dir=.");
+        cmd.arg("--bare");
     }
     cmd
 }
@@ -1224,6 +1225,8 @@ mod tests {
         fixture_repo(&src);
         let bare = tmp.path().join("repo.git");
         let default = clone_bare(src.to_str().unwrap(), &bare).unwrap();
+        // a hand-made bare may lack core.bare; it is still a bare, never a work tree
+        git(&bare, &["config", "--unset", "core.bare"]);
 
         // New branch off the default — checks out + appears in the porcelain list.
         let wt = tmp.path().join("feature");
