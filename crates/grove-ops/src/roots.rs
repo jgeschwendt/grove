@@ -1948,7 +1948,12 @@ mod tests {
     #[test]
     fn a_hollow_bare_or_trunk_never_reaches_an_enclosing_repo() {
         let tmp = TempDir::new().unwrap();
-        let (enc, home, src) = (tmp.path(), tmp.path().join("home"), tmp.path().join("src"));
+        // `:` splits GIT_CEILING_DIRECTORIES into entries that fence nothing
+        let (enc, home, src) = (
+            tmp.path(),
+            tmp.path().join("x:y/home"),
+            tmp.path().join("src"),
+        );
         fixture_repo(&src);
         crate::testfix::git(&src, &["branch", "dev"]);
         let id = "-c user.email=t@grove -c user.name=grove";
