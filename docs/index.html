@@ -182,6 +182,9 @@
   </header>
   <ol id="next" class="steps">
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
+    <li><strong>gix 0.89 → 0.90</strong>: 0.90's bare clone drops <code class="code">refs/remotes/origin/*</code>,
+      the default branch ref and its upstream (gitoxide aa7eaeaf); <code class="code">clone_bare</code> writes them back,
+      pinned by a layout test, then bump.</li>
     <li><strong>The trunk-change share findings wait on the owner</strong>: proposal
       <code class="code">proposal:jgeschwendt/grove:trunk-change-shares</code> settles what grove owns in the
       ex-trunk; skip those five, and the two carry findings that bear on it, until it is answered.</li>

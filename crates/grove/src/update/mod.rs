@@ -871,7 +871,8 @@ mod tests {
         up.keep = 1;
         let landed = up.up(Some("0.3.0"));
         // Restore perms so the next prune — and TempDir cleanup — can remove it.
-        fs::set_permissions(&v010, fs::Permissions::from_mode(0o755)).unwrap();
+        // gone already on a privileged runner, whose prune succeeded
+        let _ = fs::set_permissions(&v010, fs::Permissions::from_mode(0o755));
         landed.unwrap();
         assert_eq!(
             Layout::new(home.path()).current_version().as_deref(),

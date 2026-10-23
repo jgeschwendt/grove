@@ -143,7 +143,7 @@ pub fn create(
 /// reconcile doesn't re-adopt what we just undeclared.
 ///
 /// Only a checkout git registers at exactly this name's path is unlaid and removed.
-/// A name APFS folds onto another directory — a case or Unicode-normalization twin of
+/// A name APFS folds onto another directory — a case twin, ASCII or not, of
 /// a worktree or of the trunk — resolves there, and git, matching paths by its
 /// `core.ignorecase`, would remove that one: such a name is not present, and only
 /// undeclares.
@@ -579,13 +579,13 @@ mod tests {
         }
     }
 
-    /// A name differing from a live worktree's only in case or Unicode normalization
+    /// A name differing from a live worktree's only in case, ASCII or not,
     /// is that worktree's directory on APFS. Hand-declared past the manifest's
     /// refusal, its remove finds no checkout of its own and only undeclares: the live
     /// one's ignored, uncommitted file survives on any filesystem.
     #[test]
     fn remove_of_a_twin_leaves_the_live_worktree_alone() {
-        for (live, twin) in [("\u{00C4}", "A\u{0308}"), ("Foo", "foo")] {
+        for (live, twin) in [("\u{00C4}", "\u{00E4}"), ("Foo", "foo")] {
             let tmp = TempDir::new().unwrap();
             let home = home_with_root(&tmp);
             create(&home, "o/r", live, "live", Some("main")).unwrap();

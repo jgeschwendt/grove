@@ -7,7 +7,7 @@
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.143"
 hk = "2.5.0"
 # jdx's compilation cache. `mr_boxington` on the rust pin puts a `cargo` wrapper that
-# runs mbx first on PATH (mise exec, shims, mise-action's GITHUB_PATH), so every
+# runs mbx first on PATH (mise exec, and the shims mise-action puts on PATH), so every
 # `cargo …` here, in hk.pkl and in CI is cached without naming mbx; `workflow` makes
 # mise verify the release's build provenance.
 mr-boxington = { version = "1.26.0", workflow = "release.yml@refs/heads/main" }

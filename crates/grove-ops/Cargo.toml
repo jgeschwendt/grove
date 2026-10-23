@@ -20,7 +20,7 @@ anyhow = "1"
 gix = { version = "0.89", default-features = false, features = [
   "blocking-network-client",
   "blocking-http-transport-reqwest-rust-tls",
-  # gix 0.84 split hash backends behind features; with default-features off we
+  # gix split hash backends (0.84) behind features; with default-features off we
   # must opt into SHA-1 (git's object hash) explicitly or gix-hash won't build.
   "sha1",
 ] }
@@ -45,6 +45,7 @@ serde_json = "1"
 tempfile = { version = "3", optional = true }
 thiserror = "2"
 toml_edit = "0.25"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
