@@ -43,7 +43,7 @@
     },
     "files-authoritative": {
       "file": "crates/grove-ops/src/manifest.rs",
-      "line": 321,
+      "line": 325,
       "node": "crates/grove-ops"
     },
     "install-hands-off-to-grove-up": {
@@ -68,7 +68,7 @@
     },
     "never-clobber": {
       "file": "crates/grove-ops/src/env.rs",
-      "line": 439,
+      "line": 441,
       "node": "crates/grove-ops"
     },
     "pending-marker": {
@@ -103,7 +103,7 @@
     },
     "reconcile-additive": {
       "file": "crates/grove-ops/src/worktrees.rs",
-      "line": 274,
+      "line": 290,
       "node": "crates/grove-ops"
     },
     "self-update-flip": {
@@ -193,7 +193,7 @@
           "enforced_by": null,
           "id": "files-authoritative",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/manifest.rs:321",
+          "resolved": "crates/grove-ops/src/manifest.rs:325",
           "text": "files are authoritative — manifest.toml is desired state, git on disk is actual state, and there is no database; every daemon-held status, pool count and log line is a cache",
           "verified": {
             "digest": "5fd46bcf3b33924905906bd128156f8b1bde191fe0f71d50ae6283f5ba9674c0",
@@ -657,7 +657,7 @@
           "enforced_by": null,
           "id": "create",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/worktrees.rs:103",
+          "resolved": "crates/grove-ops/src/worktrees.rs:108",
           "text": "the warm pool is claimed by the realizer, not by a caller: worktrees::create and worktrees::reconcile both promote a slot before cold-checking-out, so every path that realizes a declared worktree redeems the pool; and convergence runs both ways, fill adding a slot below target and reclaim giving the highest one back above it",
           "verified": {
             "digest": "6ffc8eab9ca33a90e2fd8117a18e8fb9e9a51707ebb0f4753c22a67e0d4e7f2a",
@@ -693,7 +693,7 @@
           "enforced_by": null,
           "id": "never-clobber",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/env.rs:439",
+          "resolved": "crates/grove-ops/src/env.rs:441",
           "text": "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
           "verified": {
             "digest": "d955bba2c823924116f0ff576cf58ca1cb0ebe8842d3acf81388b606382b79fb",
@@ -717,10 +717,10 @@
           "enforced_by": null,
           "id": "reconcile-additive",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/worktrees.rs:274",
+          "resolved": "crates/grove-ops/src/worktrees.rs:290",
           "text": "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone",
           "verified": {
-            "digest": "1e8ca80df6af265e0ec6de4ad6e18440074559e84a2947481c3c5f6d25c10795",
+            "digest": "d8ec42f61c8d8fe3a1298213b7df4bd6d962fa38bb9e20b31fc2529eb61177b6",
             "sha": "361d1df84b67a62be23f67df595d4ba476d67931"
           }
         },

@@ -467,6 +467,18 @@ pub fn add_worktree(
             .as_table_mut()
             .context("`worktrees` is not a table")?;
         worktrees.set_implicit(true);
+        // `add_root`'s case refusal, per name: on APFS a case twin is the declared
+        // worktree's directory. A Unicode-normalization twin is left to
+        // `worktrees::remove`'s gate — a non-ASCII branch derives a legitimate name.
+        if let Some((taken, _)) = worktrees
+            .iter()
+            .find(|(k, _)| *k != name && k.eq_ignore_ascii_case(name))
+        {
+            bail!(
+                "worktree `{name}` of {slug} differs only in case from declared worktree \
+                 `{taken}`, and both would name one directory"
+            );
+        }
 
         // Update in place — don't replace the table, or a previously-recorded
         // `base` (and any future field) vanishes. `base` is a historical fork
@@ -1109,8 +1121,8 @@ mod tests {
         );
     }
 
-    /// `feature/x` and `feature-x` fold to one directory: the second declaration is
-    /// refused, not written over the first's branch.
+    /// `feature/x` and `feature-x` fold to one directory, as do `feature-x` and
+    /// `Feature-X` on APFS: the second declaration is refused, not written over the first.
     #[test]
     fn add_worktree_refuses_a_name_another_branch_holds() {
         let tmp = TempDir::new().unwrap();
@@ -1119,6 +1131,8 @@ mod tests {
         add_worktree(&path, "o/r", "feature-x", "feature/x", Some("main")).unwrap();
         let err = add_worktree(&path, "o/r", "feature-x", "feature-x", None).unwrap_err();
         assert!(format!("{err:#}").contains("already declared on branch `feature/x`"));
+        let err = add_worktree(&path, "o/r", "Feature-X", "y", None).unwrap_err();
+        assert!(format!("{err:#}").contains("only in case from declared worktree `feature-x`"));
         assert_eq!(list_worktrees(&path, "o/r").unwrap()[0].branch, "feature/x");
     }
 

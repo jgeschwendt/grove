@@ -74,8 +74,9 @@ fn worktree_dir(home: &Path, slug: &str, name: &str) -> PathBuf {
 
 /// Declare a worktree without realizing it — every user-facing declaration's one
 /// door. The manifest refuses a name another branch already holds; this refuses the
-/// trunk's own directory, which the manifest cannot see (the trunk may be the bare's
-/// `HEAD`) and which `roots::converge_trunk` would otherwise refuse on every pass.
+/// trunk's own directory, case-folded as APFS folds it, which the manifest cannot see
+/// (the trunk may be the bare's `HEAD`) and which `roots::converge_trunk` would
+/// otherwise refuse on every pass.
 pub fn declare(
     home: &Path,
     slug: &str,
@@ -83,9 +84,13 @@ pub fn declare(
     branch: &str,
     base: Option<&str>,
 ) -> Result<(), Error> {
-    if crate::roots::trunk(home, slug).is_ok_and(|t| t.name == name) {
+    if let Ok(t) = crate::roots::trunk(home, slug)
+        && t.name.eq_ignore_ascii_case(name)
+    {
         return Err(Error::Conflict(format!(
-            "`{name}` is the trunk checkout of {slug}; a worktree cannot take its directory"
+            "`{name}` names the trunk checkout `{}` of {slug}; a worktree cannot take its \
+             directory",
+            t.name
         )));
     }
     manifest::add_worktree(&manifest_path(home), slug, name, branch, base).map_err(Error::io)
@@ -137,6 +142,12 @@ pub fn create(
 /// Remove a worktree from git **then** undeclare it — git first, so a later
 /// reconcile doesn't re-adopt what we just undeclared.
 ///
+/// Only a checkout git registers at exactly this name's path is unlaid and removed.
+/// A name APFS folds onto another directory — a case or Unicode-normalization twin of
+/// a worktree or of the trunk — resolves there, and git, matching paths by its
+/// `core.ignorecase`, would remove that one: such a name is not present, and only
+/// undeclares.
+///
 /// Undeclared is [`Error::NotDeclared`], matching the daemon route's 404 rather than
 /// v1's cheerful `removed <name>` at exit 0 over a worktree that never existed.
 pub fn remove(home: &Path, slug: &str, name: &str) -> Result<(), Error> {
@@ -155,7 +166,12 @@ pub fn remove(home: &Path, slug: &str, name: &str) -> Result<(), Error> {
     }
     let bare = bare_dir(home, slug);
     let dir = worktree_dir(home, slug, name);
-    if dir.exists() {
+    if dir.exists()
+        && actual(home, slug)
+            .map_err(Error::git)?
+            .iter()
+            .any(|(n, _)| n == name)
+    {
         // Never `--force`: take back grove's own shares so they can't block the
         // remove, and lay them again if git still refuses over a user's file.
         let _ = crate::env::unlay(home, slug, name);
@@ -329,7 +345,7 @@ pub fn reconcile(home: &Path, slug: &str) -> Result<Vec<WorktreeOutcome>> {
         // A *declared* detached worktree is left entirely alone (present above → no
         // recreate; here → not adopted); an *undeclared* detached one is skipped until
         // it carries a branch.
-        let undeclared = !declared.iter().any(|d| &d.name == name);
+        let undeclared = !declared.iter().any(|d| d.name.eq_ignore_ascii_case(name));
         if let Some(branch) = branch
             && undeclared
             && manifest::validate_name(name).is_ok()
@@ -547,15 +563,47 @@ mod tests {
         }
     }
 
-    /// A worktree declared under the trunk's own name never has its share sources
-    /// taken: they are the trunk's real files, identical to themselves.
+    /// A worktree hand-declared under the trunk's directory, exactly or as its case
+    /// twin, is no checkout of its own: neither `unlay` nor `remove` takes the trunk's
+    /// share sources — its real files, identical to themselves — or the trunk.
     #[test]
-    fn remove_never_takes_the_trunks_sources() {
+    fn remove_never_takes_the_trunk_or_its_sources() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_shares(&tmp);
-        crate::manifest::add_worktree(&manifest_path(&home), "o/r", "main", "main", None).unwrap();
-        assert_eq!(remove(&home, "o/r", "main").unwrap_err().code(), "git");
-        assert!(home.join("code/o/r/main/local.json").is_file());
+        let main = home.join("code/o/r/main");
+        for twin in ["Main", "main"] {
+            manifest::add_worktree(&manifest_path(&home), "o/r", twin, "main", None).unwrap();
+            let _ = crate::env::unlay(&home, "o/r", twin);
+            remove(&home, "o/r", twin).unwrap();
+            assert!(main.join(".envrc").is_file() && main.join("README.md").is_file());
+        }
+    }
+
+    /// A name differing from a live worktree's only in case or Unicode normalization
+    /// is that worktree's directory on APFS. Hand-declared past the manifest's
+    /// refusal, its remove finds no checkout of its own and only undeclares: the live
+    /// one's ignored, uncommitted file survives on any filesystem.
+    #[test]
+    fn remove_of_a_twin_leaves_the_live_worktree_alone() {
+        for (live, twin) in [("\u{00C4}", "A\u{0308}"), ("Foo", "foo")] {
+            let tmp = TempDir::new().unwrap();
+            let home = home_with_root(&tmp);
+            create(&home, "o/r", live, "live", Some("main")).unwrap();
+            std::fs::write(bare_dir(&home, "o/r").join("info/exclude"), "secret.env").unwrap();
+            let secret = code_dir(&home, "o/r").join(live).join("secret.env");
+            std::fs::write(&secret, "s").unwrap();
+            let mpath = manifest_path(&home);
+            let mut doc: toml_edit::DocumentMut =
+                std::fs::read_to_string(&mpath).unwrap().parse().unwrap();
+            doc["roots"]["o/r"]["worktrees"][twin]["branch"] = toml_edit::value("twin");
+            std::fs::write(&mpath, doc.to_string()).unwrap();
+            remove(&home, "o/r", twin).unwrap();
+            assert!(secret.is_file(), "{live:?}");
+            assert_eq!(
+                manifest::list_worktrees(&mpath, "o/r").unwrap()[0].name,
+                live
+            );
+        }
     }
 
     /// Same guard as `roots::Applied`: the typed `status` leaves the wire shape
@@ -625,8 +673,10 @@ mod tests {
     fn create_refuses_the_trunks_directory_and_a_name_another_branch_holds() {
         let tmp = TempDir::new().unwrap();
         let home = home_with_root(&tmp);
-        let err = create(&home, "o/r", "main", "x", None).unwrap_err();
-        assert_eq!(err.code(), "conflict", "{err}");
+        for trunk in ["main", "Main"] {
+            let err = create(&home, "o/r", trunk, "x", None).unwrap_err();
+            assert_eq!(err.code(), "conflict", "{err}");
+        }
 
         let mpath = manifest_path(&home);
         manifest::add_worktree(&mpath, "o/r", "feature-x", "feature/x", None).unwrap();
