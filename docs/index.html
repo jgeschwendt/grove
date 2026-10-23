@@ -199,7 +199,8 @@
       added one; s-20261022T0630Z fixed the canary page walk and the password-only redirect hop, swept the
       18 commits since, fixed a rollback that died before its rename and <code class="code">grove ok</code>'s
       exit on a mid-body hangup, and filed one; s-20261023T0200Z fixed <code class="code">install.sh</code>'s
-      cleartext redirect hop. Open, highest first:</p>
+      cleartext redirect hop and a nested slug's guarded remove deleting its neighbour's bare, and filed
+      one. Open, highest first:</p>
   </header>
   <ol class="steps">
     <li><strong>A link or copy error that predates a trunk change wedges it half-carried</strong>
@@ -234,6 +235,10 @@
     <li><strong>A dry run and a real pass disagree on a nested pending source</strong> (plausible, low).
       For <code class="code">config/db.toml</code> with its parent missing in the new trunk, diagnose reports
       would-create while materialize reports the pending error after creating the parent.</li>
+    <li><strong>A hand-edited nested slug pair still realizes</strong> (plausible, low;
+      <code class="code">manifest::nests</code>). <code class="code">add_root</code> and <code class="code">roots::remove</code> refuse
+      <code class="code">o/r/bare</code> beside <code class="code">o/r</code>, but a manifest edited or synced to hold both
+      clones the inner root into the outer's bare path, and <code class="code">doctor</code> does not name the pair.</li>
     <li><strong>A carry holds on an in-trunk link whose target the new trunk will have</strong>
       (plausible, low). <code class="code">.k1 -&gt; .real</code> is held even when <code class="code">.real</code>
       is tracked or itself a declared share, until the operator re-creates it; the check is lexical.</li>

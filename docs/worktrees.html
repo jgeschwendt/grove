@@ -131,6 +131,9 @@ git-synced manifest, so neither entrance is the only gate.</p>
 <p class="docs-note">Slugs keep the case they were declared in, and <code class="code">manifest::add_root</code> refuses one
 that differs from a declared slug only in ASCII case (<code class="code">Foo/bar</code> beside <code class="code">foo/bar</code>), naming the
 declared one: on a case-insensitive filesystem, APFS's default, the two name one directory.
+It refuses a slug that nests with a declared one at a segment boundary, in either direction
+and either case (<code class="code">o/r/bare</code> or <code class="code">o</code> beside <code class="code">o/r</code>; never <code class="code">o/rr</code>), since one
+root's directories would sit inside the other's: <code class="code">o/r/bare</code>'s root dir is <code class="code">o/r</code>'s bare.
 Re-declaring a slug already declared updates its URL, even beside a case twin a hand edit
 left.</p>
 <p class="docs-note" id="manifest-dot-rule"><strong>The dot rule.</strong> Git refuses a ref component beginning with a dot, so no branch — and
@@ -421,7 +424,11 @@ over) — and refuses with a
 <code class="code">conflict</code> naming them unless the caller passed <code class="code">--force</code> (<code class="code">Removal::Forced</code>, <code class="code">force: true</code>
 on the route). <code class="code">grove tree remove</code> already refuses one dirty checkout because git does; the
 command that deletes N of them at once must not be the one that protects least.</p>
-<p class="docs-note">Past both guards it deletes <strong>both</strong> of the root's directories — <code class="code">roots/&lt;slug&gt;</code> and
+<p class="docs-note">Before either survey or delete it refuses, with a <code class="code">conflict</code> in both modes, a slug that
+<strong>nests</strong> with another declared root — a hand-edited or git-synced manifest bypasses
+<code class="code">add_root</code>'s refusal — naming the other and telling the operator to undeclare one in the
+manifest. <code class="code">--force</code> discards the operator's own unsaved work, never another root's tree.</p>
+<p class="docs-note">Past every guard it deletes <strong>both</strong> of the root's directories — <code class="code">roots/&lt;slug&gt;</code> and
 <code class="code">code/&lt;slug&gt;</code> — and <em>then</em> removes the manifest entry. Both, because nothing of a root may
 survive either tree: taking only one would leave half a root for <code class="code">adopt</code> or <code class="code">doctor</code> to
 find. Each is deleted only if it is there, since a declared-but-unrealized root has

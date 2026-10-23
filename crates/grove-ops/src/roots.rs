@@ -195,11 +195,27 @@ pub enum Removal {
 /// obliterate a valid-shaped slug that named somebody else's checkout — the same
 /// typo the daemon-up path answers with a 404. Undeclared is [`Error::NotDeclared`]
 /// (exit 3), on both paths.
+///
+/// **Never another root's tree.** A hand-edited or git-synced manifest can declare
+/// slugs that nest (`o/r` and `o/r/bare`), which `add_root` refuses; then one root's
+/// directories sit inside the other's, and its delete is the other's loss. Any declared
+/// root nesting with `slug` is an [`Error::Conflict`] in both modes, since `--force`
+/// discards the operator's own unsaved work, never a neighbour.
 // ※ delete-before-undeclare
 pub fn remove(home: &Path, slug: &str, removal: Removal) -> Result<(), Error> {
     // Validate before building a path we `remove_dir_all` — a traversal slug
     // must never reach the filesystem here.
     declared(home, slug)?;
+    if let Some(other) = list(home)?
+        .into_iter()
+        .find(|r| r.slug != slug && manifest::nests(&r.slug, slug))
+    {
+        return Err(Error::Conflict(format!(
+            "{slug} nests with declared root {}, so one's directories sit inside the \
+             other's; undeclare one by editing the manifest",
+            other.slug
+        )));
+    }
     if removal == Removal::Guarded {
         let unsaved = unsaved_work(home, slug);
         if !unsaved.is_empty() {
@@ -1599,6 +1615,30 @@ mod tests {
         // …and a slug that names nothing at all is still a refusal, not a cheerful
         // exit 0 over a no-op.
         assert!(remove(&home, "o/typo", Removal::Guarded).is_err());
+    }
+
+    /// A hand edit can declare `o/r/bare` beside `o/r`, whose root dir IS `o/r`'s
+    /// bare: the guard would survey a bare that isn't there, find nothing, and delete
+    /// `o/r`'s. Refused in both modes — `--force` is never consent to a neighbour.
+    #[test]
+    fn remove_refuses_a_slug_nesting_with_another_declared_root() {
+        let tmp = TempDir::new().unwrap();
+        let home = crate::testfix::home_with_root(&tmp);
+        let path = manifest_path(&home);
+        let edited =
+            std::fs::read_to_string(&path).unwrap() + "[roots.\"o/r/bare\"]\nurl = \"u\"\n";
+        std::fs::write(&path, edited).unwrap();
+        assert_eq!(root_dir(&home, "o/r/bare"), bare_dir(&home, "o/r"));
+
+        for removal in [Removal::Guarded, Removal::Forced] {
+            let err = remove(&home, "o/r/bare", removal).unwrap_err();
+            assert_eq!(err.code(), "conflict", "{removal:?}: {err}");
+            assert!(err.to_string().contains("declared root o/r,"), "{err}");
+            assert!(
+                bare_dir(&home, "o/r").exists(),
+                "{removal:?} kept o/r's bare"
+            );
+        }
     }
 
     /// `tree remove` refuses a dirty checkout (git's own guard); a root remove wipes

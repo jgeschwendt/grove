@@ -335,15 +335,22 @@ pub fn add_root(path: &Path, slug: &str, url: &str) -> Result<()> {
         roots.set_implicit(true); // emit only [roots."slug"], not a bare [roots]
 
         // Two slugs differing only in case name one directory on a case-insensitive
-        // filesystem (APFS's default), so the second would realize into the first's root.
-        // A slug already declared is updated as it stands, whatever else a hand edit
-        // put beside it.
+        // filesystem (APFS's default), so the second would realize into the first's root;
+        // a slug nested in another (`o/r/bare` beside `o/r`) names a directory inside the
+        // other's, so removing one deletes the other's bare. A slug already declared is
+        // updated as it stands, whatever else a hand edit put beside it.
         if !roots.contains_key(slug)
-            && let Some((taken, _)) = roots.iter().find(|(k, _)| k.eq_ignore_ascii_case(slug))
+            && let Some((taken, _)) = roots.iter().find(|(k, _)| nests(k, slug))
         {
+            if taken.eq_ignore_ascii_case(slug) {
+                bail!(
+                    "root `{slug}` differs from declared root `{taken}` only in case, and \
+                     both would name one directory; declare it as `{taken}`"
+                );
+            }
             bail!(
-                "root `{slug}` differs from declared root `{taken}` only in case, and both \
-                 would name one directory; declare it as `{taken}`"
+                "root `{slug}` nests with declared root `{taken}`: one root's directories \
+                 would sit inside the other's"
             );
         }
 
@@ -356,6 +363,14 @@ pub fn add_root(path: &Path, slug: &str, url: &str) -> Result<()> {
         root["url"] = value(url);
         Ok(())
     })
+}
+
+/// Whether slugs `a` and `b` name one directory or one inside the other, compared
+/// case-insensitively at segment boundaries: `o/r` nests with `O/R` and `o/r/bare`,
+/// never with `o/rr`.
+pub(crate) fn nests(a: &str, b: &str) -> bool {
+    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
+    a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
 /// Undeclare a root. No-op if absent.
@@ -1268,6 +1283,27 @@ mod tests {
         let both = std::fs::read_to_string(&path).unwrap() + "[roots.\"foo/bar\"]\nurl = \"u\"\n";
         std::fs::write(&path, both).unwrap();
         add_root(&path, "foo/bar", "u3").unwrap();
+    }
+
+    /// A nested slug realizes inside another root's directories — `o/r/bare` is
+    /// `o/r`'s bare — so a remove of one deletes the other. Refused at segment
+    /// boundaries in either direction and either case; a sibling prefix is not nesting.
+    #[test]
+    fn add_root_refuses_a_slug_nesting_with_a_declared_one() {
+        let tmp = TempDir::new().unwrap();
+        let path = manifest(&tmp);
+        add_root(&path, "o/r", "u").unwrap();
+        for bad in ["o/r/bare", "o", "O/R/x"] {
+            let err = add_root(&path, bad, "u").unwrap_err().to_string();
+            assert!(
+                err.contains("nests with declared root `o/r`"),
+                "{bad}: {err}"
+            );
+        }
+        add_root(&path, "o/rr", "u").unwrap();
+        add_root(&path, "o/r", "u2").unwrap();
+        let urls: Vec<_> = list(&path).unwrap().into_iter().map(|r| r.url).collect();
+        assert_eq!(urls, ["u2", "u"], "re-declare updates, sibling declared");
     }
 
     #[test]
