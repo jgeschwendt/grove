@@ -242,7 +242,9 @@ string: redirects follow (GitHub's <code class="code">releases/latest</code> and
 them), so a check on the base's spelling alone constrained the URL rather than where the
 bytes came from — a loopback base could 302 the fetch to any host over cleartext, and an
 <code class="code">https</code> base could be downgraded to <code class="code">http</code> mid-chain. <code class="code">install.sh</code> applies the rule too,
-because it runs before any grove binary exists to apply it;</li>
+because it runs before any grove binary exists to apply it: <code class="code">check_url</code> on the base, and
+curl's <code class="code">--proto-redir =https</code> on every hop, which also refuses the loopback-to-loopback cleartext
+hop this rule allows;</li>
 <li>anything else → a local fixture directory, which is what the install smoke and
 <code class="code">install.sh</code>'s staging use.</li>
 </ul>
