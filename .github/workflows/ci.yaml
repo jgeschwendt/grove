@@ -28,7 +28,9 @@ jobs:
     # repeat the same cold build forever.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       # mise installs rust without the rustfmt/clippy components; `check` needs both.
       # The same task `mise run setup` depends on, so a fresh machine and CI install
@@ -63,7 +65,9 @@ jobs:
     # dep tree before mbx has anything to restore.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: mise run components
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
@@ -80,7 +84,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         with:
@@ -114,12 +120,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: the freshness fallback for parser-less languages counts
           # commits touching an anchored region since the claim's verified SHA, which a
           # shallow clone cannot answer.
           fetch-depth: 0
+          persist-credentials: false
       # mise must be on PATH: stele's liveness assertions resolve each node's
       # `mise run ...` / `mise exec ...` commands and fail the check when the
       # runner they name is absent (v1 carried the same step for the same reason).
