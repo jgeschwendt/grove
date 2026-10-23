@@ -647,6 +647,17 @@ mod tests {
         );
     }
 
+    /// `--channel` replaces the channel `up(None)` resolves against; its absence keeps it.
+    #[test]
+    fn with_channel_overrides_the_channel_only_when_given() {
+        let home = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (up, _probe) = updater(&home, &src, Bounce::Healthy);
+        let up = up.with_channel(None);
+        assert_eq!(up.channel, DEFAULT_CHANNEL);
+        assert_eq!(up.with_channel(Some("canary")).channel, "canary");
+    }
+
     #[test]
     fn up_flips_without_rollback_when_server_not_running() {
         let home = TempDir::new().unwrap();
@@ -833,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn up_succeeds_even_when_prune_fails() {
+    fn up_succeeds_even_when_prune_fails_and_prunes_once_it_can() {
         use std::os::unix::fs::PermissionsExt;
         let home = TempDir::new().unwrap();
         let src = TempDir::new().unwrap();
@@ -858,20 +869,22 @@ mod tests {
         // keep=1 → prune wants to drop 0.1.0. The update is healthy, so it must
         // still exit 0 despite the prune failure (was previously exit 7).
         up.keep = 1;
-        up.up(Some("0.3.0")).unwrap();
+        let landed = up.up(Some("0.3.0"));
+        // Restore perms so the next prune — and TempDir cleanup — can remove it.
+        fs::set_permissions(&v010, fs::Permissions::from_mode(0o755)).unwrap();
+        landed.unwrap();
         assert_eq!(
             Layout::new(home.path()).current_version().as_deref(),
             Some("0.3.0")
         );
-        if !privileged {
-            assert!(
-                v010.exists(),
-                "prune failed on the locked dir yet the update still succeeded"
-            );
-        }
+        assert!(
+            privileged || v010.exists(),
+            "prune failed on the locked dir yet the update still succeeded"
+        );
 
-        // Restore perms so TempDir cleanup can remove it.
-        let _ = fs::set_permissions(&v010, fs::Permissions::from_mode(0o755));
+        // Unlocked, the next healthy update prunes it.
+        up.up(Some("0.2.0")).unwrap();
+        assert!(!v010.exists(), "pruned once it could be");
     }
 
     #[test]
@@ -920,20 +933,15 @@ mod tests {
     fn gated_bounce_skips_only_a_fully_stopped_server() {
         // Fully stopped (no pid, nothing answers, not force-starting): skip —
         // and the restart action must NOT run.
-        let restarted = Cell::new(false);
         let out = gated_bounce(
             false,
             Reachability::Offline,
             false,
-            || {
-                restarted.set(true);
-                Ok(())
-            },
+            || unreachable!("a fully-stopped server is not bounced"),
             || unreachable!("no gate when skipped"),
         )
         .unwrap();
         assert_eq!(out, Bounce::NotRunning);
-        assert!(!restarted.get(), "a fully-stopped server is not bounced");
 
         // ensure_running (the rollback recovery path) forces the restart anyway.
         let restarted = Cell::new(false);
@@ -997,20 +1005,15 @@ mod tests {
         ] {
             let home = TempDir::new().unwrap();
             let src = TempDir::new().unwrap();
-            let source = fixture_source(src.path(), "test-target", &["0.4.0"]);
+            let (up, probe) = updater(&home, &src, Bounce::Healthy);
             fs::write(src.path().join(format!("0.4.0/test-target.{file}")), body).unwrap();
 
-            let up = Updater::new(
-                Layout::new(home.path()),
-                "test-target",
-                source,
-                |_: &str, _| Ok(Bounce::Healthy),
-            );
             let err = up.up(Some("0.4.0")).unwrap_err();
             assert_eq!(err.exit_code(), 7);
             assert!(err.to_string().contains(want), "{err}");
-            // Nothing flipped — a bad release never becomes current.
+            // Nothing flipped or bounced — a bad release never becomes current.
             assert!(Layout::new(home.path()).current_version().is_none());
+            assert_eq!(probe.bounces.get(), 0);
         }
     }
 
@@ -1283,7 +1286,8 @@ mod tests {
     /// only after its own healthy bounce), and the half of the recovery that must not
     /// be silent: the re-run gate says the restored version is *not* healthy, so an `up`
     /// re-requesting it exits 6 rather than reporting "already on" a box that is down —
-    /// and leaves the marker for the next `up` to re-gate again.
+    /// and leaves the marker for the next `up` to re-gate again, whose restart erroring
+    /// outright exits 6 the same way.
     #[test]
     fn a_crash_in_a_manual_rollback_surfaces_the_re_run_gate() {
         let home = TempDir::new().unwrap();
@@ -1306,6 +1310,21 @@ mod tests {
             layout.current_version().as_deref(),
             Some("0.3.1"),
             "nothing flipped: `current` already named the proven version"
+        );
+        assert_eq!(layout.pending_version().as_deref(), Some("0.3.1"));
+
+        let failing = Updater::new(
+            Layout::new(home.path()),
+            "test-target",
+            fixture_source(src.path(), "test-target", &["0.3.1", "0.4.0"]),
+            |_: &str, _| Err(CliError::Daemon("spawn failed".into())),
+        );
+        let err = failing.up(Some("0.3.1")).unwrap_err();
+        assert_eq!(err.exit_code(), 6);
+        assert!(
+            err.to_string()
+                .contains("still unproven: restarting it failed: "),
+            "{err}"
         );
         assert_eq!(layout.pending_version().as_deref(), Some("0.3.1"));
     }

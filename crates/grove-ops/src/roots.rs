@@ -1012,9 +1012,6 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
             }
 
             let bare = bare_dir(home, &slug);
-            if !bare.is_dir() {
-                continue;
-            }
             // A clone in flight (or one that died mid-transfer) has a bare with an
             // `origin` and nothing else. Adopting it re-declares a root the operator
             // may have just undeclared, and the engine then re-clones what they
@@ -1024,8 +1021,8 @@ pub fn adopt(home: &Path) -> Result<Vec<Applied<AdoptStatus>>, Error> {
             if root_dir(home, &slug).join(CLONING_MARKER).exists() {
                 continue;
             }
-            // Skip silently if origin isn't configured — the bare exists but we
-            // can't recover a URL to record, so adoption isn't possible.
+            // Skip silently with no bare, or one with no `origin`: there is no URL to
+            // record, so adoption isn't possible.
             let Ok(url) = git::remote_url(&bare, "origin") else {
                 continue;
             };
@@ -1779,12 +1776,12 @@ mod tests {
         );
         fixture_repo(&code.join("myfork"));
         std::fs::write(code.join("TODO.md"), "notes").unwrap();
+        let r = refusal();
         assert!(
-            refusal().contains(
+            r.contains(
                 "in branch feature/x, refs/stash, TODO.md (not grove's), myfork (not grove's);"
             ),
-            "{}",
-            refusal()
+            "{r}"
         );
         assert!(code.join("myfork/.git").exists());
 
@@ -1903,25 +1900,42 @@ mod tests {
         );
     }
 
+    /// Only a readable `roots/<org>/<repo>/bare` with an `origin` is adopted: dotfile
+    /// dirs at either level, a file, a dir with no bare, a bare with no `origin` and an
+    /// org dir that cannot be read are each skipped without failing the walk.
     #[test]
-    fn adopt_skips_dotfile_dirs_like_trash() {
+    fn adopt_skips_all_but_a_readable_bare_with_an_origin() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Unlock(PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         let src = tmp.path().join("src");
         fixture_repo(&src);
 
-        // A bare repo under `.trash/old/r/` — must not be adopted, and the code dir
-        // beside it is what the walk would have to refuse.
-        let trash_bare = bare_dir(&home, ".trash/old/r");
-        std::fs::create_dir_all(trash_bare.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(code_dir(&home, ".trash/old/r")).unwrap();
-        git::clone_bare(src.to_str().unwrap(), &trash_bare).unwrap();
+        // Bares under `.trash/old/r/` and `o/.old/` — the code dir beside the first is
+        // what the walk would have to refuse.
+        for slug in [".trash/old/r", "o/.old"] {
+            let bare = bare_dir(&home, slug);
+            std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(code_dir(&home, slug)).unwrap();
+            git::clone_bare(src.to_str().unwrap(), &bare).unwrap();
+        }
+        std::fs::write(root_dir(&home, "o/notes"), "").unwrap();
+        std::fs::create_dir_all(root_dir(&home, "o/empty")).unwrap();
+        std::fs::create_dir_all(bare_dir(&home, "o/local")).unwrap();
+        crate::testfix::git(&bare_dir(&home, "o/local"), &["init", "-q", "--bare"]);
+        let locked = home.join("roots/locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let _unlock = Unlock(locked);
 
-        adopt(&home).unwrap();
-        assert!(
-            list(&home).unwrap().is_empty(),
-            ".trash repos must not be adopted"
-        );
+        assert!(adopt(&home).unwrap().is_empty());
+        assert!(list(&home).unwrap().is_empty(), "nothing adoptable");
     }
 
     /// A3: a non-UTF-8 directory name is skipped-with-report, never minted into a
@@ -2448,6 +2462,53 @@ mod tests {
         );
     }
 
+    /// Fail safe over a bare git cannot read: with the trunk on disk its worktree pass
+    /// failing is a warning, not a failed root; with the trunk gone it may still own live
+    /// checkouts, so the recovery refuses rather than wipe and re-clone it.
+    #[test]
+    fn reconcile_one_never_wipes_a_bare_git_cannot_read() {
+        let tmp = TempDir::new().unwrap();
+        let home = crate::testfix::home_with_root(&tmp);
+        let config = bare_dir(&home, "o/r").join("config");
+        std::fs::write(&config, "[broken").unwrap();
+        assert_eq!(
+            reconcile_one(&home, "o/r").unwrap().status,
+            ReconcileStatus::Present
+        );
+
+        std::fs::remove_dir_all(trunk_dir(&home, "o/r")).unwrap();
+        let applied = reconcile_one(&home, "o/r").unwrap();
+        assert_eq!(applied.status, ReconcileStatus::Failed);
+        assert!(applied.error.unwrap().contains("live worktrees"));
+        assert_eq!(std::fs::read_to_string(config).unwrap(), "[broken");
+    }
+
+    /// Declarations colliding with the trunk: one naming its own directory and branch
+    /// is the trunk itself and is dropped, moving nothing; one on its branch elsewhere
+    /// cannot be checked out, which leaves it declared and the root still present.
+    #[test]
+    fn reconcile_one_settles_worktrees_declared_over_the_trunk() {
+        let tmp = TempDir::new().unwrap();
+        let home = crate::testfix::home_with_root(&tmp);
+        for name in ["main", "dup"] {
+            manifest::add_worktree(&manifest_path(&home), "o/r", name, "main", None).unwrap();
+        }
+        assert_eq!(
+            reconcile_one(&home, "o/r").unwrap().status,
+            ReconcileStatus::Present
+        );
+        let declared = manifest::list_worktrees(&manifest_path(&home), "o/r").unwrap();
+        assert_eq!(
+            declared.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
+            ["dup"]
+        );
+        assert!(!code_dir(&home, "o/r").join("dup").exists());
+        assert_eq!(
+            git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
+            "main"
+        );
+    }
+
     #[test]
     fn reconcile_one_errors_on_an_undeclared_slug() {
         let tmp = TempDir::new().unwrap();
@@ -2520,6 +2581,12 @@ mod tests {
         assert_eq!(again.trunk, git::FastForward::AlreadyCurrent);
         assert_eq!(again.stale_slots_pruned, 0, "current slots kept");
         assert_eq!(crate::worktrees::pool_count(&home, "o/r").unwrap(), 1);
+
+        // A slot git cannot read (its `.git` pointing nowhere) is skipped, not fatal.
+        let slot = crate::pool::slots(&home, "o/r").unwrap().remove(0);
+        std::fs::write(slot.join(".git"), "gitdir: /nonexistent").unwrap();
+        assert_eq!(sync(&home, "o/r").unwrap().stale_slots_pruned, 0);
+        assert!(slot.exists(), "and left where it is");
     }
 
     /// A diverged trunk is reported and untouched — and because the trunk didn't
@@ -2605,6 +2672,16 @@ mod tests {
             "no bare or trunk checkout → clean error"
         );
         assert!(sync(&home, "../etc").is_err(), "traversal slug rejected");
+
+        // A bare without its trunk checkout names the checkout as what is missing.
+        let home = crate::testfix::home_with_root(&tmp);
+        let trunk = trunk_dir(&home, "o/r");
+        std::fs::remove_dir_all(&trunk).unwrap();
+        let err = sync(&home, "o/r").unwrap_err();
+        assert!(
+            matches!(&err, Error::NotReady(m) if m.contains(&*trunk.to_string_lossy())),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2620,6 +2697,11 @@ mod tests {
         assert_eq!(list(&home).unwrap(), vec![]);
         assert!(!home.join("code/o/r").exists(), "no checkouts left behind");
         assert!(!home.join("roots/o/r").exists(), "and none of grove's own");
+
+        // A root declared but never realized has nothing on disk to delete.
+        manifest::add_root(&manifest_path(&home), "o/r", src.to_str().unwrap()).unwrap();
+        remove(&home, "o/r", Removal::Guarded).unwrap();
+        assert_eq!(list(&home).unwrap(), vec![], "undeclared all the same");
     }
 
     /// D4: after `remove` (delete-then-undeclare), the on-disk bare is gone, so a

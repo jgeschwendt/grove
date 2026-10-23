@@ -43,12 +43,6 @@ pub const SLUG: &str = "o/r";
 /// A one-commit local source repo on `main` at `dir` — the drop-in replacement
 /// for the per-test `git init` + `add` + `commit` helpers.
 pub fn fixture_repo(dir: &Path) {
-    // Idempotent, so a caller that shares one `src` across fixtures builds it once.
-    // The committed file is the marker: it exists only after the commit below lands,
-    // so a half-built repo is rebuilt rather than handed back.
-    if dir.join("README.md").exists() {
-        return;
-    }
     std::fs::create_dir_all(dir).unwrap();
     git(dir, &["init", "-q", "-b", "main"]);
     std::fs::write(dir.join("README.md"), "hi").unwrap();
