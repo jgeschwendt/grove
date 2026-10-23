@@ -131,6 +131,28 @@ pub fn git_command() -> Command {
     cmd
 }
 
+/// [`git_command`] at `dir`, which must itself be the repository — a bare, or a
+/// checkout holding its own `.git` — with git's upward discovery fenced at `dir`'s
+/// parent (`GIT_CEILING_DIRECTORIES`). Unfenced, a `dir` that exists but is no
+/// repository — an emptied or half-deleted bare, a checkout that lost its `.git` —
+/// resolves to whatever repo encloses the grove home, and `~` is one on a dotfiles
+/// machine: adopt would declare its origin, a fetch or `worktree add` would write into
+/// it. Every spawn here addresses its repo through this. A parent holding `:` (git's
+/// list separator) splits into entries that fence nothing — grove's own layout never
+/// composes one.
+fn git_in(dir: &Path) -> Command {
+    let mut cmd = git_command();
+    if let Some(parent) = std::path::absolute(dir)
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    cmd.arg("-C").arg(dir);
+    cmd
+}
+
 /// git's local-repository environment (`git rev-parse --local-env-vars`): the
 /// variables that pin a git invocation to a specific repo/index/worktree. A
 /// grove process launched from inside a git hook or `rebase --exec` inherits
@@ -258,10 +280,8 @@ fn check_status(out: &std::process::Output, what: &str) -> Result<()> {
 /// at the local branch tip). Wall time capped by [`fetch_timeout`] via a child kill.
 pub fn fetch(bare: &Path, remote: &str, branch: &str) -> Result<()> {
     let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["fetch", "--quiet", "--", remote, &refspec]);
+    let mut cmd = git_in(bare);
+    cmd.args(["fetch", "--quiet", "--", remote, &refspec]);
     let out = run_git(cmd, fetch_timeout(), "git fetch")?;
     check_status(&out, "git fetch")?;
     Ok(())
@@ -296,10 +316,8 @@ pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
     // untracked files as dirty would wedge every future ff on a repo that doesn't
     // gitignore that path. An untracked file the incoming commits *would* overwrite
     // is instead caught at the merge step below (git refuses → Dirty).
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(wt)
-        .args(["status", "--porcelain", "--untracked-files=no"]);
+    let mut cmd = git_in(wt);
+    cmd.args(["status", "--porcelain", "--untracked-files=no"]);
     let status = run_git(cmd, None, "git status")?;
     check_status(&status, "git status")?;
     if !status.stdout.is_empty() {
@@ -307,10 +325,8 @@ pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
     }
 
     let before = rev_parse(wt, "HEAD")?;
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(wt)
-        .args(["merge", "--ff-only", "--quiet", "--", upstream]);
+    let mut cmd = git_in(wt);
+    cmd.args(["merge", "--ff-only", "--quiet", "--", upstream]);
     let merge = run_git(cmd, None, "git merge --ff-only")?;
     if !merge.status.success() {
         let err = String::from_utf8_lossy(&merge.stderr);
@@ -341,10 +357,8 @@ pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
 
 /// Resolve `rev` in the repo/worktree at `repo` to a full object id.
 pub fn rev_parse(repo: &Path, rev: &str) -> Result<String> {
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--verify", "--quiet", "--end-of-options", rev]);
+    let mut cmd = git_in(repo);
+    cmd.args(["rev-parse", "--verify", "--quiet", "--end-of-options", rev]);
     let out = run_git(cmd, None, "git rev-parse")?;
     check_status(&out, &format!("git rev-parse {rev}"))?;
     Ok(stdout_trimmed(&out))
@@ -357,14 +371,9 @@ pub fn rev_parse(repo: &Path, rev: &str) -> Result<String> {
 /// [`Status`]'s `ahead` cannot answer it: git omits `# branch.ab` for a branch with
 /// no upstream, so a brand-new branch carrying a day's commits reports `ahead: 0`.
 pub fn unpushed_count(repo: &Path) -> Result<u32> {
-    let mut cmd = git_command();
-    cmd.args(["--no-optional-locks", "-C"]).arg(repo).args([
-        "rev-list",
-        "--count",
-        "HEAD",
-        "--not",
-        "--remotes",
-    ]);
+    let mut cmd = git_in(repo);
+    cmd.arg("--no-optional-locks")
+        .args(["rev-list", "--count", "HEAD", "--not", "--remotes"]);
     let out = run_git(cmd, None, "git rev-list")?;
     check_status(&out, "git rev-list")?;
     Ok(stdout_trimmed(&out).parse().unwrap_or(0))
@@ -376,8 +385,8 @@ pub fn unpushed_count(repo: &Path) -> Result<u32> {
 /// for any number of branches.
 pub fn unpushed_branches(repo: &Path) -> Result<Vec<String>> {
     let read = |args: &[&str]| {
-        let mut cmd = git_command();
-        cmd.args(["--no-optional-locks", "-C"]).arg(repo).args(args);
+        let mut cmd = git_in(repo);
+        cmd.arg("--no-optional-locks").args(args);
         let out = run_git(cmd, None, "git unpushed branches")?;
         check_status(&out, "git unpushed branches")?;
         Ok::<_, anyhow::Error>(stdout_trimmed(&out))
@@ -443,12 +452,9 @@ pub struct Status {
 /// Whether the rewrite happens depends on the checkout's stat state, so the flag is
 /// not optional just because a given repo doesn't provoke it.
 pub fn status(repo: &Path) -> Result<Status> {
-    let mut cmd = git_command();
-    cmd.args(["--no-optional-locks", "-C"]).arg(repo).args([
-        "status",
-        "--porcelain=v2",
-        "--branch",
-    ]);
+    let mut cmd = git_in(repo);
+    cmd.arg("--no-optional-locks")
+        .args(["status", "--porcelain=v2", "--branch"]);
     let out = run_git(cmd, None, "git status")?;
     check_status(&out, "git status")?;
     Ok(parse_status(&out.stdout))
@@ -566,8 +572,8 @@ pub fn worktree_add(bare: &Path, path: &Path, branch: &str, start: Option<&str>)
 
     // `--` ends git's option parsing for everything after it, so a path or
     // start-point can never be read as a flag either.
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(bare).args(["worktree", "add"]);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "add"]);
     let target = branch_target(&mut cmd, bare, "-b", branch, start);
     cmd.arg("--").arg(path).arg(target);
     let out = run_git(cmd, None, "git worktree add")?;
@@ -619,8 +625,8 @@ fn branch_target(
 /// tip. Falls back to `main` when `HEAD` is detached/unreadable (a fresh bare clone
 /// always has a symbolic `HEAD`, so the fallback is the pathological case).
 pub fn default_branch(bare: &Path) -> Result<String> {
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(bare).args(["symbolic-ref", "HEAD"]);
+    let mut cmd = git_in(bare);
+    cmd.args(["symbolic-ref", "HEAD"]);
     let out = run_git(cmd, None, "git symbolic-ref HEAD")?;
     if !out.status.success() {
         return Ok("main".to_string());
@@ -638,10 +644,8 @@ pub fn default_branch(bare: &Path) -> Result<String> {
 /// not published still records the intent, and the checkout that follows is what
 /// fails loudly if the branch really is not there.
 pub fn set_head(bare: &Path, branch: &str) -> Result<()> {
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["symbolic-ref", "HEAD"])
+    let mut cmd = git_in(bare);
+    cmd.args(["symbolic-ref", "HEAD"])
         .arg(format!("refs/heads/{branch}"));
     let out = run_git(cmd, None, "git symbolic-ref HEAD")?;
     check_status(&out, "git symbolic-ref HEAD")?;
@@ -663,10 +667,8 @@ pub fn worktree_add_detached(bare: &Path, path: &Path, commitish: &str) -> Resul
         "path must be absolute; got {}",
         path.display()
     );
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "add", "--detach", "--"])
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "add", "--detach", "--"])
         .arg(path)
         .arg(commitish);
     let out = run_git(cmd, None, "git worktree add --detach")?;
@@ -689,12 +691,8 @@ pub fn worktree_move(bare: &Path, from: &Path, to: &Path) -> Result<()> {
         "to must be absolute; got {}",
         to.display()
     );
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "move", "--"])
-        .arg(from)
-        .arg(to);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "move", "--"]).arg(from).arg(to);
     let out = run_git(cmd, None, "git worktree move")?;
     check_status(&out, "git worktree move")?;
     Ok(())
@@ -718,11 +716,8 @@ pub fn worktree_repair(bare: &Path, moved: &[&Path]) -> Result<()> {
         "bare must be absolute; got {}",
         bare.display()
     );
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "repair", "--"])
-        .args(moved);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "repair", "--"]).args(moved);
     let out = run_git(cmd, None, "git worktree repair")?;
     check_status(&out, "git worktree repair")?;
     Ok(())
@@ -744,8 +739,8 @@ pub fn attach_branch(wt: &Path, branch: &str, start: Option<&str>) -> Result<()>
         "worktree must be absolute; got {}",
         wt.display()
     );
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(wt).arg("switch");
+    let mut cmd = git_in(wt);
+    cmd.arg("switch");
     let target = branch_target(&mut cmd, wt, "-c", branch, start);
     cmd.arg("--").arg(target);
     let out = run_git(cmd, None, "git switch")?;
@@ -755,10 +750,8 @@ pub fn attach_branch(wt: &Path, branch: &str, start: Option<&str>) -> Result<()>
 /// The linked worktrees of `bare`, parsed from `git worktree list --porcelain`.
 /// The bare entry itself is omitted; callers filter grove's own dirs by path.
 pub fn worktree_list(bare: &Path) -> Result<Vec<GitWorktree>> {
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "list", "--porcelain"]);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "list", "--porcelain"]);
     let out = run_git(cmd, None, "git worktree list")?;
     check_status(&out, "git worktree list")?;
     Ok(parse_worktree_list(&out.stdout))
@@ -828,8 +821,8 @@ fn parse_worktree_list(stdout: &[u8]) -> Vec<GitWorktree> {
 /// Used by root adoption to recover a `url` for a bare repo found on disk that
 /// isn't declared in the manifest.
 pub fn remote_url(bare: &Path, remote: &str) -> Result<String> {
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(bare).args(["remote", "get-url", remote]);
+    let mut cmd = git_in(bare);
+    cmd.args(["remote", "get-url", remote]);
     let out = run_git(cmd, None, "git remote get-url")?;
     if !out.status.success() {
         bail!(
@@ -848,8 +841,8 @@ pub fn remote_url(bare: &Path, remote: &str) -> Result<String> {
 /// re-adopt the deleted worktree. Only genuinely-missing trees are pruned — a live
 /// worktree at any path is untouched, so this is safe to call broadly.
 pub fn worktree_prune(bare: &Path) -> Result<()> {
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(bare).args(["worktree", "prune"]);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "prune"]);
     let out = run_git(cmd, None, "git worktree prune")?;
     check_status(&out, "git worktree prune")?;
     Ok(())
@@ -858,9 +851,8 @@ pub fn worktree_prune(bare: &Path) -> Result<()> {
 /// Which of `paths` (worktree-relative, taken literally) git tracks in `wt` — one
 /// spawn for any number of them.
 pub fn tracked(wt: &Path, paths: &[&str]) -> Result<HashSet<String>> {
-    let mut cmd = git_command();
-    cmd.args(["--literal-pathspecs", "-C"])
-        .arg(wt)
+    let mut cmd = git_in(wt);
+    cmd.arg("--literal-pathspecs")
         .args(["ls-files", "-z", "--"])
         .args(paths);
     let out = run_git(cmd, None, "git ls-files")?;
@@ -873,11 +865,8 @@ pub fn tracked(wt: &Path, paths: &[&str]) -> Result<HashSet<String>> {
 
 /// Remove the worktree at `path` from `bare` (refuses if it has changes).
 pub fn worktree_remove(bare: &Path, path: &Path) -> Result<()> {
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(bare)
-        .args(["worktree", "remove"])
-        .arg(path);
+    let mut cmd = git_in(bare);
+    cmd.args(["worktree", "remove"]).arg(path);
     let out = run_git(cmd, None, "git worktree remove")?;
     check_status(&out, "git worktree remove")?;
     Ok(())
