@@ -78,10 +78,11 @@ jobs:
       # HEAD, stamp it with the tag's version and publish it as that tag's asset —
       # which release.sh's stamp guard cannot catch, since the binary does report the
       # version it was told to stamp.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-tags: true
+          persist-credentials: false
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       # Restore-only: a tag push is not the default branch, so the build reads main's
       # mbx cache and never writes it.
