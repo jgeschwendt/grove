@@ -238,7 +238,8 @@
     <li><strong>A hand-edited nested slug pair still realizes</strong> (plausible, low;
       <code class="code">manifest::nests</code>). <code class="code">add_root</code> and <code class="code">roots::remove</code> refuse
       <code class="code">o/r/bare</code> beside <code class="code">o/r</code>, but a manifest edited or synced to hold both
-      clones the inner root into the outer's bare path, and <code class="code">doctor</code> does not name the pair.</li>
+      clones the inner root into the outer's bare path, a failed realize's cleanup
+      <code class="code">remove_dir_all</code>s that path unguarded, and <code class="code">doctor</code> does not name the pair.</li>
     <li><strong>A carry holds on an in-trunk link whose target the new trunk will have</strong>
       (plausible, low). <code class="code">.k1 -&gt; .real</code> is held even when <code class="code">.real</code>
       is tracked or itself a declared share, until the operator re-creates it; the check is lexical.</li>
