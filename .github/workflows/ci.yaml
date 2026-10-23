@@ -23,8 +23,8 @@ jobs:
     # Fail fast instead of GitHub's 24h max: a job that hasn't finished in 30
     # minutes is wedged, not slow. 30 rather than 15 because the FIRST run on a
     # cold cache compiles the whole dep tree (~300 packages: gix, rustls, reqwest,
-    # opentelemetry-otlp) before any cache exists — and `Swatinem/rust-cache`
-    # writes nothing on a failed job, so a first run that trips the wall would
+    # opentelemetry-otlp) before any cache exists — and `jdx/mr-boxington-action`
+    # saves nothing on a failed job, so a first run that trips the wall would
     # repeat the same cold build forever.
     timeout-minutes: 30
     steps:
@@ -35,7 +35,10 @@ jobs:
       # one list — and running it as a task puts it on the PINNED toolchain, since
       # mise's rust backend works by exporting RUSTUP_TOOLCHAIN.
       - run: mise run components
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # mbx (mise.toml's `cargo` wrapper) caches each rustc invocation; this restores
+      # the pruned target tree and registry, keyed per toolchain and commit, and saves
+      # only after a green push to main, so a pull request never writes the cache.
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
       - run: mise run check
       # The `ci` nextest profile runs the `slow_*` tier the default profile skips,
       # and reports slow tests in the summary.
@@ -57,13 +60,13 @@ jobs:
   check-and-test-macos:
     runs-on: macos-latest
     # Same 30 as the ubuntu job, for the same reason: the first run compiles the whole
-    # dep tree before `Swatinem/rust-cache` has anything to restore.
+    # dep tree before mbx has anything to restore.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: mise run components
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
       - run: mise run check
       - run: mise run test
         env:
@@ -79,7 +82,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        with:
+          # smoke shares the ubuntu job's platform key; a suffix keeps its narrower
+          # save from racing that job's, while the restore prefix stays shared.
+          cache-key-suffix: smoke
       - run: mise run smoke
 
   # The architecture graph: `check` proves the committed lock still describes the code
