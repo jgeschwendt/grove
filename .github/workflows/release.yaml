@@ -83,7 +83,9 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-tags: true
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Restore-only: a tag push is not the default branch, so the build reads main's
+      # mbx cache and never writes it.
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
 
       # The tag IS the version. Stamp [workspace.package] — the single source every
       # crate reads and the value CARGO_PKG_VERSION bakes into the binary — so the
