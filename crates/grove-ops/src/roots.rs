@@ -1938,6 +1938,53 @@ mod tests {
         assert!(list(&home).unwrap().is_empty(), "nothing adoptable");
     }
 
+    /// A bare or a trunk that is a directory but no repository fails as itself, never
+    /// through git's discovery into a repo enclosing the home — the operator's `~` may
+    /// be one. The enclosing repo here sits detached beside a `dev` it does not check
+    /// out, its origin the src, which carries `dev` too — so every escape would succeed
+    /// and show in its refs, worktrees or `HEAD`: adopt declaring its origin,
+    /// sync fetching `dev` into it, a status read of it, and reconcile adding the
+    /// declared `dev` trunk to it and pointing its `HEAD` there.
+    #[test]
+    fn a_hollow_bare_or_trunk_never_reaches_an_enclosing_repo() {
+        let tmp = TempDir::new().unwrap();
+        let (enc, home, src) = (tmp.path(), tmp.path().join("home"), tmp.path().join("src"));
+        fixture_repo(&src);
+        crate::testfix::git(&src, &["branch", "dev"]);
+        let id = "-c user.email=t@grove -c user.name=grove";
+        for args in [
+            "init -q -b dev",
+            &format!("{id} commit -q --allow-empty -m ~"),
+            "checkout -q --detach",
+            &format!("remote add origin {}", src.display()),
+        ] {
+            crate::testfix::git(enc, &args.split(' ').collect::<Vec<_>>());
+        }
+        let snapshot = || {
+            let read = |args: &str| {
+                let args = args.split(' ').collect::<Vec<_>>();
+                let out = git::git_command().arg("-C").arg(enc).args(args).output();
+                String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
+            };
+            ["for-each-ref", "worktree list", "symbolic-ref -q HEAD"].map(read)
+        };
+        let before = snapshot();
+
+        let slug = "o/hollow";
+        std::fs::create_dir_all(bare_dir(&home, slug)).unwrap();
+        assert!(adopt(&home).unwrap().is_empty(), "no origin of its own");
+        manifest::add_root(&manifest_path(&home), slug, src.to_str().unwrap()).unwrap();
+        declare_trunk(&home, slug, "dev");
+        std::fs::create_dir_all(trunk_dir(&home, slug)).unwrap();
+        assert!(sync(&home, slug).is_err(), "nothing to fetch into");
+        assert!(trunk_status(&home, slug).is_err(), "no checkout to read");
+        std::fs::remove_dir(trunk_dir(&home, slug)).unwrap();
+        let applied = reconcile_one(&home, slug).unwrap();
+        assert_eq!(applied.status, ReconcileStatus::Failed, "{applied:?}");
+
+        assert_eq!(snapshot(), before, "the enclosing repo is untouched");
+    }
+
     /// A3: a non-UTF-8 directory name is skipped-with-report, never minted into a
     /// U+FFFD slug. Tested on the pure decision with a synthetic `OsStr` — APFS
     /// (the dev/CI filesystem) refuses invalid-UTF-8 names, so the on-disk shape
