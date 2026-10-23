@@ -70,7 +70,8 @@ pub enum ShareMode {
 /// the only spelling of its root. ASCII only: APFS folds case across all of Unicode
 /// and ignores normalization, so `o/Ä` beside `o/ä` (or NFC beside NFD) is one
 /// directory under two keys, a twin [`nests`]' ASCII folding cannot see — and a
-/// remove of one deletes the other. No forge path a clone URL yields is non-ASCII.
+/// remove of one deletes the other. GitHub, GitLab and Gitea paths are ASCII; another
+/// host's non-ASCII path is refused, and one already declared drops out of `list`.
 pub fn validate_slug(slug: &str) -> Result<()> {
     let safe = slug.is_ascii()
         && !slug.contains('\\')
@@ -103,11 +104,16 @@ pub fn validate_slug(slug: &str) -> Result<()> {
 /// reconcile. Rejecting here covers both entrances at once — the API
 /// (`add_worktree`) and a hand-edited/git-synced manifest (`list_worktrees`, which
 /// skips names that fail this).
+///
+/// NFC only: git on macOS composes the paths it lists, so a checkout made under a
+/// decomposed name is registered under another, and a remove keyed by its own name
+/// never finds it.
 pub fn validate_name(name: &str) -> Result<()> {
     let mut components = Path::new(name).components();
     let single_segment =
         matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
     let safe = !name.is_empty()
+        && unicode_normalization::is_nfc(name)
         && !name.contains('\\')
         && !name.bytes().any(|b| b.is_ascii_control())
         && !crate::worktrees::is_reserved(name)
@@ -117,7 +123,7 @@ pub fn validate_name(name: &str) -> Result<()> {
     } else {
         bail!(
             "invalid worktree name {name:?}: must be a single path segment with no '/' or '..', \
-             and must not begin with '.' (no checkout can be named that)"
+             must be NFC, and must not begin with '.' (no checkout can be named that)"
         );
     }
 }
@@ -468,11 +474,13 @@ pub fn add_worktree(
             .context("`worktrees` is not a table")?;
         worktrees.set_implicit(true);
         // `add_root`'s case refusal, per name: on APFS a case twin is the declared
-        // worktree's directory. A Unicode-normalization twin is left to
-        // `worktrees::remove`'s gate — a non-ASCII branch derives a legitimate name.
-        if let Some((taken, _)) = worktrees
-            .iter()
-            .find(|(k, _)| *k != name && k.eq_ignore_ascii_case(name))
+        // worktree's directory. A non-ASCII case twin is left to `worktrees::remove`'s
+        // gate — a non-ASCII branch derives a legitimate name.
+        // a declared name re-declares as it stands, twin or not, as `add_root` does
+        if !worktrees.contains_key(name)
+            && let Some((taken, _)) = worktrees
+                .iter()
+                .find(|(k, _)| *k != name && k.eq_ignore_ascii_case(name))
         {
             bail!(
                 "worktree `{name}` of {slug} differs only in case from declared worktree \
@@ -1049,7 +1057,7 @@ mod tests {
 
     #[test]
     fn validate_name_requires_a_single_safe_segment() {
-        for ok in ["my-feature", "wt1", "release-1.2"] {
+        for ok in ["my-feature", "wt1", "release-1.2", "caf\u{e9}"] {
             assert!(validate_name(ok).is_ok(), "{ok:?} should be ok");
         }
         // A dotted name names nothing a checkout can be: git will not carry a ref
@@ -1057,7 +1065,16 @@ mod tests {
         // reconcile on a `worktree add` that cannot succeed. `..foo` is rejected by the
         // same rule, and loses nothing.
         for bad in [
-            "", "a/b", "..", ".", "/abs", "a\\b", ".git", ".hidden", "..foo",
+            "",
+            "a/b",
+            "..",
+            ".",
+            "/abs",
+            "a\\b",
+            ".git",
+            ".hidden",
+            "..foo",
+            "cafe\u{301}",
         ] {
             assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
         }
@@ -1134,6 +1151,11 @@ mod tests {
         let err = add_worktree(&path, "o/r", "Feature-X", "y", None).unwrap_err();
         assert!(format!("{err:#}").contains("only in case from declared worktree `feature-x`"));
         assert_eq!(list_worktrees(&path, "o/r").unwrap()[0].branch, "feature/x");
+        // a twin already beside it (hand-edited) leaves the declared name re-declarable
+        let both = std::fs::read_to_string(&path).unwrap()
+            + "[roots.\"o/r\".worktrees.Feature-X]\nbranch = \"y\"\n";
+        std::fs::write(&path, both).unwrap();
+        add_worktree(&path, "o/r", "feature-x", "feature/x", Some("main")).unwrap();
     }
 
     #[test]
