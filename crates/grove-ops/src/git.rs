@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use gix::refs::transaction::PreviousValue;
+use gix::refspec::parse::Operation;
 
 use crate::clock::{Clock, Deadline, SystemClock};
 
@@ -37,7 +38,11 @@ pub fn clone_bare(url: &str, dest: &Path) -> Result<String> {
     // gix 0.90 clones bare the way `git clone --bare` does — remote heads mirrored to
     // local heads, no fetch refspec. grove wants the non-bare layout (see
     // `clone_bare_writes_remote_tracking_layout`): tracking refs under a persisted
-    // refspec here, the default branch's head and upstream after the fetch.
+    // refspec here, the default branch's head and upstream after the fetch. Any
+    // `configure_remote` drops gix's clone-only all-tags fetch, so every tag rides
+    // along as a one-off refspec, never persisted (a `tagOpt` would change each later
+    // `git fetch`).
+    let tags = gix::refspec::parse("+refs/tags/*:refs/tags/*".into(), Operation::Fetch)?;
     let mut prepare = gix::prepare_clone_bare(url, dest)
         .with_context(|| format!("prepare clone of {url}"))?
         .configure_remote(|remote| {
@@ -45,6 +50,10 @@ pub fn clone_bare(url: &str, dest: &Path) -> Result<String> {
                 Some("+refs/heads/*:refs/remotes/origin/*"),
                 gix::remote::Direction::Fetch,
             )
+        })
+        .with_fetch_options(gix::remote::ref_map::Options {
+            extra_refspecs: vec![tags.to_owned()],
+            ..Default::default()
         });
 
     let interrupt = Arc::new(AtomicBool::new(false));
@@ -1153,6 +1162,15 @@ mod tests {
         let src = tmp.path().join("src");
         fixture_repo(&src);
         git(&src, &["branch", "feature"]);
+        // a tag no branch reaches still arrives, as 0.89's clone-only Tags::All brought it
+        let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
+        git(&src, &["checkout", "-q", "--detach"]);
+        git(
+            &src,
+            &[&id[..], &["commit", "-q", "--allow-empty", "-m", "o"]].concat(),
+        );
+        git(&src, &["tag", "orphan"]);
+        git(&src, &["checkout", "-q", "-"]);
 
         let bare = tmp.path().join("repo.git");
         clone_bare(src.to_str().unwrap(), &bare).unwrap();
@@ -1171,7 +1189,8 @@ mod tests {
             "refs/heads/main \n\
              refs/remotes/origin/HEAD \n\
              refs/remotes/origin/feature \n\
-             refs/remotes/origin/main \n"
+             refs/remotes/origin/main \n\
+             refs/tags/orphan \n"
         );
         assert_eq!(
             out(
