@@ -137,12 +137,14 @@ pub fn git_command() -> Command {
 /// repository — an emptied or half-deleted bare, a checkout that lost its `.git` —
 /// resolves to whatever repo encloses the grove home, and `~` is one on a dotfiles
 /// machine: adopt would declare its origin, a fetch or `worktree add` would write into
-/// it. Every spawn here addresses its repo through this. A parent holding `:` (git's
+/// it. Every spawn here addresses its repo through this, fenced at the RESOLVED parent
+/// so a symlinked `dir` cannot point the walk past it. A parent holding `:` (git's
 /// list separator) splits into entries that fence nothing — grove's own layout never
 /// composes one.
 fn git_in(dir: &Path) -> Command {
     let mut cmd = git_command();
-    if let Some(parent) = std::path::absolute(dir)
+    if let Some(parent) = std::fs::canonicalize(dir)
+        .or_else(|_| std::path::absolute(dir))
         .ok()
         .as_deref()
         .and_then(Path::parent)
