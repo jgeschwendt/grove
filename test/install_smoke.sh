@@ -37,7 +37,7 @@ TARGET="${arch}-${os}"
 BIND="127.0.0.1:1"
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+trap 'kill ${SRV:-} 2>/dev/null; rm -rf "$WORK"' EXIT
 FIX="$WORK/release"
 HOME_DIR="$WORK/home"
 GH="$WORK/grovehome"
@@ -193,4 +193,32 @@ done
 cmp -s "$C/Cargo.toml" "$WORK/Cargo.toml" && cmp -s "$C/Cargo.lock" "$WORK/Cargo.lock" ||
   fail "publish-canary did not restore Cargo.toml/Cargo.lock as it found them"
 
-echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall, purge, canary"
+# A loopback base that 302s every request to cleartext off loopback: install.sh vets
+# only the URL it asks for, so curl must refuse the hop rather than fetch the binary it
+# runs from evil.localhost (which curl resolves to loopback, so the hop is observable).
+echo "smoke: install.sh (a redirect to cleartext)"
+python3 - "$WORK/port" "$WORK/hits" <<'EOF' &
+import http.server, os, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(sys.argv[2], "a") as f: f.write(self.headers["Host"] + self.path + "\n")
+        self.send_response(302)
+        self.send_header("Location", "http://evil.localhost:%d%s" % (s.server_port, self.path))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    def log_message(self, *a): pass
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(s.server_port))
+os.rename(sys.argv[1] + ".tmp", sys.argv[1])
+s.serve_forever()
+EOF
+SRV=$!
+i=0
+until [ -s "$WORK/port" ] || [ $((i += 1)) -gt 100 ]; do sleep 0.1; done
+! HOME="$HOME_DIR" GROVE_HOME="$WORK/rh" GROVE_INSTALL="$WORK/ri" GROVE_BIND="$BIND" GROVE_LINK_DIR="$WORK/rl" \
+  GROVE_INSTALL_BASE_URL="http://127.0.0.1:$(cat "$WORK/port")" bash "$ROOT/scripts/install.sh" 2>/dev/null ||
+  fail "install.sh succeeded through a cleartext redirect"
+grep -q '^127\.0\.0\.1:[0-9]*/latest$' "$WORK/hits" || fail "the redirecting base was never asked"
+! grep -q '^evil\.' "$WORK/hits" || fail "install.sh followed a redirect to cleartext: $(cat "$WORK/hits")"
+
+echo "smoke: PASS — install $V1, swap to $V2, rollback to $V1, uninstall, purge, canary, redirect"

@@ -75,7 +75,11 @@ if [ -n "$token" ]; then auth=(-H "Authorization: Bearer $token"); fi
 # Accept-Encoding: identity defeats corp MITM proxies that recompress gzip
 # mid-flight — re-compression changes the bytes and the sha256 sidecar `grove up`
 # verifies would no longer match. Mirrors the Rust client's own default header.
-curl_opts=(-fsSL -H "Accept-Encoding: identity")
+# `--proto-redir =https`: check_url vets only the URL asked for, so a base or mirror's
+# redirect to `http://evil.example/` would serve the binary this script executes.
+# Stricter than `grove up`'s hop_is_allowed, which also takes a loopback-to-loopback
+# cleartext hop; no release base issues one.
+curl_opts=(-fsSL --proto-redir =https -H "Accept-Encoding: identity")
 
 # Refuse a cleartext URL that is not loopback — the same rule `grove up` applies to
 # GROVE_INSTALL_BASE_URL (crates/grove/src/update/source.rs::install_source),
