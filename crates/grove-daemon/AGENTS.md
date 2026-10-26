@@ -8,7 +8,7 @@ purpose: >-
 commands:
   test: mise exec -- cargo nextest run -p grove-daemon
 invariants:
-  - claim: "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background and no preemption of an op already running"
+  - claim: "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background (reads yielding to waiting background after READ_DEPTH in a row) and no preemption of an op already running"
     anchor: ※ per-root-lane
   - claim: "a clone permit is TRIED at the head of a root's lane and never waited for there: waiting dispatch-side would hold a permit against roots whose lanes are free, and waiting inside the lane job holds the lane, so a handful of stalled clones would shed every other root's snapshot reads as unavailable while health still says ready. Failing the try, the job returns the lane at once and the driver parks in the shared registry; a freed permit pokes exactly one parked driver, which re-dispatches into the same try"
     anchor: crates/grove-daemon/src/engine/permits.rs#ClonePermits
@@ -44,7 +44,7 @@ edges:
 - ※ boot-degrade-sticky → src/boot.rs:68
 - ※ loopback-bind-gate → src/config.rs:189
 - ※ mutation-guard → src/guard.rs:96
-- ※ per-root-lane → src/lane.rs:172
+- ※ per-root-lane → src/lane.rs:174
 - ※ push-only → src/engine/mod.rs:364
 - ※ readiness-whitelist → src/guard.rs:23
 - ※ status-is-a-cache → src/engine/status.rs:52

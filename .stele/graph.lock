@@ -78,7 +78,7 @@
     },
     "per-root-lane": {
       "file": "crates/grove-daemon/src/lane.rs",
-      "line": 172,
+      "line": 174,
       "node": "crates/grove-daemon"
     },
     "promote-attach-before-move": {
@@ -571,8 +571,8 @@
           "enforced_by": null,
           "id": "per-root-lane",
           "kind": "invariant",
-          "resolved": "crates/grove-daemon/src/lane.rs:172",
-          "text": "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background and no preemption of an op already running",
+          "resolved": "crates/grove-daemon/src/lane.rs:174",
+          "text": "every git-writing op for a root runs on that root's lane — reconcile (the warm-slot promote included), sync, fill, remove, worktree ops and doctor's converge — with three tiers draining foreground before read before background (reads yielding to waiting background after READ_DEPTH in a row) and no preemption of an op already running",
           "verified": {
             "digest": "510b1e0f0df004a2fcdb9fa1be86f57dd14104e539f89168ec0fd7101b586abe",
             "sha": "e3963b79b6a5097a3b55e442868647cb450bef29"

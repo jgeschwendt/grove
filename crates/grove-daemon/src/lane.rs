@@ -32,7 +32,9 @@
 //!   outstanding per root, per kind — so it cannot grow, and a bound here could shed
 //!   a foreground slot's worth of memory pressure onto work nobody is waiting for.
 //!
-//! They drain strictly in that order, and an in-flight op is **never preempted**: a
+//! They drain in that order — strictly for foreground, while reads yield to waiting
+//! background after [`READ_DEPTH`] in a row, so a read stream refilling as fast as it
+//! drains cannot starve convergence — and an in-flight op is **never preempted**: a
 //! foreground op on a cloning root waits out that clone (a foreground op on *another*
 //! root runs in parallel — that is the whole point of per-root lanes).
 //!
@@ -83,7 +85,7 @@ pub const DEFAULT_IDLE: Duration = Duration::from_secs(60);
 ///
 /// Declared in drain order: everything in [`Priority::Foreground`] runs before
 /// anything in [`Priority::Read`], which runs before anything in
-/// [`Priority::Background`].
+/// [`Priority::Background`] — for at most [`READ_DEPTH`] reads in a row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Priority {
     /// A mutation someone is waiting on.
@@ -326,6 +328,7 @@ fn spawn(slug: String, registry: Registry, clock: Arc<dyn Clock>, idle: Duration
         foreground: fg_rx,
         read: read_rx,
         background: bg_rx,
+        reads: 0,
     }));
     LaneEntry {
         foreground: fg_tx,
@@ -343,21 +346,37 @@ struct Lane {
     foreground: mpsc::Receiver<Job>,
     read: mpsc::Receiver<Job>,
     background: mpsc::UnboundedReceiver<Job>,
+    /// Reads run in a row while background work waited.
+    reads: usize,
 }
 
-/// The lane itself: drain foreground, then read, then background, one op at a time;
-/// when all three are empty, wait for work or for the idle deadline.
+/// The lane itself: drain foreground, then read, then background, one op at a time —
+/// except that waiting background goes ahead of the next read after [`READ_DEPTH`]
+/// reads in a row; when all three are empty, wait for work or for the idle deadline.
 async fn run_lane(mut lane: Lane) {
     loop {
         // Anything already queued runs before we consider waiting, in priority order.
         // `try_recv` rather than a `select!` because `select!` over several ready
-        // branches is only *biased* toward the first — this is the strict order.
+        // branches is only *biased* toward the first — this is the exact order.
+        // Reads yield to waiting background after `READ_DEPTH` in a row: one full read
+        // backlog is the longest a fresh read could wait anyway, and it is what keeps
+        // a read stream refilling as fast as it drains from starving convergence.
+        if lane.background.is_empty() {
+            lane.reads = 0;
+        }
         let queued = lane
             .foreground
             .try_recv()
             .ok()
-            .or_else(|| lane.read.try_recv().ok())
-            .or_else(|| lane.background.try_recv().ok());
+            .or_else(|| {
+                (lane.reads < READ_DEPTH)
+                    .then(|| lane.read.try_recv().ok().inspect(|_| lane.reads += 1))
+                    .flatten()
+            })
+            .or_else(|| {
+                lane.reads = 0;
+                lane.background.try_recv().ok()
+            });
 
         let job = if let Some(job) = queued {
             job
@@ -763,6 +782,57 @@ mod tests {
             // A shed read is `Busy`, a served one is `Ok` — neither may be `Lost`.
             assert_ne!(read.await.unwrap(), Err(LaneError::Lost));
         }
+    }
+
+    /// Reads that refill as fast as they finish — polling, several SSE clients, lag
+    /// resyncs — do not starve background work: once [`READ_DEPTH`] reads in a row
+    /// have run past a waiting background job, it goes next. Each read enqueues its
+    /// successor synchronously while it runs, so the read queue is never empty when
+    /// the lane picks.
+    #[tokio::test]
+    async fn a_refilling_read_chain_cannot_starve_background() {
+        fn chain(lanes: &Arc<Lanes>, left: usize, log: Arc<std::sync::Mutex<Vec<&'static str>>>) {
+            let next = Arc::clone(lanes);
+            lanes
+                .submit(
+                    "o/r",
+                    Priority::Read,
+                    Box::new(move || {
+                        log.lock().unwrap().push("read");
+                        if left > 0 {
+                            chain(&next, left - 1, log);
+                        }
+                    }),
+                )
+                .unwrap();
+        }
+        let lanes = lanes();
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (release, holder) = hold(&lanes, Priority::Foreground).await;
+        let background = {
+            let (lanes, log) = (Arc::clone(&lanes), Arc::clone(&log));
+            tokio::spawn(async move {
+                lanes
+                    .run("o/r", Priority::Background, move || {
+                        log.lock().unwrap().push("bg");
+                    })
+                    .await
+            })
+        };
+        accepted(&lanes, 2).await;
+        chain(&lanes, 200, Arc::clone(&log));
+
+        release.send(()).unwrap();
+        holder.await.unwrap().unwrap();
+        background.await.unwrap().unwrap();
+        lanes.quiesced().await;
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 202);
+        assert_eq!(
+            log.iter().position(|&e| e == "bg"),
+            Some(READ_DEPTH),
+            "background waited out more than {READ_DEPTH} reads"
+        );
     }
 
     /// An op whose caller gave up while it was queued: a read is dropped at the head
