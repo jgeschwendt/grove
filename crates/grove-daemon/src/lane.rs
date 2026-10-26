@@ -346,7 +346,7 @@ struct Lane {
     foreground: mpsc::Receiver<Job>,
     read: mpsc::Receiver<Job>,
     background: mpsc::UnboundedReceiver<Job>,
-    /// Reads run in a row while background work waited.
+    /// Reads in a row since background was last seen empty.
     reads: usize,
 }
 

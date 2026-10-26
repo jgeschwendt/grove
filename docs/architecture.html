@@ -197,7 +197,7 @@ git-writing op for a root — reconcile, sync, fill, promote, remove, worktree o
 converge — goes through that root's lane, and only one runs at a time. Different roots run
 in parallel. A lane is a tokio task; the work itself runs on <code class="code">spawn_blocking</code>, because
 <code class="code">grove-ops</code> is synchronous.</p>
-<p class="docs-note">Three queues, drained in order — except that waiting background work goes ahead of the next read after 16 reads in a row — with no preemption of an op already running:</p>
+<p class="docs-note">Three queues, drained in order — except that waiting background work goes ahead of the next read after <code class="code">READ_DEPTH</code> reads in a row — with no preemption of an op already running:</p>
 <div class="table-wrap">
 <table data-table>
 <thead><tr><th>tier</th><th>what</th><th>depth</th><th>shed behaviour</th></tr></thead>
