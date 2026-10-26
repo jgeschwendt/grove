@@ -195,7 +195,8 @@ grove ok       # is it healthy?
 <p class="docs-note"><code class="code">grove serve</code> is the published launcher string: <code class="code">grove on</code> spawns <code class="code">&lt;binary&gt; serve</code>, and any
 supervisor unit should spell it the same way (<code class="code">serve_is_the_launcher_subcommand</code> pins it).
 For an installed release the launcher is <code class="code">$GROVE_INSTALL/current/bin/grove</code>; with nothing
-installed it is the running executable itself. The spawned child is handed both roots —
+installed it is the running executable itself. It is resolved at each spawn, so the reboot after a
+first install's flip launches the new release. The spawned child is handed both roots —
 <code class="code">GROVE_HOME</code> so it realizes the manifest the operator is looking at, <code class="code">GROVE_INSTALL</code> so its
 own <code class="code">grove up</code> flips the tree it was launched out of.</p>
 <p class="docs-note">Under a supervisor, run <code class="code">grove serve</code> in the foreground and let the supervisor own restarts:

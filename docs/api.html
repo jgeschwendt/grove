@@ -401,7 +401,8 @@ law 9): the sync still succeeds, and the outcome reaches the client as <code cla
 </header>
 <div class="stack">
 <p class="docs-note"><code class="code">POST /api/doctor</code> takes <code class="code">{slug?, dry_run?, fix?}</code>, every field defaulting: an <strong>empty
-body</strong> is a valid whole-home, non-dry, non-fixing run. A body that is present but carries
+body</strong> is a valid whole-home, non-dry, non-fixing run, and an unknown field is a 422
+<code class="code">invalid_request</code> — a misspelt <code class="code">dry-run</code> would otherwise default to a real converge. A body that is present but carries
 no <code class="code">application/json</code> content type is a 422, not a silent default — axum's optional
 extractor would read an unlabelled body as <em>no body</em>, turning a scoped dry run into a
 whole-home materializing converge.</p>

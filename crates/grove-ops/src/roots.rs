@@ -2514,7 +2514,7 @@ mod tests {
                 .error
                 .as_deref()
                 .unwrap()
-                .contains("delete branch wip, refs/stash;"),
+                .contains("would delete branch wip, refs/stash;"),
             "{applied:?}"
         );
         assert!(
