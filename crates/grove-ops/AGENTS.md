@@ -21,7 +21,7 @@ invariants:
     anchor: ※ never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: ※ sync-never-forces
-  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory"
+  - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all or the bare holds an unpushed branch or a stash; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory"
     anchor: ※ trunk-recovery-guard
   - claim: "worktree depth is load-bearing: every worktree is a direct sibling of the trunk checkout inside the code dir and shares materialize only there, so pool.fill adds a slot under roots/<slug>/pool, outside the code tree, and materializes nothing"
     anchor: ※ worktree-depth
@@ -48,9 +48,9 @@ hazards:
 - ※ never-clobber → src/env.rs:441
 - ※ promote-attach-before-move → src/pool.rs:163
 - ※ reconcile-additive → src/worktrees.rs:290
-- ※ sync-never-forces → src/roots.rs:875
+- ※ sync-never-forces → src/roots.rs:885
 - ※ test-reachability → tests/harness_meta.rs:152
-- ※ trunk-recovery-guard → src/roots.rs:810
+- ※ trunk-recovery-guard → src/roots.rs:820
 - ※ wire-error-codes → src/error.rs:48
 - ※ worktree-depth → src/pool.rs:60
 
