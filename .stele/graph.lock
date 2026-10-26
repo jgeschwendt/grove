@@ -694,9 +694,9 @@
           "id": "never-clobber",
           "kind": "invariant",
           "resolved": "crates/grove-ops/src/env.rs:441",
-          "text": "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
+          "text": "a share never destroys a human's or agent's file — only a symlink climbing to the trunk checkout exactly as grove writes it (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
           "verified": {
-            "digest": "d955bba2c823924116f0ff576cf58ca1cb0ebe8842d3acf81388b606382b79fb",
+            "digest": "5fca934db0a69cfe4ddc8ecfdb756ef8f1959c95c254aaf25ef3905fed23c01b",
             "sha": "e3963b79b6a5097a3b55e442868647cb450bef29"
           }
         },

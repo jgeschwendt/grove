@@ -17,7 +17,7 @@ invariants:
     anchor: crates/grove-ops/src/roots.rs#unsaved_work
   - claim: "worktree reconcile is two-way and additive and never deletes: create declared-but-missing, adopt in-git-but-undeclared, prune only git-level ghosts whose working tree is already gone"
     anchor: ※ reconcile-additive
-  - claim: "a share never destroys a human's or agent's file — only a symlink pointing under the trunk checkout (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
+  - claim: "a share never destroys a human's or agent's file — only a symlink climbing to the trunk checkout exactly as grove writes it (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
     anchor: ※ never-clobber
   - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
     anchor: ※ sync-never-forces
