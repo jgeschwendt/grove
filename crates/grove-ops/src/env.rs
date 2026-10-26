@@ -151,7 +151,7 @@ pub(crate) fn unlay(home: &Path, slug: &str, name: &str) -> Result<()> {
         let _ = (|| -> Result<()> {
             let (parent_fd, leaf) = descend_parent(&wt_fd, rel, false)?.context("never laid")?;
             let ours = match classify_leaf(&parent_fd, &leaf)? {
-                LeafState::Symlink { target } => is_under_trunk(&trunk.name, &target),
+                LeafState::Symlink { target } => is_under_trunk(&trunk.name, rel, &target),
                 LeafState::RealFile => read_source(&trunk_fd, rel)
                     .is_ok_and(|(src, _)| read_source(&wt_fd, rel).is_ok_and(|(b, _)| b == src)),
                 LeafState::Absent | LeafState::Dir | LeafState::Other => false,
@@ -217,8 +217,8 @@ struct Pass<'a> {
 }
 
 impl Pass<'_> {
-    fn owns(self, target: &Path) -> bool {
-        is_under_trunk(self.trunk_name, target) || is_under_trunk(self.prev_trunk, target)
+    fn owns(self, rel: &Path, target: &Path) -> bool {
+        is_under_trunk(self.trunk_name, rel, target) || is_under_trunk(self.prev_trunk, rel, target)
     }
 }
 
@@ -462,7 +462,7 @@ fn link_outcome<Fd: AsFd>(
             LeafState::Symlink { target: cur } if cur == target => Ok(ShareStatus::Ok),
             // A *grove-shaped* link (points under the trunk) but at the wrong path is
             // a stale grove link — self-heal by repointing.
-            LeafState::Symlink { target: cur } if pass.owns(&cur) => {
+            LeafState::Symlink { target: cur } if pass.owns(rel, &cur) => {
                 if action.mutates() {
                     repoint_leaf(&parent_fd, &leaf, &target)?;
                 }
@@ -519,7 +519,7 @@ fn copy_outcome<Tf: AsFd, Wf: AsFd>(
             LeafState::Absent => true,
             // A grove-owned symlink (prior `_.symlink` for this path) is data-free —
             // replace it with the seeded copy (symlink→copy migration).
-            LeafState::Symlink { target } if pass.owns(&target) => true,
+            LeafState::Symlink { target } if pass.owns(rel, &target) => true,
             // Foreign symlink / real file / dir: the worktree owns it. Leave it.
             LeafState::Symlink { .. } | LeafState::RealFile | LeafState::Dir | LeafState::Other => {
                 false
@@ -541,7 +541,7 @@ fn copy_outcome<Tf: AsFd, Wf: AsFd>(
 }
 
 /// GC pass: a worktree top-level symlink pointing through the trunk
-/// (`(../)* <trunk>/…`) for a `<name>` no longer declared is an orphan — remove it
+/// (`../<trunk>/…`) for a `<name>` no longer declared is an orphan — remove it
 /// (data-free). A real file (incl. a `_.copy`'s seeded file — indistinguishable from
 /// a user's, and owned by the worktree), or a symlink pointing elsewhere, is left
 /// alone. Top-level only in slice 1 (nested-share GC is a later refinement).
@@ -788,7 +788,9 @@ fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
 }
 
 fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
-    Ok(matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target } if pass.owns(&target)))
+    Ok(
+        matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target } if pass.owns(Path::new(leaf), &target)),
+    )
 }
 
 /// Back up a real-file conflict (`Fix::Force`): rename the real file to a
@@ -840,18 +842,20 @@ fn trunk_relative_target(trunk: &str, p: &Path) -> PathBuf {
     target
 }
 
-/// Is a symlink target grove's own — i.e. `(../)* <trunk>/…`, with the trunk spelled
-/// either by its branch-derived name or as [`LEGACY_TRUNK`]? Such a link is a
-/// (possibly stale) grove link we may repoint or GC; anything else is a user's foreign
-/// symlink we must never clobber. Purely lexical (no I/O, no canonicalization).
-fn is_under_trunk(trunk: &str, target: &Path) -> bool {
-    let mut after_parents = target
-        .components()
-        .skip_while(|c| matches!(c, Component::ParentDir));
-    matches!(
-        after_parents.next(),
-        Some(Component::Normal(s)) if s == OsStr::new(trunk) || s == OsStr::new(LEGACY_TRUNK)
-    )
+/// Is the symlink at worktree-relative `rel` grove's own — its target the exact climb
+/// [`trunk_relative_target`] writes there, one `..` per component of `rel`, then
+/// `<trunk>/…`, with the trunk spelled either by its branch-derived name or as
+/// [`LEGACY_TRUNK`]? Such a link is a (possibly stale) grove link we may repoint or GC;
+/// anything else — an in-tree `.trunk/…` included — is a user's foreign symlink we must
+/// never clobber. Purely lexical (no I/O, no canonicalization).
+fn is_under_trunk(trunk: &str, rel: &Path, target: &Path) -> bool {
+    let mut c = target.components();
+    rel.components()
+        .all(|_| c.next() == Some(Component::ParentDir))
+        && matches!(
+            c.next(),
+            Some(Component::Normal(s)) if s == OsStr::new(trunk) || s == OsStr::new(LEGACY_TRUNK)
+        )
 }
 
 fn tmp_sibling(leaf: &OsStr) -> OsString {
@@ -983,16 +987,27 @@ mod tests {
     /// some other root's trunk name is a user's foreign symlink here — never repointed.
     #[test]
     fn a_grove_shaped_link_is_one_through_this_trunk() {
-        assert!(is_under_trunk("main", Path::new("../main/.env")));
+        let [env, db] = [".env", "config/db.toml"].map(Path::new);
+        assert!(is_under_trunk("main", env, Path::new("../main/.env")));
         assert!(is_under_trunk(
             "canary",
+            db,
             Path::new("../../canary/config/db.toml")
         ));
-        assert!(!is_under_trunk("main", Path::new("../canary/.env")));
-        assert!(!is_under_trunk("main", Path::new("/etc/passwd")));
+        assert!(!is_under_trunk(
+            "main",
+            db,
+            Path::new("../main/config/db.toml")
+        ));
+        assert!(!is_under_trunk("main", env, Path::new("../canary/.env")));
+        assert!(!is_under_trunk("main", env, Path::new("/etc/passwd")));
         // The legacy trunk directory is grove's whatever the trunk is named today.
-        assert!(is_under_trunk("canary", Path::new("../.trunk/.env")));
-        assert!(!is_under_trunk("main", Path::new("../.trunk-backup/.env")));
+        assert!(is_under_trunk("canary", env, Path::new("../.trunk/.env")));
+        assert!(!is_under_trunk(
+            "main",
+            env,
+            Path::new("../.trunk-backup/.env")
+        ));
     }
 
     /// A link laid before the trunk was named by its branch points through the legacy
@@ -1052,6 +1067,39 @@ mod tests {
             std::fs::read_link(wt(&home, "feat").join(".env")).unwrap(),
             Path::new("../other/.env"),
             "the user's symlink target is preserved"
+        );
+    }
+
+    /// Grove-shaped means exactly the climb grove writes: a user's in-tree link whose
+    /// first component merely spells the trunk (trunk.io's `.trunk/configs/…`) climbs
+    /// out of nothing, so it is neither collected nor repointed.
+    #[test]
+    fn an_in_tree_link_spelling_the_trunk_is_the_users() {
+        let tmp = TempDir::new().unwrap();
+        let home = home_with_root(&tmp);
+        let feat = wt(&home, "feat");
+        for dir in ["main", ".trunk/configs"] {
+            std::fs::create_dir_all(feat.join(dir)).unwrap();
+        }
+        std::fs::write(feat.join("main/cfg"), "").unwrap();
+        std::fs::write(feat.join(".trunk/configs/x"), "").unwrap();
+        std::os::unix::fs::symlink("main/cfg", feat.join("cfg")).unwrap();
+        std::os::unix::fs::symlink(".trunk/configs/x", feat.join("x")).unwrap();
+        declare(&home, &["cfg"]);
+
+        let out = materialize(&home, Some("o/r"), Fix::Safe).unwrap();
+        assert_eq!(
+            find(&out, Some("feat"), "cfg").status,
+            ShareStatus::Conflict
+        );
+        assert!(out.iter().all(|o| o.status != ShareStatus::Gc));
+        assert_eq!(
+            std::fs::read_link(feat.join("cfg")).unwrap(),
+            Path::new("main/cfg")
+        );
+        assert_eq!(
+            std::fs::read_link(feat.join("x")).unwrap(),
+            Path::new(".trunk/configs/x")
         );
     }
 
