@@ -47,13 +47,16 @@ impl<T: Serialize> IntoResponse for Reply<T> {
         // Serialized by hand rather than through `Json` so a serialization failure
         // is still an envelope: `Json`'s own error path writes a bare text body,
         // which would be the one response on this surface that isn't the contract.
-        match serde_json::to_vec(&self.body) {
-            Ok(bytes) => (
-                self.status,
-                [(header::CONTENT_TYPE, "application/json")],
-                bytes,
-            )
-                .into_response(),
+        match serde_json::to_value(&self.body) {
+            Ok(mut body) => {
+                scrub(&mut body);
+                (
+                    self.status,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    body.to_string(),
+                )
+                    .into_response()
+            }
             Err(e) => error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ApiError::new(
@@ -62,6 +65,19 @@ impl<T: Serialize> IntoResponse for Reply<T> {
                 ),
             ),
         }
+    }
+}
+
+/// Redact every string in a body on its way out. An ops error or a doctor detail
+/// quotes a clone URL — git's stderr, a TOML parse error's source line — as readily
+/// as the snapshot's own `url`, so redaction belongs where every enveloped byte
+/// passes rather than at each field that might carry one.
+fn scrub(value: &mut Value) {
+    match value {
+        Value::String(s) => *s = crate::logs::redact(s),
+        Value::Array(items) => items.iter_mut().for_each(scrub),
+        Value::Object(map) => map.values_mut().for_each(scrub),
+        _ => {}
     }
 }
 
@@ -136,5 +152,22 @@ mod tests {
                 "data": {"slug": "o/r"}
             }})
         );
+    }
+
+    /// Userinfo never leaves on the wire, whichever string carries it: an ops error or
+    /// a doctor detail quotes a clone URL as readily as the snapshot's `url` does.
+    #[tokio::test]
+    async fn userinfo_is_redacted_in_every_served_string() {
+        let body = body_of(error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::new(ErrorCode::DoctorFailed, "doctor failed").with_data(json!({
+                "reason": "fetch from https://u:TOKEN@host/o/r",
+                "checks": [{"detail": "2 | url = \"https://u:TOKEN@host/o/r\" x"}]
+            })),
+        ))
+        .await
+        .to_string();
+        assert_eq!(body.matches("https://***@host/o/r").count(), 2, "{body}");
+        assert!(!body.contains("TOKEN"), "{body}");
     }
 }
