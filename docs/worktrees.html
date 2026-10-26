@@ -344,8 +344,8 @@ slots, matched by path — a slot is registered under <code class="code">roots/&
 <code class="code">slot-N</code> basename names nothing in the code dir.</li>
 <li id="root-realization-clone"><strong>Clone</strong>, which is a root's first realization and, when the bare cannot produce a
 worktree at all, its re-clone. A re-clone deletes both of the root's directories first,
-so it happens <strong>only if the code dir holds nothing but <code class="code">.DS_Store</code></strong>, and names what it
-would have destroyed otherwise. This is the one path where grove would <code class="code">rm -rf</code> a
+so it happens <strong>only if the code dir holds nothing but <code class="code">.DS_Store</code></strong> and the bare
+holds no branch it cannot prove pushed (a bare without remote-tracking refs proves none) and no <code class="code">refs/stash</code>, and names what it would have destroyed otherwise. This is the one path where grove would <code class="code">rm -rf</code> a
 directory a human also writes into, unattended, on a reconcile nobody asked for — which
 is why the root directory, grove's alone, is the only one it deletes without asking.</li>
 </ol>
@@ -604,8 +604,9 @@ _.copy    = ["config/local.json"]         # seeded once: an independent real fil
 </tbody>
 </table>
 </div>
-<p class="docs-note">A symlink is identifiable as grove's own — its target points under the trunk — so it can be
-healed and collected. A seeded copy is indistinguishable from a file the user wrote, so it
+<p class="docs-note">A symlink is identifiable as grove's own — its target climbs one <code class="code">..</code> per component of its
+path, then into the trunk, exactly as grove writes it — so it can be healed and collected; an in-tree link
+that merely starts with the trunk's name is the worktree's. A seeded copy is indistinguishable from a file the user wrote, so it
 is never overwritten and never collected. <code class="code">_.setup</code>, a per-worktree setup command, is
 reserved in the schema and not implemented.</p>
 <p class="docs-note">A path declared in both lists is materialized as a symlink: <code class="code">manifest::list_shares</code> gives
