@@ -286,17 +286,9 @@ fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
         .map(|wt| name(&wt.path))
         .collect();
     // A branch a live worktree has checked out was answered above, by the tree's name.
-    let checked_out = |b: &str| live.iter().any(|wt| wt.branch.as_deref() == Some(b));
-    unsaved.extend(
-        git::unpushed_branches(&bare)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|b| !checked_out(b))
-            .map(|b| format!("branch {b}")),
-    );
-    if git::rev_parse(&bare, "refs/stash").is_ok() {
-        unsaved.push("refs/stash".into());
-    }
+    unsaved.extend(held_by_bare(&bare, |b| {
+        live.iter().any(|wt| wt.branch.as_deref() == Some(b))
+    }));
     unsaved.extend(
         foreign_entries(&code_dir(home, slug))
             .into_iter()
@@ -304,6 +296,21 @@ fn unsaved_work(home: &Path, slug: &str) -> Vec<String> {
             .map(|e| format!("{e} (not grove's)")),
     );
     unsaved
+}
+
+/// What only `bare` holds, so deleting it destroys: each unpushed branch `skip` does
+/// not answer for, then `refs/stash`.
+fn held_by_bare(bare: &Path, skip: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut held: Vec<String> = git::unpushed_branches(bare)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !skip(b))
+        .map(|b| format!("branch {b}"))
+        .collect();
+    if git::rev_parse(bare, "refs/stash").is_ok() {
+        held.push("refs/stash".into());
+    }
+    held
 }
 
 /// Per-root realize for one **declared** root: clone the declared-but-missing bare
@@ -576,14 +583,17 @@ fn realize(
         match recover_trunk(home, &root.slug, &bare) {
             Ok(branch) => return (cloned(&root.slug, branch), claim),
             Err(e) => {
-                let foreign = foreign_entries(&code_dir(home, &root.slug));
+                // The re-clone deletes the bare too, and with it what no checkout
+                // shows: the guarded `remove` refuses over the same work.
+                let mut foreign = foreign_entries(&code_dir(home, &root.slug));
+                foreign.extend(held_by_bare(&bare, |_| false));
                 if !foreign.is_empty() {
                     return (
                         failed(
                             &root.slug,
                             format!(
                                 "could not recreate the trunk ({e:#}), and re-cloning would \
-                                 delete {} under the code dir; move it aside, or \
+                                 delete {}; move it aside, or \
                                  `grove clone remove` the root",
                                 foreign.join(", ")
                             ),
@@ -2466,6 +2476,51 @@ mod tests {
             ReconcileStatus::Cloned
         );
         assert!(trunk_dir(&home, "o/r").join("README.md").exists());
+    }
+
+    /// The re-clone deletes the bare, so it refuses over what only the bare holds —
+    /// the unpushed branches and `refs/stash` the guarded `remove` refuses over. A
+    /// locked trunk registration is one ordinary way `worktree add` fails.
+    #[test]
+    fn reconcile_one_refuses_to_re_clone_over_unpushed_branches_and_stashes() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        add(&home, "o/r", src.to_str().unwrap()).unwrap();
+        let (bare, trunk) = (bare_dir(&home, "o/r"), trunk_dir(&home, "o/r"));
+        let git = |args: &[&str]| {
+            crate::testfix::git(
+                &trunk,
+                &[
+                    ["-c", "user.name=t", "-c", "user.email=t@t"].as_slice(),
+                    args,
+                ]
+                .concat(),
+            )
+        };
+        git(&["switch", "-qc", "wip"]);
+        git(&["commit", "--allow-empty", "-qm", "w"]);
+        git(&["switch", "-q", "main"]);
+        std::fs::write(trunk.join("README.md"), "stashed").unwrap();
+        git(&["stash", "-q"]);
+        git(&["worktree", "lock", "."]);
+        std::fs::remove_dir_all(&trunk).unwrap();
+
+        let applied = reconcile_one(&home, "o/r").unwrap();
+        assert_eq!(applied.status, ReconcileStatus::Failed);
+        assert!(
+            applied
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("delete branch wip, refs/stash;"),
+            "{applied:?}"
+        );
+        assert!(
+            git::rev_parse(&bare, "refs/heads/wip").is_ok(),
+            "the branch survives"
+        );
     }
 
     /// A clone in flight (or one that died mid-transfer) writes the bare with an
