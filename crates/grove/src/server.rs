@@ -86,7 +86,7 @@ pub struct ServerControl {
     home: PathBuf,
     install: PathBuf,
     bind: SocketAddr,
-    server_program: PathBuf,
+    server_program: fn(&Path) -> PathBuf,
     server_args: Vec<String>,
     interface: Interface,
     ready_timeout: Duration,
@@ -98,24 +98,23 @@ pub struct ServerControl {
 
 impl ServerControl {
     /// Resolve from the environment: `GROVE_HOME` (→ `~/.grove`), `GROVE_INSTALL`
-    /// (→ `~/.local/share/grove`), `GROVE_BIND` (→ `127.0.0.1:7777`), and the
-    /// launcher. An unparseable `GROVE_BIND` is a loud error, never a silent default
-    /// — otherwise `on`/`off` would target one address while the API client talks to
-    /// another.
+    /// (→ `~/.local/share/grove`) and `GROVE_BIND` (→ `127.0.0.1:7777`). An
+    /// unparseable `GROVE_BIND` is a loud error, never a silent default — otherwise
+    /// `on`/`off` would target one address while the API client talks to another.
     ///
     /// The launcher hangs off the *install* root, not the workspace: what to run is
-    /// release state, and the two roots are resolved once each in `grove-ops`.
+    /// release state, and the two roots are resolved once each in `grove-ops`. It
+    /// resolves at spawn, not here: the updater builds this before `grove up` flips
+    /// `current`, and a launcher chosen then would reboot into the old binary.
     pub fn from_env() -> Result<Self, CliError> {
         let home = grove_ops::home();
         let install = grove_ops::install_home();
         let bind = resolve_bind(std::env::var("GROVE_BIND").ok())?;
-        let server_program = launcher(&install);
-
         Ok(Self {
             home,
             install,
             bind,
-            server_program,
+            server_program: launcher,
             server_args: vec!["serve".to_string()],
             interface: Interface::Http,
             ready_timeout: READY_TIMEOUT,
@@ -459,13 +458,14 @@ impl ServerControl {
     /// tests inject a fake. Production runs `<grove> serve` — the installed release's
     /// binary when there is one, otherwise this very executable.
     fn server_command(&self) -> Result<Command, CliError> {
-        if !self.server_program.exists() {
+        let program = (self.server_program)(&self.install);
+        if !program.exists() {
             return Err(CliError::Daemon(format!(
                 "no grove binary to launch at {} — run `grove up` to install one",
-                self.server_program.display()
+                program.display()
             )));
         }
-        let mut cmd = Command::new(&self.server_program);
+        let mut cmd = Command::new(&program);
         cmd.args(&self.server_args);
         // Hand the child the RESOLVED bind and both roots this CLI decided on. The
         // CLI accepts a hostname (`localhost:7777`, resolved above) but the daemon
@@ -714,7 +714,7 @@ mod tests {
             home: home.path().to_path_buf(),
             install: home.path().join("install"),
             bind,
-            server_program: PathBuf::from("/bin/sleep"),
+            server_program: |_| PathBuf::from("/bin/sleep"),
             server_args: vec!["600".to_string()],
             interface: Interface::Tcp,
             ready_timeout: Duration::from_secs(2),
@@ -1079,7 +1079,7 @@ mod tests {
     fn on_errors_when_no_server_installed() {
         let home = TempDir::new().unwrap();
         let sc = ServerControl {
-            server_program: PathBuf::from("/no/such/grove"),
+            server_program: |_| PathBuf::from("/no/such/grove"),
             ..control(&home, closed_port())
         };
 
@@ -1303,6 +1303,26 @@ mod tests {
             launcher(install.path()),
             installed.join("grove"),
             "an installed release wins — it is what `grove up` flips"
+        );
+    }
+
+    /// A first install: the control is built before `current` exists (the updater
+    /// builds it before the flip), so the launcher must resolve at spawn time — a
+    /// reboot after the flip launches the new release, not this binary.
+    #[test]
+    fn the_launcher_resolves_at_spawn_not_at_construction() {
+        let home = TempDir::new().unwrap();
+        let install = home.path().join("install");
+        let sc = ServerControl {
+            server_program: launcher,
+            ..control(&home, SocketAddr::from(([127, 0, 0, 1], 7777)))
+        };
+        fs::create_dir_all(install.join("versions/X/bin")).unwrap();
+        fs::write(install.join("versions/X/bin/grove"), "").unwrap();
+        std::os::unix::fs::symlink("versions/X", install.join("current")).unwrap();
+        assert_eq!(
+            sc.server_command().unwrap().get_program(),
+            install.join("current/bin/grove")
         );
     }
 
