@@ -218,6 +218,8 @@ pub async fn remove_worktree(
         return Err(invalid_request("missing slug or name"));
     };
     let (slug, name) = (request.slug, request.name);
+    let remove_failed = |e: grove_ops::Error| failed(ErrorCode::RemoveFailed, "remove failed", e);
+    declared(&state, &slug, remove_failed).await?;
 
     // On the lane, unlike the root check: listing worktrees runs `git worktree list`
     // and one `git status` per tree against the same repository the engine may be
@@ -234,7 +236,7 @@ pub async fn remove_worktree(
         }
     })
     .await?
-    .map_err(|e| failed(ErrorCode::RemoveFailed, "remove failed", e))?
+    .map_err(remove_failed)?
     .ok_or_else(|| {
         error_response(
             StatusCode::NOT_FOUND,
@@ -598,8 +600,19 @@ fn data_of(status: &BootStatus) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::data_of;
+    use crate::app::{AppState, router};
+    use crate::config::Config;
+    use crate::logs::LogRing;
+    use axum::body::Body;
+    use axum::http::header::{CONTENT_TYPE, HOST};
+    use axum::http::{Request, StatusCode};
     use grove_api::BootStatus;
+    use grove_ops::clock::{Clock, SystemClock};
+    use grove_ops::testfix;
     use serde_json::json;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tower::ServiceExt as _;
 
     /// The `error.data` payloads the contract table names, byte for byte.
     #[test]
@@ -616,5 +629,50 @@ mod tests {
             json!({"status": "degraded", "reason": "ops_incompatible"}),
             "the reason a health gate rolls back on travels in the payload"
         );
+    }
+
+    /// An absolute slug discards `home` in every path built from it, so a worktree
+    /// remove that listed before it checked would run git — and that repo's
+    /// `core.fsmonitor` — in any directory the caller names, on a lane keyed by it.
+    #[tokio::test]
+    async fn worktrees_remove_404s_a_foreign_slug_before_running_git() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (home, foreign) = (testfix::home_with_root(&tmp), tmp.path().join("foreign"));
+        let marker = tmp.path().join("pwned");
+        testfix::git(
+            tmp.path(),
+            &["clone", "-q", "--bare", "src", "foreign/bare"],
+        );
+        let bare = foreign.join("bare");
+        let monitor = format!("touch {}; false", marker.display());
+        testfix::git(&bare, &["config", "core.fsmonitor", &monitor]);
+        testfix::git(
+            &bare,
+            &["worktree", "add", "-q", "-b", "x", "../wt", "main"],
+        );
+        std::fs::remove_file(&marker).ok();
+
+        let config = Config::new(&home, SocketAddr::from(([127, 0, 0, 1], 7777))).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let logs = Arc::new(LogRing::new(Arc::clone(&clock), config.log_level));
+        let state = AppState::new(config, clock, logs).0;
+        let body = json!({"slug": foreign, "name": "wt"}).to_string();
+        let response = router(state.clone())
+            .oneshot(
+                Request::post("/api/worktrees/remove")
+                    .header(HOST, "127.0.0.1:7777")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+        let envelope: serde_json::Value = serde_json::from_slice(&bytes.unwrap()).unwrap();
+        assert_eq!(envelope["error"]["code"], "not_found");
+        assert!(!marker.exists(), "the foreign repo's fsmonitor ran");
+        assert_eq!(state.lanes.active(), 0, "a foreign slug keyed a lane");
     }
 }
