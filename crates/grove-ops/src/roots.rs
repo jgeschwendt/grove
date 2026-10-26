@@ -2497,7 +2497,7 @@ mod tests {
                     args,
                 ]
                 .concat(),
-            )
+            );
         };
         git(&["switch", "-qc", "wip"]);
         git(&["commit", "--allow-empty", "-qm", "w"]);
