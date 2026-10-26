@@ -180,8 +180,10 @@ pub struct RemoveWorktreeData {
 /// Every field defaults: v1's controller coerced with a strict `== true`, so a body
 /// omitting `dry_run`/`fix` read them as false and a missing `slug` meant "every
 /// root". `#[serde(default)]` reproduces that exactly, and an empty body `{}` is a
-/// valid whole-home fix-nothing run.
+/// valid whole-home fix-nothing run. Which is why an unknown field is refused: every
+/// field defaulting, `{"dry-run":true}` would otherwise decode as a real converge.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DoctorRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
@@ -482,6 +484,7 @@ mod tests {
         let explicit: DoctorRequest =
             serde_json::from_str(r#"{"slug":null,"dry_run":true,"fix":false}"#).unwrap();
         assert!(explicit.slug.is_none() && explicit.dry_run);
+        assert!(serde_json::from_str::<DoctorRequest>(r#"{"dry-run":true}"#).is_err());
     }
 
     /// Slugs contain `/`, which is why every one of these routes is a body-carrying
