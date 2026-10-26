@@ -589,7 +589,11 @@ async fn an_unreadable_manifest_is_a_422_never_a_404() {
         ("/api/roots/sync", ErrorCode::SyncFailed),
         ("/api/worktrees/remove", ErrorCode::RemoveFailed),
     ] {
-        let body = json!({"slug": testfix::SLUG, "name": "feat"});
+        // DoctorRequest refuses unknown fields, so it alone gets no `name`
+        let body = match path {
+            "/api/doctor" => json!({"slug": testfix::SLUG}),
+            _ => json!({"slug": testfix::SLUG, "name": "feat"}),
+        };
         let error = err_body(
             daemon.post(path, &body).await,
             StatusCode::UNPROCESSABLE_ENTITY,
