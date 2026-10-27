@@ -382,8 +382,8 @@ async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
 ///
 /// A root whose bare has no answer yet — declared and unrealized, or mid-clone — never
 /// fails [`grove_ops::roots::trunk`]: [`git::default_branch`] answers it `main`. Only a
-/// git that cannot run at all does, and that row draws `<code>/main` on `main`, the
-/// same guess [`grove_ops::roots::trunk_dir`] makes.
+/// git that cannot run at all does, or a manifest that stopped parsing since
+/// `roots::list` read it, and that row draws `<code>/main` on `main`.
 fn trunk_view(home: &Path, slug: &str) -> (String, String) {
     let (dir, branch) = grove_ops::roots::trunk(home, slug).map_or_else(
         |_| {

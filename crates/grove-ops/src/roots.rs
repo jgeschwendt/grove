@@ -91,15 +91,22 @@ pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
 }
 
 /// The trunk checkout's path, best-effort — for callers that only want a path and
-/// have nowhere to put a failure (a presence probe, a doctor row). A root whose bare
-/// cannot be read falls back to `<code>/main`, the overwhelmingly common trunk name,
-/// so the probe reports "missing" rather than blanking.
+/// have nowhere to put a failure (a presence probe, a doctor row). A manifest that
+/// cannot be read falls back to the bare's `HEAD`, the trunk a converged root is on,
+/// and a git that cannot run to `<code>/main`, so the probe reports "missing" rather
+/// than blanking.
 ///
 /// **Anything that can report an error should call [`trunk`] instead** — it is the
 /// same lookup without the guess.
 #[must_use]
 pub fn trunk_dir(home: &Path, slug: &str) -> PathBuf {
-    trunk(home, slug).map_or_else(|_| code_dir(home, slug).join("main"), |t| t.dir)
+    trunk(home, slug).map_or_else(
+        |_| {
+            let head = git::default_branch(&bare_dir(home, slug));
+            code_dir(home, slug).join(crate::worktrees::name_for(&head.unwrap_or("main".into())))
+        },
+        |t| t.dir,
+    )
 }
 
 /// Per-root outcome of a `reconcile_one` or an `adopt`. The two halves report
@@ -1204,9 +1211,12 @@ mod tests {
         assert_eq!(slashed.branch, "release/2.0");
         assert_eq!(slashed.dir, code.join("release-2.0"));
 
-        // An unreadable manifest is an error, never HEAD's guess at a trunk it hides.
+        // An unreadable manifest is an error, never HEAD's guess at a trunk it hides;
+        // only the best-effort path guesses, and through HEAD before `main`.
+        crate::git::set_head(&bare_dir(&home, "o/r"), "release/2.0").unwrap();
         std::fs::write(manifest_path(&home), "[roots").unwrap();
         assert!(trunk(&home, "o/r").is_err());
+        assert_eq!(trunk_dir(&home, "o/r"), code.join("release-2.0"));
     }
 
     /// A declared trunk is where the clone checks out and what the bare's HEAD is set
