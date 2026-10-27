@@ -1420,7 +1420,7 @@ mod tests {
                 std::fs::remove_dir_all(wt(home, "main")).unwrap();
                 std::fs::write(wt(home, "main"), "").unwrap();
             }),
-            ("o/r", None, "read shares", |home| {
+            ("o/r", None, "resolve trunk", |home| {
                 std::fs::write(manifest_path(home), "not = = toml").unwrap();
             }),
             ("o/r", Some("feat"), "open worktree", |home| {

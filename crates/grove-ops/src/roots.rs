@@ -74,9 +74,9 @@ pub struct Trunk {
 /// means a freshly-declared `trunk` resolves here before any convergence has run.
 /// This is the one place the trunk is resolved — nothing else spells its path.
 pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
-    let declared = manifest::list(&manifest_path(home))
-        .ok()
-        .and_then(|roots| roots.into_iter().find(|r| r.slug == slug))
+    let declared = manifest::list(&manifest_path(home))?
+        .into_iter()
+        .find(|r| r.slug == slug)
         .and_then(|r| r.trunk);
     let branch = match declared {
         Some(branch) => branch,
@@ -1203,6 +1203,10 @@ mod tests {
         let slashed = trunk(&home, "o/r").unwrap();
         assert_eq!(slashed.branch, "release/2.0");
         assert_eq!(slashed.dir, code.join("release-2.0"));
+
+        // An unreadable manifest is an error, never HEAD's guess at a trunk it hides.
+        std::fs::write(manifest_path(&home), "[roots").unwrap();
+        assert!(trunk(&home, "o/r").is_err());
     }
 
     /// A declared trunk is where the clone checks out and what the bare's HEAD is set
