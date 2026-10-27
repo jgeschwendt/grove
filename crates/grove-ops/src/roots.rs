@@ -942,25 +942,35 @@ pub fn sync(home: &Path, slug: &str) -> Result<SyncReport, Error> {
     })
 }
 
-/// Expand a bare GitHub `owner/name` to the house's scp-style ssh URL; anything else —
-/// a URL, scp-style address, or a path (`./o/r`, `/abs`, `~/x`) — passes through. Git
-/// would read a bare `o/r` as a relative local path, which is never what `clone add`
-/// means by it, so a local path that shape needs a `./`.
+/// The url `clone add` declares for what the operator typed. A GitHub `owner/name`
+/// (optionally `github.com/`-prefixed) expands to the house's scp-style ssh URL; any
+/// other relative path is a local one and is pinned to `cwd`, because the manifest
+/// outlives the shell — the daemon that realizes it runs from `/`. URLs, scp-style
+/// addresses and absolute paths pass through. Git would read a bare `o/r` as a
+/// relative path, which is never what `clone add` means by it, so a local path that
+/// shape needs a `./`.
 #[must_use]
-pub fn clone_url(repo: &str) -> String {
-    let s = repo.trim();
+pub fn clone_url(repo: &str, cwd: &Path) -> String {
+    let s = repo.trim().trim_end_matches('/');
+    let gh = s.strip_prefix("github.com/").unwrap_or(s);
     let shorthand = matches!(
-        s.split('/').collect::<Vec<_>>().as_slice(),
+        gh.split('/').collect::<Vec<_>>().as_slice(),
         [owner, name] if [owner, name].iter().all(|seg| {
             !seg.is_empty()
-                && !seg.starts_with(['.', '~'])
+                && !seg.starts_with('.')
                 && seg.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
         })
     );
+    let remote = s.contains("://")
+        || s.split_once(':')
+            .is_some_and(|(host, _)| !host.contains('/'))
+        || s.starts_with(['/', '~']);
     if shorthand {
-        format!("git@github.com:{}.git", s.trim_end_matches(".git"))
-    } else {
+        format!("git@github.com:{}.git", gh.trim_end_matches(".git"))
+    } else if remote {
         s.to_string()
+    } else {
+        cwd.join(s.trim_start_matches("./")).display().to_string()
     }
 }
 
@@ -1150,23 +1160,25 @@ mod tests {
     }
 
     #[test]
-    fn clone_url_expands_only_bare_owner_name() {
+    fn clone_url_expands_shorthand_and_pins_local_paths() {
+        let cwd = Path::new("/cwd");
         for (repo, url) in [
             ("o/r", "git@github.com:o/r.git"),
-            (" o-1/r.x.git ", "git@github.com:o-1/r.x.git"),
+            (" o-1/r.x.git/ ", "git@github.com:o-1/r.x.git"),
+            ("github.com/o/r", "git@github.com:o/r.git"),
             ("https://github.com/o/r.git", "https://github.com/o/r.git"),
             ("git@github.com:o/r.git", "git@github.com:o/r.git"),
             ("gh:o/r", "gh:o/r"),
-            ("./o/r", "./o/r"),
-            ("/o/r", "/o/r"),
+            ("/o/r/", "/o/r"),
             ("~/r", "~/r"),
-            ("o/.r", "o/.r"),
-            ("o/r/", "o/r/"),
-            ("a/o/r", "a/o/r"),
-            ("o r/x", "o r/x"),
-            ("r", "r"),
+            // Any other relative path is a local one, pinned to the caller's cwd: the
+            // daemon that realizes it later runs from `/`.
+            ("./o/r", "/cwd/o/r"),
+            ("o/.r", "/cwd/o/.r"),
+            ("a/o/r", "/cwd/a/o/r"),
+            ("r", "/cwd/r"),
         ] {
-            assert_eq!(clone_url(repo), url, "{repo}");
+            assert_eq!(clone_url(repo, cwd), url, "{repo}");
         }
     }
 

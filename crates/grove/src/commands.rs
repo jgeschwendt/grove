@@ -34,7 +34,8 @@ use crate::{CliError, render};
 /// reachable.
 // ※ single-realizer
 pub fn clone_add(home: &Path, api: &ApiClient, repo: &str) -> Result<(), CliError> {
-    let url = &grove_ops::roots::clone_url(repo);
+    let cwd = std::env::current_dir().map_err(io)?;
+    let url = &grove_ops::roots::clone_url(repo, &cwd);
     let slug = grove_ops::roots::slug_from_url(url).map_err(io)?;
     let manifest = grove_ops::roots::manifest_path(home);
 
