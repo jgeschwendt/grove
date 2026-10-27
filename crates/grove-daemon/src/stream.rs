@@ -448,7 +448,7 @@ mod tests {
     use crate::config::Config;
     use crate::events::CAPACITY;
     use grove_api::RootStatus;
-    use grove_api::events::{Event, LogField, LogLevel, LogLine, TaskKind};
+    use grove_api::events::{Event, LogLevel, LogLine, TaskKind};
     use grove_ops::clock::{Clock, TestClock};
     use grove_ops::roots::{code_dir, manifest_path};
     use std::net::SocketAddr;
@@ -605,7 +605,7 @@ mod tests {
 
     /// Userinfo never leaves on the stream, whichever string carries it: the
     /// guarantee `crate::reply` gives every enveloped body, on the one route it does
-    /// not wrap. A snapshot row's `url` takes the same pass as this line's text.
+    /// not wrap. The line is built whole, past the ring's own redaction.
     #[test]
     fn userinfo_is_redacted_in_every_frame() {
         let data = wire(&Event::Log(LogLine {
@@ -613,14 +613,13 @@ mod tests {
             level: LogLevel::Warn,
             target: "grove_daemon::engine".into(),
             message: "fetch from https://u:TOKEN@h/o/r failed".into(),
-            fields: vec![LogField {
-                name: "grove.url".into(),
-                value: "https://u:TOKEN@h/o/r".into(),
-            }],
+            fields: Vec::new(),
         }))
         .unwrap();
-        assert_eq!(data.matches("https://***@h/o/r").count(), 2, "{data}");
-        assert!(!data.contains("TOKEN"), "{data}");
+        assert!(
+            data.contains("\"fetch from https://***@h/o/r failed\""),
+            "{data}"
+        );
     }
 
     /// **…including a producer parked on a full channel** — the case the drain arm

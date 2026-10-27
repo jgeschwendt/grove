@@ -768,9 +768,9 @@ impl Driver {
         StatusInfo {
             status: self.status,
             error: match self.status {
-                // Redacted here, where every reader of the text gets it: a failed
-                // clone's sentence quotes its URL, token and all.
-                RootStatus::Degraded => self.error.as_deref().map(crate::logs::redact),
+                // Whole here: a failed clone's sentence quotes its URL, token and
+                // all, and both serving paths scrub it on the way out (`crate::reply`).
+                RootStatus::Degraded => self.error.clone(),
                 _ => None,
             },
         }
