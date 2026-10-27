@@ -1461,12 +1461,11 @@ mod tests {
         let mut out = Vec::new();
         gc_worktree(pass, "feat", &feat, &fd, &[], Action::Diagnose, &mut out);
         std::fs::set_permissions(&feat, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let [o] = &out[..] else { panic!("{out:?}") };
         assert!(
-            out.iter().any(|o| o
-                .reason
-                .as_deref()
-                .is_some_and(|r| r.contains("read worktree"))),
-            "{out:?}"
+            o.worktree.as_deref() == Some("feat")
+                && o.reason.as_deref().unwrap().starts_with("read worktree"),
+            "{o:?}"
         );
     }
 

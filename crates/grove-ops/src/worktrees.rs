@@ -421,10 +421,11 @@ fn adoptable_name(code: &Path, trunk: Option<&str>, wt: &Path) -> Option<String>
 
 /// Do two paths name one directory? A case or Unicode twin does on a folding
 /// filesystem (APFS by default) and does not on a case-sensitive one, which no
-/// comparison of the names alone can tell apart.
+/// comparison of the names alone can tell apart. Never through a symlink: a link to
+/// the trunk is not the trunk's directory.
 pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    matches!((a.metadata(), b.metadata()),
+    matches!((a.symlink_metadata(), b.symlink_metadata()),
         (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
 }
 
