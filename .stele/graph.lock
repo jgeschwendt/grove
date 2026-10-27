@@ -123,7 +123,7 @@
     },
     "sync-never-forces": {
       "file": "crates/grove-ops/src/roots.rs",
-      "line": 885,
+      "line": 889,
       "node": "crates/grove-ops"
     },
     "test-reachability": {
@@ -133,7 +133,7 @@
     },
     "trunk-recovery-guard": {
       "file": "crates/grove-ops/src/roots.rs",
-      "line": 820,
+      "line": 824,
       "node": "crates/grove-ops"
     },
     "unauthenticated-api": {
@@ -729,7 +729,7 @@
           "enforced_by": null,
           "id": "sync-never-forces",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:885",
+          "resolved": "crates/grove-ops/src/roots.rs:889",
           "text": "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops",
           "verified": {
             "digest": "28d550f9df226c63ae2529a5cf077aaa27b50f43cedbc8150053b82534f1e266",
@@ -741,7 +741,7 @@
           "enforced_by": null,
           "id": "trunk-recovery-guard",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:820",
+          "resolved": "crates/grove-ops/src/roots.rs:824",
           "text": "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all or the bare holds an unpushed branch or a stash; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory",
           "verified": {
             "digest": "a3d9f4b7278e0633d0aeda307ab19a3c472a873ff0cc221967c94e435045f60a",
