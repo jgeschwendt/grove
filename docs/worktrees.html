@@ -221,7 +221,9 @@ when it declares one — else the bare's <code class="code">HEAD</code>, which r
 declaration. So a root adopted off disk has a trunk too, whatever it was cloned onto, and a
 freshly-declared <code class="code">trunk</code> resolves here before any convergence has run.
 <code class="code">git::default_branch</code> is what reads <code class="code">HEAD</code> back, and every consumer already went through
-it. <code class="code">trunk_reads_the_declaration_and_falls_back_to_the_bares_head</code> pins both halves.</p>
+it. A manifest that cannot be read is an error, never a fall-back: <code class="code">HEAD</code> stands in only
+for a trunk the manifest leaves undeclared, not one it hides.
+<code class="code">trunk_reads_the_declaration_and_falls_back_to_the_bares_head</code> pins all three.</p>
 <p class="docs-note"><code class="code">roots::trunk_dir</code> is the same lookup for a caller with nowhere to put a failure — a
 presence probe, a doctor row. A root whose bare cannot be read falls back to <code class="code">&lt;code&gt;/main</code>,
 so the probe reports "missing" rather than blanking; anything able to report an error calls
