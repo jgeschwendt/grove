@@ -43,7 +43,7 @@ hazards:
 
 - ※ clock-seam → tests/harness_meta.rs:354
 - ※ delete-before-undeclare → src/roots.rs:211
-- ※ files-authoritative → src/manifest.rs:331
+- ※ files-authoritative → src/manifest.rs:351
 - ※ lane-is-callers → src/env.rs:124
 - ※ never-clobber → src/env.rs:441
 - ※ promote-attach-before-move → src/pool.rs:163

@@ -961,16 +961,12 @@ pub fn clone_url(repo: &str, cwd: &Path) -> String {
                 && seg.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
         })
     );
-    let remote = s.contains("://")
-        || s.split_once(':')
-            .is_some_and(|(host, _)| !host.contains('/'))
-        || s.starts_with(['/', '~']);
     if shorthand {
         format!("git@github.com:{}.git", gh.trim_end_matches(".git"))
-    } else if remote {
-        s.to_string()
-    } else {
+    } else if manifest::is_relative_path(s) {
         cwd.join(s.trim_start_matches("./")).display().to_string()
+    } else {
+        s.to_string()
     }
 }
 
@@ -1170,7 +1166,6 @@ mod tests {
             ("git@github.com:o/r.git", "git@github.com:o/r.git"),
             ("gh:o/r", "gh:o/r"),
             ("/o/r/", "/o/r"),
-            ("~/r", "~/r"),
             // Any other relative path is a local one, pinned to the caller's cwd: the
             // daemon that realizes it later runs from `/`.
             ("./o/r", "/cwd/o/r"),

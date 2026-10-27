@@ -43,7 +43,7 @@
     },
     "files-authoritative": {
       "file": "crates/grove-ops/src/manifest.rs",
-      "line": 331,
+      "line": 351,
       "node": "crates/grove-ops"
     },
     "install-hands-off-to-grove-up": {
@@ -193,7 +193,7 @@
           "enforced_by": null,
           "id": "files-authoritative",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/manifest.rs:331",
+          "resolved": "crates/grove-ops/src/manifest.rs:351",
           "text": "files are authoritative — manifest.toml is desired state, git on disk is actual state, and there is no database; every daemon-held status, pool count and log line is a cache",
           "verified": {
             "digest": "5fd46bcf3b33924905906bd128156f8b1bde191fe0f71d50ae6283f5ba9674c0",
