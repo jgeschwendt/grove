@@ -120,7 +120,7 @@ impl Frame {
     fn into_sse(self) -> SseResult {
         Ok(match self {
             Self::Beat => SseEvent::default().comment("beat"),
-            Self::Event(event) => match serde_json::to_string(&event) {
+            Self::Event(event) => match wire(&event) {
                 Ok(data) => SseEvent::default().event(event.name()).data(data),
                 Err(e) => {
                     tracing::error!(error = %e, "an event would not serialize");
@@ -129,6 +129,15 @@ impl Frame {
             },
         })
     }
+}
+
+/// An event's `data:` line, every string scrubbed on its way out — the stream's half
+/// of what [`crate::reply`] does for every enveloped body, so neither serving path
+/// leans on each field that might quote a clone URL having been redacted at source.
+fn wire(event: &Event) -> serde_json::Result<String> {
+    let mut value = serde_json::to_value(event)?;
+    crate::reply::scrub(&mut value);
+    serde_json::to_string(&value)
 }
 
 /// A frame, or the error type axum's `Sse` insists on.
@@ -286,10 +295,7 @@ struct Reads {
 }
 
 async fn view(state: &AppState, root: grove_ops::manifest::Root) -> RootView {
-    let slug = root.slug;
-    // A clone URL can carry a token, and this row is served to whatever reaches the
-    // port; the manifest keeps the URL whole, the wire never does.
-    let url = crate::logs::redact(&root.url);
+    let (slug, url) = (root.slug, root.url);
     let engine = match state.engines.get() {
         Some(engines) => engines.engine(&slug).await,
         None => None,
@@ -437,12 +443,12 @@ fn worktree_view(code_dir: &std::path::Path, wt: WorktreeStatus) -> WorktreeView
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, HEARTBEAT, STREAM_DEPTH, pump};
+    use super::{Frame, HEARTBEAT, STREAM_DEPTH, pump, wire};
     use crate::app::{AppState, Daemon};
     use crate::config::Config;
     use crate::events::CAPACITY;
     use grove_api::RootStatus;
-    use grove_api::events::{Event, LogLevel, LogLine, TaskKind};
+    use grove_api::events::{Event, LogField, LogLevel, LogLine, TaskKind};
     use grove_ops::clock::{Clock, TestClock};
     use grove_ops::roots::{code_dir, manifest_path};
     use std::net::SocketAddr;
@@ -595,6 +601,26 @@ mod tests {
         state.logs.record(line.clone());
 
         assert_eq!(next(&mut rx).await, Frame::Event(Event::Log(line)));
+    }
+
+    /// Userinfo never leaves on the stream, whichever string carries it: the
+    /// guarantee `crate::reply` gives every enveloped body, on the one route it does
+    /// not wrap. A snapshot row's `url` takes the same pass as this line's text.
+    #[test]
+    fn userinfo_is_redacted_in_every_frame() {
+        let data = wire(&Event::Log(LogLine {
+            at_ms: 1,
+            level: LogLevel::Warn,
+            target: "grove_daemon::engine".into(),
+            message: "fetch from https://u:TOKEN@h/o/r failed".into(),
+            fields: vec![LogField {
+                name: "grove.url".into(),
+                value: "https://u:TOKEN@h/o/r".into(),
+            }],
+        }))
+        .unwrap();
+        assert_eq!(data.matches("https://***@h/o/r").count(), 2, "{data}");
+        assert!(!data.contains("TOKEN"), "{data}");
     }
 
     /// **…including a producer parked on a full channel** — the case the drain arm
