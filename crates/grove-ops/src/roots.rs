@@ -942,6 +942,28 @@ pub fn sync(home: &Path, slug: &str) -> Result<SyncReport, Error> {
     })
 }
 
+/// Expand a bare GitHub `owner/name` to the house's scp-style ssh URL; anything else —
+/// a URL, scp-style address, or a path (`./o/r`, `/abs`, `~/x`) — passes through. Git
+/// would read a bare `o/r` as a relative local path, which is never what `clone add`
+/// means by it, so a local path that shape needs a `./`.
+#[must_use]
+pub fn clone_url(repo: &str) -> String {
+    let s = repo.trim();
+    let shorthand = matches!(
+        s.split('/').collect::<Vec<_>>().as_slice(),
+        [owner, name] if [owner, name].iter().all(|seg| {
+            !seg.is_empty()
+                && !seg.starts_with(['.', '~'])
+                && seg.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        })
+    );
+    if shorthand {
+        format!("git@github.com:{}.git", s.trim_end_matches(".git"))
+    } else {
+        s.to_string()
+    }
+}
+
 /// Derive an `owner/repo` slug from a clone URL (https, ssh, or scp-style).
 pub fn slug_from_url(url: &str) -> Result<String> {
     let s = url.trim();
@@ -1125,6 +1147,27 @@ mod tests {
         // ~/.ssh/config Host-alias shape.
         assert_eq!(slug_from_url("gh:o/r.git").unwrap(), "o/r");
         assert_eq!(slug_from_url("github.com:o/r").unwrap(), "o/r");
+    }
+
+    #[test]
+    fn clone_url_expands_only_bare_owner_name() {
+        for (repo, url) in [
+            ("o/r", "git@github.com:o/r.git"),
+            (" o-1/r.x.git ", "git@github.com:o-1/r.x.git"),
+            ("https://github.com/o/r.git", "https://github.com/o/r.git"),
+            ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+            ("gh:o/r", "gh:o/r"),
+            ("./o/r", "./o/r"),
+            ("/o/r", "/o/r"),
+            ("~/r", "~/r"),
+            ("o/.r", "o/.r"),
+            ("o/r/", "o/r/"),
+            ("a/o/r", "a/o/r"),
+            ("o r/x", "o r/x"),
+            ("r", "r"),
+        ] {
+            assert_eq!(clone_url(repo), url, "{repo}");
+        }
     }
 
     #[test]
