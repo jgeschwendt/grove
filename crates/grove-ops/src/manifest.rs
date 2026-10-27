@@ -59,6 +59,18 @@ pub enum ShareMode {
     Symlink,
 }
 
+/// A root `url` git would read as a path relative to the realizing process's cwd — not
+/// a URL, not scp-style (git's rule: a colon before any slash), not absolute. Such a
+/// url means nothing durable: the daemon realizes from `/`.
+#[must_use]
+pub fn is_relative_path(url: &str) -> bool {
+    !(url.contains("://")
+        || url
+            .split_once(':')
+            .is_some_and(|(host, _)| !host.contains('/'))
+        || url.starts_with('/'))
+}
+
 /// A slug becomes a directory under `GROVE_HOME/code/` (the root's checkouts) and
 /// another under `GROVE_HOME/roots/` (everything grove owns for it), plus a TOML key,
 /// so it must be a safe relative path: non-empty, no backslash or control chars, and
@@ -232,11 +244,19 @@ pub fn audit(path: &Path) -> Result<Vec<Invalid>> {
             // whole finding, and the entries under it are unreachable anyway.
             continue;
         }
-        if item.get("url").and_then(|v| v.as_str()).is_none() {
-            invalid(
+        match item.get("url").and_then(|v| v.as_str()) {
+            None => invalid(
                 None,
                 "root has no `url` string; it is never realized".into(),
-            );
+            ),
+            Some(url) if is_relative_path(url) => invalid(
+                None,
+                format!(
+                    "`url` {url:?} is a relative path, read from the realizer's cwd; \
+                     re-declare it with `grove clone add`"
+                ),
+            ),
+            Some(_) => {}
         }
         if let Some(trunk) = item.get("trunk") {
             match trunk.as_str() {

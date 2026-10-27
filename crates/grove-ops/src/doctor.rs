@@ -747,6 +747,9 @@ mod tests {
 [roots."../escape"]
 url = "git@github.com:o/r.git"
 
+[roots."a/b"]
+url = "a/b"
+
 [roots."o/r"]
 
 [roots."o/r".worktrees.".hidden"]
@@ -776,6 +779,10 @@ symlink = ["../../etc/passwd"]
             findings.contains(&("o/r", None)),
             "a root with no url can never realize: {findings:?}"
         );
+        assert!(
+            findings.contains(&("a/b", None)),
+            "a relative url realizes from the daemon's cwd: {findings:?}"
+        );
         assert!(findings.contains(&("o/r", Some(".hidden"))), "{findings:?}");
         assert!(findings.contains(&("o/r", Some("ok"))), "{findings:?}");
         assert!(
@@ -792,8 +799,8 @@ symlink = ["../../etc/passwd"]
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             roots::manifest_path(tmp.path()),
-            "[roots.\"o/r\"]\nurl = \"u\"\n[roots.\"o/r/bare\"]\nurl = \"u\"\n\
-             [roots.\"o/rr\"]\nurl = \"u\"\n",
+            "[roots.\"o/r\"]\nurl = \"/u\"\n[roots.\"o/r/bare\"]\nurl = \"/u\"\n\
+             [roots.\"o/rr\"]\nurl = \"/u\"\n",
         )
         .unwrap();
         let out = manifest_checks(tmp.path());
