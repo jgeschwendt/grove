@@ -451,7 +451,11 @@ fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) ->
     let occupant = manifest::list_worktrees(&manifest_path(home), slug)
         .unwrap_or_default()
         .into_iter()
-        .find(|w| w.name == want.name);
+        // By directory, not spelling: on APFS a case twin is this checkout.
+        .find(|w| {
+            w.name == want.name
+                || crate::worktrees::same_dir(&code_dir(home, slug).join(&w.name), &want.dir)
+        });
     if head == want.branch && occupant.is_none() {
         return Ok(());
     }
@@ -483,8 +487,8 @@ fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) ->
             want.branch
         );
     }
-    if occupant.is_some() {
-        manifest::remove_worktree(&manifest_path(home), slug, &want.name)?;
+    if let Some(w) = &occupant {
+        manifest::remove_worktree(&manifest_path(home), slug, &w.name)?;
     }
     if !want.dir.exists() {
         // The same prune `recover_trunk` opens with: a directory removed out-of-band
@@ -1507,49 +1511,50 @@ mod tests {
     /// worktree, that checkout *is* the new trunk: its `worktrees.<name>` entry is
     /// dropped, and the directory (with whatever is in it) is not touched. Leaving the
     /// entry would put grove's own integration checkout where a `tree remove` deletes
-    /// it.
+    /// it. A case twin of the trunk's name is the same directory on APFS, so the same
+    /// checkout.
     #[test]
     fn a_declared_worktree_on_the_new_trunk_branch_becomes_the_trunk() {
-        let tmp = TempDir::new().unwrap();
-        let home = tmp.path().join("home");
-        let src = tmp.path().join("src");
-        fixture_repo_with_canary(&src);
-        add(&home, "o/r", src.to_str().unwrap()).unwrap();
-        crate::worktrees::create(&home, "o/r", "canary", "canary", None).unwrap();
-        let code = code_dir(&home, "o/r");
-        std::fs::write(code.join("canary/IN-FLIGHT.txt"), "not grove's").unwrap();
-        assert!(
-            declared_worktrees(&home, "o/r")
-                .iter()
-                .any(|w| w.name == "canary"),
-            "precondition: canary is a declared worktree"
-        );
+        for name in ["canary", "Canary"] {
+            let tmp = TempDir::new().unwrap();
+            let home = tmp.path().join("home");
+            let src = tmp.path().join("src");
+            fixture_repo_with_canary(&src);
+            add(&home, "o/r", src.to_str().unwrap()).unwrap();
+            crate::worktrees::create(&home, "o/r", name, "canary", None).unwrap();
+            let code = code_dir(&home, "o/r");
+            // A twin is the same checkout only where the filesystem folds case.
+            if !code.join("canary").exists() {
+                continue;
+            }
+            std::fs::write(code.join(name).join("IN-FLIGHT.txt"), "not grove's").unwrap();
 
-        declare_trunk(&home, "o/r", "canary");
-        assert_eq!(
-            reconcile_one(&home, "o/r").unwrap().status,
-            ReconcileStatus::Present
-        );
+            declare_trunk(&home, "o/r", "canary");
+            assert_eq!(
+                reconcile_one(&home, "o/r").unwrap().status,
+                ReconcileStatus::Present
+            );
 
-        let declared = declared_worktrees(&home, "o/r");
-        assert!(
-            !declared.iter().any(|w| w.name == "canary"),
-            "the entry is dropped — that checkout is the trunk now: {declared:?}"
-        );
-        assert!(
-            code.join("canary/IN-FLIGHT.txt").exists(),
-            "the same checkout, not a fresh one beside it"
-        );
-        assert_eq!(
-            git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
-            "canary"
-        );
-        assert!(
-            declared
-                .iter()
-                .any(|w| w.name == "main" && w.branch == "main"),
-            "and the ex-trunk is adopted: {declared:?}"
-        );
+            let declared = declared_worktrees(&home, "o/r");
+            assert!(
+                !declared.iter().any(|w| w.name == name),
+                "the entry is dropped — that checkout is the trunk now: {declared:?}"
+            );
+            assert!(
+                code.join("canary/IN-FLIGHT.txt").exists(),
+                "the same checkout, not a fresh one beside it"
+            );
+            assert_eq!(
+                git::default_branch(&bare_dir(&home, "o/r")).unwrap(),
+                "canary"
+            );
+            assert!(
+                declared
+                    .iter()
+                    .any(|w| w.name == "main" && w.branch == "main"),
+                "and the ex-trunk is adopted: {declared:?}"
+            );
+        }
     }
 
     /// A `trunk` naming a branch neither the bare nor origin has is a reported
@@ -1586,31 +1591,41 @@ mod tests {
     /// Two checkouts asking for one directory — a declared worktree named exactly for
     /// the incoming trunk's directory, but on another branch. Dropping the entry would
     /// hand the trunk a checkout of the wrong branch, so the reconcile refuses and
-    /// names both sides.
+    /// names both sides — a case twin too, the directory APFS folds it onto.
     #[test]
     fn a_worktree_holding_the_trunks_directory_on_another_branch_is_refused() {
-        let tmp = TempDir::new().unwrap();
-        let home = tmp.path().join("home");
-        let src = tmp.path().join("src");
-        fixture_repo(&src);
-        add(&home, "o/r", src.to_str().unwrap()).unwrap();
         // `release/2.0` and `release-2.0` fold to the same directory name.
-        crate::worktrees::create(&home, "o/r", "release-2.0", "release-2.0", None).unwrap();
+        for (name, branch, trunk) in [
+            ("release-2.0", "release-2.0", "release/2.0"),
+            ("Canary", "feature/y", "canary"),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let home = tmp.path().join("home");
+            let src = tmp.path().join("src");
+            fixture_repo_with_canary(&src);
+            add(&home, "o/r", src.to_str().unwrap()).unwrap();
+            crate::worktrees::create(&home, "o/r", name, branch, Some("main")).unwrap();
+            // A twin holds the trunk's directory only where the filesystem folds case.
+            let dir = crate::worktrees::name_for(trunk);
+            if !code_dir(&home, "o/r").join(dir).exists() {
+                continue;
+            }
 
-        declare_trunk(&home, "o/r", "release/2.0");
-        let applied = reconcile_one(&home, "o/r").unwrap();
-        assert_eq!(applied.status, ReconcileStatus::Failed, "{applied:?}");
-        let error = applied.error.unwrap_or_default();
-        assert!(
-            error.contains("release/2.0") && error.contains("release-2.0"),
-            "the refusal names both sides: {error}"
-        );
-        assert!(
-            declared_worktrees(&home, "o/r")
-                .iter()
-                .any(|w| w.name == "release-2.0"),
-            "nobody's declaration is dropped to make room"
-        );
+            declare_trunk(&home, "o/r", trunk);
+            let applied = reconcile_one(&home, "o/r").unwrap();
+            assert_eq!(applied.status, ReconcileStatus::Failed, "{applied:?}");
+            let error = applied.error.unwrap_or_default();
+            assert!(
+                error.contains(trunk) && error.contains(name),
+                "the refusal names both sides: {error}"
+            );
+            assert!(
+                declared_worktrees(&home, "o/r")
+                    .iter()
+                    .any(|w| w.name == name),
+                "nobody's declaration is dropped to make room"
+            );
+        }
     }
 
     #[test]
