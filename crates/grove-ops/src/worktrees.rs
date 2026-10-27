@@ -414,7 +414,18 @@ fn adoptable_name(code: &Path, trunk: Option<&str>, wt: &Path) -> Option<String>
     let mut segs = wt.strip_prefix(code).ok()?.components();
     let name = segs.next()?.as_os_str().to_str()?;
     // A direct child only, never nested below the code dir; a `..` or `.` is dotted.
-    (segs.next().is_none() && !is_reserved(name) && trunk != Some(name)).then(|| name.to_string())
+    // The trunk by directory, not spelling: on APFS git reports a twin's spelling.
+    let trunk = trunk.is_some_and(|t| t == name || same_dir(&code.join(t), &code.join(name)));
+    (segs.next().is_none() && !is_reserved(name) && !trunk).then(|| name.to_string())
+}
+
+/// Do two paths name one directory? A case or Unicode twin does on a folding
+/// filesystem (APFS by default) and does not on a case-sensitive one, which no
+/// comparison of the names alone can tell apart.
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    matches!((a.metadata(), b.metadata()),
+        (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
 }
 
 #[cfg(test)]
