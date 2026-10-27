@@ -71,8 +71,10 @@ impl<T: Serialize> IntoResponse for Reply<T> {
 /// Redact every string in a body on its way out. An ops error or a doctor detail
 /// quotes a clone URL — git's stderr, a TOML parse error's source line — as readily
 /// as the snapshot's own `url`, so redaction belongs where every enveloped byte
-/// passes rather than at each field that might carry one.
-fn scrub(value: &mut Value) {
+/// passes rather than at each field that might carry one. `stream::wire` runs the
+/// same pass over every SSE frame, so the manifest keeps a URL whole and the wire
+/// never does.
+pub(crate) fn scrub(value: &mut Value) {
     match value {
         Value::String(s) => *s = crate::logs::redact(s),
         Value::Array(items) => items.iter_mut().for_each(scrub),
