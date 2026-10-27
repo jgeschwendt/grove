@@ -108,7 +108,8 @@ enum Command {
 enum CloneAction {
     /// Clone and track a repository.
     Add {
-        /// Repository URL or `owner/name`.
+        /// Repository URL, or GitHub `owner/name` (cloned over ssh); a local path that
+        /// shape needs a leading `./`.
         repo: String,
     },
     /// Stop tracking and remove a repository.

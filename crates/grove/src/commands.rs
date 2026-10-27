@@ -33,7 +33,8 @@ use crate::{CliError, render};
 /// `grove clone add <url>` — declare the repo, then realize it only if no daemon is
 /// reachable.
 // ※ single-realizer
-pub fn clone_add(home: &Path, api: &ApiClient, url: &str) -> Result<(), CliError> {
+pub fn clone_add(home: &Path, api: &ApiClient, repo: &str) -> Result<(), CliError> {
+    let url = &grove_ops::roots::clone_url(repo);
     let slug = grove_ops::roots::slug_from_url(url).map_err(io)?;
     let manifest = grove_ops::roots::manifest_path(home);
 
@@ -765,9 +766,15 @@ mod tests {
     #[test]
     fn clone_add_up_declares_and_nudges_without_realizing() {
         let home = TempDir::new().unwrap();
-        clone_add(home.path(), &up(), "https://github.com/o/r.git").unwrap();
+        // The `owner/name` shorthand lands as a URL, never as a relative local path.
+        clone_add(home.path(), &up(), "o/r").unwrap();
 
-        assert!(manifest_of(home.path()).contains(r#"[roots."o/r"]"#));
+        let manifest = manifest_of(home.path());
+        assert!(manifest.contains(r#"[roots."o/r"]"#));
+        assert!(
+            manifest.contains(r#""git@github.com:o/r.git""#),
+            "{manifest}"
+        );
         assert!(
             !home.path().join("code/o/r").exists(),
             "the server realizes it"
