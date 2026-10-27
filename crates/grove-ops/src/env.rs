@@ -556,8 +556,16 @@ fn gc_worktree<Fd: AsFd>(
 ) {
     let declared_paths: HashSet<&str> = declared.iter().map(|s| s.path.as_str()).collect();
     // Enumerate names via the path (read-only); the unlink decision is fd-pinned.
-    let Ok(entries) = std::fs::read_dir(wt_path) else {
-        return;
+    let entries = match std::fs::read_dir(wt_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return out.push(err(
+                pass.slug,
+                Some(wt),
+                "",
+                &format!("read worktree: {e:#}"),
+            ));
+        }
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -1433,6 +1441,33 @@ mod tests {
             assert!(row.reason.as_deref().unwrap().contains(why), "{row:?}");
             assert!(!wt(&home, "feat").join(".env").exists(), "{why}");
         }
+    }
+
+    /// The GC's listing is by path, after the open: a worktree that turns unreadable in
+    /// between is the same error row, never a pass that silently collects nothing.
+    #[test]
+    fn a_worktree_the_gc_cannot_list_is_an_error_row() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let feat = wt(&home_with_root(&tmp), "feat");
+        let fd = open_dir(&feat).unwrap();
+        std::fs::set_permissions(&feat, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let pass = Pass {
+            slug: "o/r",
+            trunk_name: "main",
+            prev_trunk: "main",
+            pending: false,
+        };
+        let mut out = Vec::new();
+        gc_worktree(pass, "feat", &feat, &fd, &[], Action::Diagnose, &mut out);
+        std::fs::set_permissions(&feat, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            out.iter().any(|o| o
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("read worktree"))),
+            "{out:?}"
+        );
     }
 
     #[test]
