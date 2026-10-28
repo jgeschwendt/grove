@@ -33,7 +33,7 @@
     },
     "delete-before-undeclare": {
       "file": "crates/grove-ops/src/roots.rs",
-      "line": 242,
+      "line": 243,
       "node": "crates/grove-ops"
     },
     "doc-gate": {
@@ -68,7 +68,7 @@
     },
     "never-clobber": {
       "file": "crates/grove-ops/src/env.rs",
-      "line": 443,
+      "line": 440,
       "node": "crates/grove-ops"
     },
     "pending-marker": {
@@ -123,7 +123,7 @@
     },
     "sync-never-forces": {
       "file": "crates/grove-ops/src/roots.rs",
-      "line": 927,
+      "line": 928,
       "node": "crates/grove-ops"
     },
     "test-reachability": {
@@ -133,7 +133,7 @@
     },
     "trunk-recovery-guard": {
       "file": "crates/grove-ops/src/roots.rs",
-      "line": 862,
+      "line": 863,
       "node": "crates/grove-ops"
     },
     "unauthenticated-api": {
@@ -669,7 +669,7 @@
           "enforced_by": null,
           "id": "delete-before-undeclare",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:242",
+          "resolved": "crates/grove-ops/src/roots.rs:243",
           "text": "an explicit root removal deletes on disk BEFORE it undeclares, and that ordering is settled: undeclaring first lets the watcher's adopt, which runs off the lane, re-find the still-present bare and resurrect the root, while the declared-but-missing window it would close is invisible to reconcile — remove holds the root's lane throughout, and reconcile_one re-reads the declaration under that lane; a partial delete propagates before the undeclare, so the slug stays declared and visibly broken",
           "verified": {
             "digest": "13cb4139fb4cfef994e519eebb2c3971c71747f221b8b2709ab4e42fd082ca57",
@@ -693,7 +693,7 @@
           "enforced_by": null,
           "id": "never-clobber",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/env.rs:443",
+          "resolved": "crates/grove-ops/src/env.rs:440",
           "text": "a share never destroys a human's or agent's file — only a symlink climbing to the trunk checkout exactly as grove writes it (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
           "verified": {
             "digest": "5fca934db0a69cfe4ddc8ecfdb756ef8f1959c95c254aaf25ef3905fed23c01b",
@@ -729,7 +729,7 @@
           "enforced_by": null,
           "id": "sync-never-forces",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:927",
+          "resolved": "crates/grove-ops/src/roots.rs:928",
           "text": "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops",
           "verified": {
             "digest": "28d550f9df226c63ae2529a5cf077aaa27b50f43cedbc8150053b82534f1e266",
@@ -741,7 +741,7 @@
           "enforced_by": null,
           "id": "trunk-recovery-guard",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:862",
+          "resolved": "crates/grove-ops/src/roots.rs:863",
           "text": "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all or the bare holds an unpushed branch or a stash; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory",
           "verified": {
             "digest": "a3d9f4b7278e0633d0aeda307ab19a3c472a873ff0cc221967c94e435045f60a",
@@ -753,7 +753,7 @@
           "enforced_by": null,
           "id": "unsaved-work",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/roots.rs:304",
+          "resolved": "crates/grove-ops/src/roots.rs:305",
           "text": "a root removal refuses an UNDECLARED slug before any path reaches remove_dir_all, and refuses a declared one holding uncommitted tracked changes, unpushed commits on any local branch, a stash, or a code-dir entry that is no worktree of its bare unless the caller forces — <home>/code/<slug> is a real directory whether or not grove put it there, and the command that deletes N worktrees at once must not protect less than the one that deletes one",
           "verified": {
             "digest": "c26a1ee7d3819efac6c222189e8aa51abdc2fbec18daab447b83e090eebfcbd4",
