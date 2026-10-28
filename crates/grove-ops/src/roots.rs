@@ -1266,6 +1266,21 @@ mod tests {
         std::fs::write(&path, doc.to_string()).unwrap();
     }
 
+    /// Who the trunk is and whether a change is pending are this module's answers
+    /// alone: no other source reads the bare's `HEAD` to decide them.
+    #[test]
+    fn only_roots_reads_the_bares_head() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for e in std::fs::read_dir(&src).unwrap().flatten() {
+            let (name, text) = (e.file_name(), std::fs::read_to_string(e.path()).unwrap());
+            assert!(
+                ["git.rs", "roots.rs"].contains(&name.to_str().unwrap())
+                    || !text.contains("default_branch("),
+                "{name:?} reads HEAD; ask roots::trunk_state"
+            );
+        }
+    }
+
     /// The one resolution, both ways round: a declared `trunk` names the branch and
     /// so the directory, and an undeclared one falls back to the bare's HEAD — which
     /// is what makes an adopted root, which declares nothing, have a trunk too.

@@ -183,11 +183,14 @@
   <ol id="next" class="steps">
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
-    <li><strong>Share plan/apply, stages 4–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
+    <li><strong>Share plan/apply, stage 4</strong> (approved 2026-10-27, thread 0109c212; supersedes
       <code class="code">trunk-change-shares</code>): <code class="code">roots::TrunkState</code> and a pure
       <code class="code">env::plan</code> are on trunk; <code class="code">diagnose</code> renders the plan,
       <code class="code">materialize</code> applies it, and a carry applies it only when it holds no error row.
-      Next, the owner-ruled seeding rules; then the <code class="code">default_branch</code> fitness guard.</li>
+      A test, <code class="code">only_roots_reads_the_bares_head</code>, keeps every other module from
+      reading <code class="code">HEAD</code>. What remains is the two owner-ruled seeding rules, still waiting
+      on the owner (b7981283): how a directory source seeds, and whether an ex-trunk's seeded source
+      becomes a link.</li>
     <li><strong>Wire telemetry into <code class="code">grove serve</code></strong> (approved A, thread 2f4f0398):
       opt-in through <code class="code">GROVE_TELEMETRY</code>, with a batch exporter and a
       <code class="code">tracing-opentelemetry</code> layer.</li>
