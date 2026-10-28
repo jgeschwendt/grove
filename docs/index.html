@@ -183,11 +183,12 @@
   <ol id="next" class="steps">
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
-    <li><strong>Share plan/apply, stages 2–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
-      <code class="code">trunk-change-shares</code>): stage 1's <code class="code">roots::TrunkState</code> is on trunk.
-      Next, a pure <code class="code">env::plan</code> run in parallel with the walker until
-      <code class="code">diagnose</code> equals <code class="code">plan().render()</code>; then
-      <code class="code">apply</code>, which deletes <code class="code">Action</code>; then the owner-ruled
+    <li><strong>Share plan/apply, stages 3–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
+      <code class="code">trunk-change-shares</code>): <code class="code">roots::TrunkState</code> and a pure
+      <code class="code">env::plan</code> are on trunk, and <code class="code">diagnose</code> renders the plan.
+      Next comes <code class="code">apply(plan)</code> for materialize and then carry. It refuses an error row
+      before its first write, and it deletes <code class="code">Action</code>, the walker and the
+      test-only parallel run. After that, the owner-ruled
       seeding rules; then the <code class="code">default_branch</code> fitness guard.</li>
     <li><strong>Wire telemetry into <code class="code">grove serve</code></strong> (approved A, thread 2f4f0398):
       opt-in through <code class="code">GROVE_TELEMETRY</code>, with a batch exporter and a
