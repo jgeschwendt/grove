@@ -352,7 +352,7 @@ pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
     // would happily ff over non-conflicting local edits, but a grove-managed trunk
     // with hand-made changes is a state the operator should resolve, not race.
     // `--untracked-files=no` is load-bearing: grove itself materializes share sources
-    // as untracked files in the trunk (see `env::source_outcome`), so counting
+    // as untracked files in the trunk (see `env::source_op`), so counting
     // untracked files as dirty would wedge every future ff on a repo that doesn't
     // gitignore that path. An untracked file the incoming commits *would* overwrite
     // is instead caught at the merge step below (git refuses → Dirty).

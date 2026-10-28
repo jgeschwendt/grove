@@ -218,7 +218,7 @@
       <code class="code">proposal:jgeschwendt/grove:trunk-change-shares</code>.</li>
     <li><strong>A symlink share whose source is a directory refuses every trunk change</strong>
       (confirmed, medium; <code class="code">env.rs</code> carry seed). <code class="code">read_present</code>
-      bails on a directory, which <code class="code">source_outcome</code> accepts everywhere else. Seeding a
+      bails on a directory, which <code class="code">source_op</code> accepts everywhere else. Seeding a
       recursive copy, an empty directory or a clear refusal is the owner's call, on the same proposal.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
