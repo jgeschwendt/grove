@@ -90,6 +90,37 @@ pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
     })
 }
 
+/// A root's trunk with whether a change onto it is pending: `Changing` while the bare's
+/// `HEAD` (`from`) still names another branch than [`trunk`] resolves (`to`) — a
+/// manifest edit `converge_trunk` has not yet made disk — else `Settled`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TrunkState {
+    Changing { from: String, to: Trunk },
+    Settled { trunk: Trunk },
+}
+
+impl TrunkState {
+    /// The trunk either way: the declared one, pending or not.
+    #[must_use]
+    pub fn trunk(&self) -> &Trunk {
+        match self {
+            Self::Changing { to: trunk, .. } | Self::Settled { trunk } => trunk,
+        }
+    }
+}
+
+/// Resolve [`TrunkState`]: [`trunk`], then the bare's `HEAD` once. The one place a
+/// pending trunk change is decided.
+pub fn trunk_state(home: &Path, slug: &str) -> Result<TrunkState> {
+    let to = trunk(home, slug)?;
+    let from = git::default_branch(&bare_dir(home, slug))?;
+    Ok(if from == to.branch {
+        TrunkState::Settled { trunk: to }
+    } else {
+        TrunkState::Changing { from, to }
+    })
+}
+
 /// The trunk checkout's path, best-effort — for callers that only want a path and
 /// have nowhere to put a failure (a presence probe, a doctor row). A manifest that
 /// cannot be read falls back to the bare's `HEAD`, the trunk a converged root is on,
@@ -453,8 +484,8 @@ fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) ->
     if !bare.exists() {
         return Ok(());
     }
-    let want = trunk(home, slug)?;
-    let head = git::default_branch(&bare)?;
+    let state = trunk_state(home, slug)?;
+    let want = state.trunk();
     let occupant = manifest::list_worktrees(&manifest_path(home), slug)
         .unwrap_or_default()
         .into_iter()
@@ -463,7 +494,7 @@ fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) ->
             w.name == want.name
                 || crate::worktrees::same_dir(&code_dir(home, slug).join(&w.name), &want.dir)
         });
-    if head == want.branch && occupant.is_none() {
+    if matches!(state, TrunkState::Settled { .. }) && occupant.is_none() {
         return Ok(());
     }
     if claim.is_none() {
@@ -503,11 +534,11 @@ fn converge_trunk(home: &Path, slug: &str, claim: &mut Option<std::fs::File>) ->
         let _ = git::worktree_prune(&bare);
         git::worktree_add(&bare, &want.dir, &want.branch, None)?;
     }
-    if head != want.branch {
+    if let TrunkState::Changing { from, .. } = &state {
         // Shares first, while `HEAD` still names the old trunk: it is the one record of
         // which links and sources were grove's, and moving it forgets them — so a pass
         // with an error row leaves `HEAD` where it is, for the next event to retry.
-        if let Some(o) = crate::env::carry(home, slug, &crate::worktrees::name_for(&head))
+        if let Some(o) = crate::env::carry(home, slug, &crate::worktrees::name_for(from))
             .into_iter()
             .find(|o| o.status.is_error())
         {
@@ -1365,6 +1396,15 @@ mod tests {
             declare_trunk(&home, "o/r", "canary");
             let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
             assert!(error.contains(share), "{error}");
+            // The dry run holds as the pass would: a pending row per source, no link row.
+            let rows = crate::env::diagnose(&home, Some("o/r")).unwrap();
+            assert!(
+                rows.len() == 2
+                    && rows.iter().all(|o| o.worktree.is_none()
+                        && o.reason.as_deref()
+                            == Some("trunk change pending; reconcile carries it")),
+                "{rows:?}"
+            );
             crate::worktrees::create(&home, "o/r", "late", "feature/z", Some("main")).unwrap();
             assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
             for absent in ["canary/.env", "late/.env", &format!("canary/{share}")] {

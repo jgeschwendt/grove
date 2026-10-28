@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::LEGACY_TRUNK;
 use crate::manifest::{self, Share, ShareMode};
-use crate::roots::{self, code_dir, list as list_roots, manifest_path};
+use crate::roots::{self, TrunkState, code_dir, list as list_roots, manifest_path};
 use crate::{Error, worktrees};
 
 /// How aggressively `materialize` resolves a real-file conflict at a share
@@ -236,11 +236,15 @@ fn run_root(
     }
     let root = code_dir(home, slug);
     // Which directory is the trunk is a manifest question, so it is asked once per
-    // root and carried through every row below — never re-derived per share.
-    let trunk = match roots::trunk(home, slug) {
-        Ok(trunk) => trunk,
+    // root and carried through every row below — never re-derived per share. A `HEAD`
+    // git cannot read is no pending change: the pass runs on the declared trunk.
+    let state = match roots::trunk_state(home, slug)
+        .or_else(|_| roots::trunk(home, slug).map(|trunk| TrunkState::Settled { trunk }))
+    {
+        Ok(state) => state,
         Err(e) => return out.push(err(slug, None, "", &format!("resolve trunk: {e:#}"))),
     };
+    let trunk = state.trunk();
     if !trunk.dir.exists() {
         out.push(err(
             slug,
@@ -257,9 +261,7 @@ fn run_root(
         // `HEAD` off the declared trunk: a change only [`carry`] can make, so a source
         // missing here is its to seed, never this pass's to create empty. Detection only —
         // ownership is still `trunk_name`/`prev_trunk`'s.
-        pending: prev_trunk.is_none()
-            && crate::git::default_branch(&roots::bare_dir(home, slug))
-                .is_ok_and(|head| head != trunk.branch),
+        pending: prev_trunk.is_none() && matches!(state, TrunkState::Changing { .. }),
     };
 
     let root_fd = match open_dir(&root) {
