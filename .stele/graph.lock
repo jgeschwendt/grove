@@ -53,7 +53,7 @@
     },
     "lane-is-callers": {
       "file": "crates/grove-ops/src/env.rs",
-      "line": 126,
+      "line": 129,
       "node": "crates/grove-ops"
     },
     "loopback-bind-gate": {
@@ -68,7 +68,7 @@
     },
     "never-clobber": {
       "file": "crates/grove-ops/src/env.rs",
-      "line": 583,
+      "line": 526,
       "node": "crates/grove-ops"
     },
     "pending-marker": {
@@ -681,10 +681,10 @@
           "enforced_by": null,
           "id": "lane-is-callers",
           "kind": "hazard",
-          "resolved": "crates/grove-ops/src/env.rs:126",
+          "resolved": "crates/grove-ops/src/env.rs:129",
           "text": "this crate holds NO per-root mutex: its flock serializes the manifest, deliberately not git. Per-root git serialization is the caller's to supply, and a concurrent caller that does not supply it loses an invariant this crate was written against.",
           "verified": {
-            "digest": "d1b1e31646db139a07c7a1987ff8b094bf0d93e541dd35b3b88c7e79fc3e6775",
+            "digest": "0fbbef54fed890ae8ff6a99dfab9c3ebde1d00072c558a1ffe385ff567d7761e",
             "sha": "bfbc880a8c2a95900dfeecb9e6ab1a76fa5bdd41"
           }
         },
@@ -693,10 +693,10 @@
           "enforced_by": null,
           "id": "never-clobber",
           "kind": "invariant",
-          "resolved": "crates/grove-ops/src/env.rs:583",
+          "resolved": "crates/grove-ops/src/env.rs:526",
           "text": "a share never destroys a human's or agent's file — only a symlink climbing to the trunk checkout exactly as grove writes it (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking",
           "verified": {
-            "digest": "08837175120b2f2c040b2ea6799552dbb28b47d057972af80a8162fa93ed3c7c",
+            "digest": "92975da8bcb1e94111f44e8fa99089bc43161bce5441c659eb85d382eb61de25",
             "sha": "bfbc880a8c2a95900dfeecb9e6ab1a76fa5bdd41"
           }
         },

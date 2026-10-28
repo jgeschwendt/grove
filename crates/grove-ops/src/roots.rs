@@ -1386,7 +1386,8 @@ mod tests {
         for share in [".other", ".k1"] {
             let tmp = TempDir::new().unwrap();
             let (home, code) = shared_root(&tmp);
-            manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[share]).unwrap();
+            let shares = [share, "config/db.toml"];
+            manifest::add_share(&manifest_path(&home), "o/r", "symlink", &shares).unwrap();
             if share == ".k1" {
                 std::fs::write(code.join("main/.real"), "K").unwrap();
                 std::os::unix::fs::symlink(".real", code.join("main/.k1")).unwrap();
@@ -1397,10 +1398,11 @@ mod tests {
             declare_trunk(&home, "o/r", "canary");
             let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
             assert!(error.contains(share), "{error}");
-            // The dry run holds as the pass would: a pending row per source, no link row.
+            // The dry run holds as the pass would: a pending row per source — a nested one
+            // too, whose parent the new trunk lacks — and no link row.
             let rows = crate::env::diagnose(&home, Some("o/r")).unwrap();
             assert!(
-                rows.len() == 2
+                rows.len() == 3
                     && rows.iter().all(|o| o.worktree.is_none()
                         && o.reason.as_deref()
                             == Some("trunk change pending; reconcile carries it")),
@@ -1408,7 +1410,12 @@ mod tests {
             );
             crate::worktrees::create(&home, "o/r", "late", "feature/z", Some("main")).unwrap();
             assert!(reconcile_one(&home, "o/r").unwrap().error.is_some());
-            for absent in ["canary/.env", "late/.env", &format!("canary/{share}")] {
+            for absent in [
+                "canary/.env",
+                "canary/config",
+                "late/.env",
+                &format!("canary/{share}"),
+            ] {
                 assert!(
                     std::fs::symlink_metadata(code.join(absent)).is_err(),
                     "{absent}"
@@ -1425,6 +1432,25 @@ mod tests {
                 "main"
             );
         }
+    }
+
+    /// A worktree row the carry would fail — a copy whose source is a symlink — holds it
+    /// before its first write: no source is seeded and no link repointed ahead of it.
+    #[test]
+    fn a_failing_worktree_row_holds_the_trunk_change_before_any_write() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
+        std::fs::write(code.join("secret"), "S").unwrap();
+        std::os::unix::fs::symlink("../secret", code.join("main/.cfg")).unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "copy", &[".cfg"]).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        let error = reconcile_one(&home, "o/r").unwrap().error.unwrap();
+        assert!(error.contains("`.cfg` in feat"), "{error}");
+        assert!(std::fs::symlink_metadata(code.join("canary/.cfg")).is_err());
+        assert_eq!(
+            std::fs::read_link(code.join("feat/.env")).unwrap(),
+            Path::new("../main/.env")
+        );
     }
 
     /// An old trunk the carry cannot open — here a symlink, which `NOFOLLOW` refuses —
@@ -1449,6 +1475,28 @@ mod tests {
                 Path::new("..").join(trunk).join(".env")
             );
         }
+    }
+
+    /// A share flipped from symlink to copy in the edit that promotes a worktree to trunk:
+    /// the carry copies from the source it seeds over the laid link, not the link itself.
+    #[test]
+    fn a_copy_flipped_with_the_trunk_copies_the_source_seeded_over_the_laid_link() {
+        let tmp = TempDir::new().unwrap();
+        let (home, code) = shared_root(&tmp);
+        std::fs::write(code.join("main/.cfg"), "C").unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "symlink", &[".cfg"]).unwrap();
+        crate::worktrees::create(&home, "o/r", "canary", "canary", None).unwrap();
+        manifest::remove_share(&manifest_path(&home), "o/r", "symlink", ".cfg").unwrap();
+        manifest::add_share(&manifest_path(&home), "o/r", "copy", &[".cfg"]).unwrap();
+        declare_trunk(&home, "o/r", "canary");
+        let applied = reconcile_one(&home, "o/r").unwrap();
+        assert_eq!(applied.error, None);
+        let meta = std::fs::symlink_metadata(code.join("feat/.cfg")).unwrap();
+        assert!(meta.is_file());
+        assert_eq!(
+            std::fs::read_to_string(code.join("feat/.cfg")).unwrap(),
+            "C"
+        );
     }
 
     /// A worktree promoted to trunk carries grove's link through the old trunk in its
