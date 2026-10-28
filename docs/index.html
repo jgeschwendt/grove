@@ -183,13 +183,11 @@
   <ol id="next" class="steps">
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
-    <li><strong>Share plan/apply, stages 3–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
+    <li><strong>Share plan/apply, stages 4–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
       <code class="code">trunk-change-shares</code>): <code class="code">roots::TrunkState</code> and a pure
-      <code class="code">env::plan</code> are on trunk, and <code class="code">diagnose</code> renders the plan.
-      Next comes <code class="code">apply(plan)</code> for materialize and then carry. It refuses an error row
-      before its first write, and it deletes <code class="code">Action</code>, the walker and the
-      test-only parallel run. After that, the owner-ruled
-      seeding rules; then the <code class="code">default_branch</code> fitness guard.</li>
+      <code class="code">env::plan</code> are on trunk; <code class="code">diagnose</code> renders the plan,
+      <code class="code">materialize</code> applies it, and a carry applies it only when it holds no error row.
+      Next, the owner-ruled seeding rules; then the <code class="code">default_branch</code> fitness guard.</li>
     <li><strong>Wire telemetry into <code class="code">grove serve</code></strong> (approved A, thread 2f4f0398):
       opt-in through <code class="code">GROVE_TELEMETRY</code>, with a batch exporter and a
       <code class="code">tracing-opentelemetry</code> layer.</li>
@@ -206,17 +204,11 @@
       18 commits since, fixed a rollback that died before its rename and <code class="code">grove ok</code>'s
       exit on a mid-body hangup, and filed one; s-20261023T0200Z fixed <code class="code">install.sh</code>'s
       cleartext redirect hop and a nested slug pair's remove and realize writing into the other's
-      bare. Open, highest first:</p>
+      bare; s-20261028T0216Z's plan/apply fixed a carry wedged half-done by a link or copy error the plan
+      can see (one that fails only as it is written still can) and a dry run that disagreed with the real
+      pass on a nested pending source. Open, highest first:</p>
   </header>
   <ol class="steps">
-    <li><strong>A link or copy error that predates a trunk change wedges it half-carried</strong>
-      (confirmed, medium; <code class="code">roots::converge_trunk</code>). The hold fires on any carry
-      error row, but link rows are written worktree by worktree, so <code class="code">feat/.env</code> is
-      already repointed at <code class="code">../canary/.env</code> when a later copy share fails (a symlinked
-      copy source, which the ordinary pass already reports). <code class="code">HEAD</code> never moves,
-      every reconcile fails, and reverting <code class="code">trunk</code> strands the moved link as a conflict.
-      The fix chooses between holding on source rows only and dry-running the whole carry first. It bears on
-      <code class="code">proposal:jgeschwendt/grove:trunk-change-shares</code>.</li>
     <li><strong>A symlink share whose source is a directory refuses every trunk change</strong>
       (confirmed, medium; <code class="code">env.rs</code> carry seed). <code class="code">read_present</code>
       bails on a directory, which <code class="code">source_op</code> accepts everywhere else. Seeding a
@@ -238,9 +230,6 @@
       <code class="code">main/.env</code> to <code class="code">.env.grove-bak</code> and links it to
       <code class="code">../canary/.env</code> before <code class="code">HEAD</code> moves. Fix: skip the bare's
       <code class="code">HEAD</code> checkout in link/copy/GC while pending.</li>
-    <li><strong>A dry run and a real pass disagree on a nested pending source</strong> (plausible, low).
-      For <code class="code">config/db.toml</code> with its parent missing in the new trunk, diagnose reports
-      would-create while materialize reports the pending error after creating the parent.</li>
     <li><strong>A carry holds on an in-trunk link whose target the new trunk will have</strong>
       (plausible, low). <code class="code">.k1 -&gt; .real</code> is held even when <code class="code">.real</code>
       is tracked or itself a declared share, until the operator re-creates it; the check is lexical.</li>

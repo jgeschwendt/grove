@@ -635,8 +635,8 @@ the trunk, which is grove's domain. During a trunk change, grove's own share lin
 trunk's source slot (laid through the old trunk while it was a worktree) is no user source:
 it is seeded over from the old trunk.</p>
 <h3 class="h3" id="environment-detect-fix">Detect → fix</h3>
-<p class="docs-note">Per declared share <code class="code">&lt;p&gt;</code>, per present worktree. <code class="code">materialize</code> acts; <code class="code">diagnose</code> classifies
-identically and <strong>mutates nothing</strong> — a byte-for-byte filesystem snapshot is identical
+<p class="docs-note">Per declared share <code class="code">&lt;p&gt;</code>, per present worktree. <code class="code">diagnose</code> renders the root's plan and
+<strong>mutates nothing</strong>; <code class="code">materialize</code> applies that same plan — a byte-for-byte filesystem snapshot is identical
 before and after, which is what <code class="code">--dry-run</code> promises and
 <code class="code">diagnose_mutates_nothing</code>/<code class="code">copy_diagnose_mutates_nothing</code> prove.</p>
 <h4 class="h3" id="environment-symlink"><code class="code">_.symlink</code></h4>
@@ -664,7 +664,8 @@ before and after, which is what <code class="code">--dry-run</code> promises and
 </table>
 </div>
 <p class="docs-note"><code class="code">--fix</code> (<code class="code">Fix::Force</code>) is not in that table because it has no bearing on a copy. Seed-once
-means there is no wrong state to heal.</p>
+means there is no wrong state to heal. A copy that would be seeded from a source that is no regular
+file is an <code class="code">error</code> row in the plan, so <code class="code">diagnose</code> reports it as <code class="code">materialize</code> does.</p>
 <h4 class="h3" id="environment-gc-on-undeclare">GC on undeclare</h4>
 <p class="docs-note">A worktree top-level entry that is a symlink to <code class="code">../&lt;trunk&gt;/&lt;name&gt;</code> for a <code class="code">&lt;name&gt;</code> no longer
 declared is an orphan and is removed (<code class="code">gc</code>). <code class="code">unlinkat</code> removes the <em>link</em>, never its
@@ -703,14 +704,19 @@ trunk's rather than created empty — a repointed link reads the same bytes, and
 source is carried as the same link — unless its relative target stays inside the trunk,
 where it would dangle, an error row asking for it to be re-created in the new trunk
 (<code class="code">a_trunk_change_carries_share_links_and_sources_onto_the_new_trunk</code>). The pass is
-all-or-nothing: a dry run reads every seed first, so an old source that cannot be read is
-an error row with nothing seeded and no link moved, and <code class="code">HEAD</code> stays put for the next
-event to retry (<code class="code">an_unreadable_old_source_holds_the_trunk_change</code>). Every other pass knows
+planned whole before its first write, so any failure the plan can see (an old source that
+cannot be read, or a link or copy the plan already knows will fail in some worktree) is an error row
+with nothing seeded and no link moved, and <code class="code">HEAD</code> stays put for the next event to retry
+(<code class="code">an_unreadable_old_source_holds_the_trunk_change</code>,
+<code class="code">a_failing_worktree_row_holds_the_trunk_change_before_any_write</code>). A write that fails
+only while it is applied (permissions, or a leaf changed underneath it) is not foreseen: a failed source
+write still lays no link, but a failed worktree write leaves the rows applied before it in place, with
+<code class="code">HEAD</code> held all the same. Every other pass knows
 only the declared trunk, so while a trunk change is refused a link through the old trunk
 is a <code class="code">conflict</code>, never repointed into whatever occupies the new trunk's directory
 (<code class="code">a_refused_trunk_change_leaves_links_through_the_old_trunk_alone</code>); and while the change
 is pending — <code class="code">HEAD</code> off the declared trunk — a source missing from the new trunk is an
-error row, never created empty for the next <code class="code">carry</code> to take as real.</p>
+error row, its missing parents uncreated, never created empty for the next <code class="code">carry</code> to take as real.</p>
 <p class="docs-note">A real file, a directory, or a foreign symlink is reported as <code class="code">conflict</code> and left exactly
 as it was. <code class="code">grove doctor</code> exits <strong>5</strong> on any unresolved conflict, which makes it a usable
 CI gate even under <code class="code">--dry-run</code>.</p>
