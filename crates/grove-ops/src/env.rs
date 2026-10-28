@@ -42,7 +42,7 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -108,13 +108,15 @@ impl ShareStatus {
     }
 }
 
-/// Read-only twin of [`materialize`] — the same walk, classify-only, **mutates
-/// nothing** (the `--dry-run` contract; a byte-for-byte FS snapshot is identical
-/// before and after). `would-link`/`would-repoint`/`would-create`/`would-gc` reuse
-/// the `Linked`/`Repointed`/`Created`/`Gc` statuses (the renderer + exit code only
-/// branch on `Conflict`/`Error`, so the would/did distinction is immaterial there).
+/// Read-only twin of [`materialize`] — its [`plan`], rendered: **mutates nothing**
+/// (the `--dry-run` contract; a byte-for-byte FS snapshot is identical before and
+/// after). `would-link`/`would-repoint`/`would-create`/`would-gc` reuse the
+/// `Linked`/`Repointed`/`Created`/`Gc` statuses (the renderer + exit code only branch
+/// on `Conflict`/`Error`, so the would/did distinction is immaterial there).
 pub fn diagnose(home: &Path, slug: Option<&str>) -> Result<Vec<ShareOutcome>, Error> {
-    run(home, slug, Action::Diagnose).map_err(Error::io)
+    #[cfg(test)]
+    parallel_run(home, slug);
+    plan(home, slug).map(Plan::render).map_err(Error::io)
 }
 
 /// Converge every declared share for `slug` (or all roots when `None`): create the
@@ -123,6 +125,8 @@ pub fn diagnose(home: &Path, slug: Option<&str>) -> Result<Vec<ShareOutcome>, Er
 /// row and never aborts the batch.
 // ※ lane-is-callers
 pub fn materialize(home: &Path, slug: Option<&str>, fix: Fix) -> Result<Vec<ShareOutcome>, Error> {
+    #[cfg(test)]
+    parallel_run(home, slug);
     run(home, slug, Action::Materialize(fix)).map_err(Error::io)
 }
 
@@ -178,21 +182,137 @@ impl Action {
 }
 
 fn run(home: &Path, slug: Option<&str>, action: Action) -> Result<Vec<ShareOutcome>> {
-    let slugs = match slug {
-        Some(s) => vec![s.to_string()],
-        None => list_roots(home)?.into_iter().map(|r| r.slug).collect(),
-    };
     let mut out = Vec::new();
-    for slug in &slugs {
+    for slug in &slugs(home, slug)? {
         run_root(home, slug, action, None, &mut out);
     }
     Ok(out)
+}
+
+/// `slug`, or every declared root's when `None`.
+fn slugs(home: &Path, slug: Option<&str>) -> Result<Vec<String>> {
+    Ok(match slug {
+        Some(s) => vec![s.to_string()],
+        None => list_roots(home)?.into_iter().map(|r| r.slug).collect(),
+    })
+}
+
+/// What a row decides: the write that realizes it, or none (`Conflict`, `Keep`).
+enum Op {
+    Conflict,
+    Copy,
+    Gc,
+    Keep,
+    Link,
+    Repoint,
+    /// A non-file oddity where a source belongs, replaced by an empty file.
+    Replace,
+    /// A missing source, created from the previous trunk's (`None`: empty) — over the
+    /// share link grove `laid` in its place, when one is there.
+    Seed {
+        laid: bool,
+        seed: Option<Seed>,
+    },
+}
+
+impl Op {
+    fn status(&self) -> ShareStatus {
+        match self {
+            Op::Conflict => ShareStatus::Conflict,
+            Op::Copy => ShareStatus::Copied,
+            Op::Gc => ShareStatus::Gc,
+            Op::Keep => ShareStatus::Ok,
+            Op::Link => ShareStatus::Linked,
+            Op::Repoint => ShareStatus::Repointed,
+            Op::Replace | Op::Seed { .. } => ShareStatus::Created,
+        }
+    }
+}
+
+/// A dry run as data: every row [`diagnose`] reports, each with the [`Op`] behind it
+/// (`None` on an error row).
+pub(crate) struct Plan(Vec<(ShareOutcome, Option<Op>)>);
+
+impl Plan {
+    pub(crate) fn render(self) -> Vec<ShareOutcome> {
+        self.0.into_iter().map(|(row, _)| row).collect()
+    }
+}
+
+/// Decide every row for `slug` (or all roots) and act on none: the source rows — held
+/// there when a pending trunk change fails one — then each present worktree's share
+/// rows and GC. Reads disk, never writes.
+pub(crate) fn plan(home: &Path, slug: Option<&str>) -> Result<Plan> {
+    let mut rows = Vec::new();
+    for slug in &slugs(home, slug)? {
+        let root = match Root::open(home, slug, None) {
+            Ok(root) => root,
+            Err(e) => {
+                rows.push((err(slug, None, "", &e), None));
+                continue;
+            }
+        };
+        let pass = root.pass(slug, None);
+        let sources: Vec<_> = (root.declared.iter())
+            .map(|share| row(pass, None, Action::Diagnose, pass.trunk_fd, share))
+            .collect();
+        let held = pass.pending && sources.iter().any(|(o, _)| o.status.is_error());
+        rows.extend(sources);
+        if held {
+            continue;
+        }
+        for wt in present_worktrees(home, slug) {
+            let wt_fd = match open_dir_nofollow(&root.fd, OsStr::new(&wt)) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    let reason = format!("open worktree: {e:#}");
+                    rows.push((err(slug, Some(&wt), "", &reason), None));
+                    continue;
+                }
+            };
+            rows.extend(
+                (root.declared.iter())
+                    .map(|share| row(pass, Some(&wt), Action::Diagnose, &wt_fd, share)),
+            );
+            let mut gc = Vec::new();
+            let wt_dir = root.dir.join(&wt);
+            gc_worktree(
+                pass,
+                &wt,
+                &wt_dir,
+                &wt_fd,
+                &root.declared,
+                Action::Diagnose,
+                &mut gc,
+            );
+            rows.extend(gc.into_iter().map(|o| {
+                let op = (!o.status.is_error()).then_some(Op::Gc);
+                (o, op)
+            }));
+        }
+    }
+    Ok(Plan(rows))
+}
+
+/// The parallel run while [`plan`] grows beside the walker: on every state a grove-ops
+/// unit test hands [`diagnose`], [`materialize`] or [`carry`] (for `carry`, the
+/// non-carry plan of that state), the walker's dry pass renders the same.
+#[cfg(test)]
+fn parallel_run(home: &Path, slug: Option<&str>) {
+    let text = |e: anyhow::Error| format!("{e:#}");
+    assert_eq!(
+        plan(home, slug).map(Plan::render).map_err(text),
+        run(home, slug, Action::Diagnose).map_err(text),
+        "plan diverged from the walker's dry run"
+    );
 }
 
 /// The [`materialize`] pass `converge_trunk` runs across a trunk change, before it
 /// moves `HEAD`: links through `prev_trunk` are grove's own to repoint, and a source
 /// missing from the new trunk is seeded from `prev_trunk`'s.
 pub(crate) fn carry(home: &Path, slug: &str, prev_trunk: &str) -> Vec<ShareOutcome> {
+    #[cfg(test)]
+    parallel_run(home, Some(slug));
     let mut out = Vec::new();
     run_root(
         home,
@@ -206,19 +326,85 @@ pub(crate) fn carry(home: &Path, slug: &str, prev_trunk: &str) -> Vec<ShareOutco
 
 /// The per-root constants every row of a pass carries: the slug it reports under, the
 /// name of the trunk directory its links point through, the previous trunk — the
-/// trunk itself except in [`carry`] — and whether a trunk change is pending outside
-/// it. Bundled so the row helpers keep a readable arity.
+/// trunk itself except in [`carry`] — whether a trunk change is pending outside
+/// it, and the two trunks' dirfds. Bundled so the row helpers keep a readable arity.
 #[derive(Clone, Copy)]
 struct Pass<'a> {
     slug: &'a str,
     trunk_name: &'a str,
     prev_trunk: &'a str,
     pending: bool,
+    prev_fd: Option<BorrowedFd<'a>>,
+    trunk_fd: BorrowedFd<'a>,
 }
 
 impl Pass<'_> {
     fn owns(self, rel: &Path, target: &Path) -> bool {
         is_under_trunk(self.trunk_name, rel, target) || is_under_trunk(self.prev_trunk, rel, target)
+    }
+}
+
+/// A root opened for a pass: its trunk state, the dirfds its rows read through, and its
+/// declared shares.
+struct Root {
+    declared: Vec<Share>,
+    dir: PathBuf,
+    fd: OwnedFd,
+    prev_fd: Option<OwnedFd>,
+    state: TrunkState,
+    trunk_fd: OwnedFd,
+}
+
+impl Root {
+    /// Open `slug` for a pass, or say why it cannot be — the root's one error row.
+    fn open(home: &Path, slug: &str, prev_trunk: Option<&str>) -> Result<Self, String> {
+        // Defense in depth — `doctor <slug>` takes user input; a bad slug never builds a path.
+        manifest::validate_slug(slug).map_err(|_| "invalid slug")?;
+        let dir = code_dir(home, slug);
+        // Which directory is the trunk is a manifest question, so it is asked once per
+        // root and carried through every row below — never re-derived per share.
+        let state = roots::trunk_state(home, slug).map_err(|e| format!("resolve trunk: {e:#}"))?;
+        let trunk = state.trunk();
+        if !trunk.dir.exists() {
+            return Err("trunk missing — clone/realize the root first".into());
+        }
+        let fd = open_dir(&dir).map_err(|e| format!("open root: {e:#}"))?;
+        let trunk_fd = open_dir_nofollow(&fd, OsStr::new(&trunk.name))
+            .map_err(|e| format!("open {}: {e:#}", trunk.name))?;
+        // The previous trunk seeds a missing source; outside [`carry`] that is the trunk
+        // itself, where an absent source is absent still, so the seed falls through to
+        // empty. Only a missing previous trunk seeds nothing: one that cannot be opened holds.
+        let prev = prev_trunk.unwrap_or(&trunk.name);
+        let prev_fd = match open_dir_nofollow(&fd, OsStr::new(prev)) {
+            Ok(fd) => Some(fd),
+            Err(e) if e.downcast_ref() == Some(&Errno::NOENT) => None,
+            Err(e) => return Err(format!("open {prev}: {e:#}")),
+        };
+        let declared = manifest::list_shares(&manifest_path(home), slug)
+            .map_err(|e| format!("read shares: {e:#}"))?;
+        Ok(Self {
+            declared,
+            dir,
+            fd,
+            prev_fd,
+            state,
+            trunk_fd,
+        })
+    }
+
+    fn pass<'a>(&'a self, slug: &'a str, prev_trunk: Option<&'a str>) -> Pass<'a> {
+        let trunk_name = &self.state.trunk().name;
+        Pass {
+            slug,
+            trunk_name,
+            prev_trunk: prev_trunk.unwrap_or(trunk_name),
+            // `HEAD` off the declared trunk: a change only [`carry`] can make, so a source
+            // missing here is its to seed, never this pass's to create empty. Detection
+            // only — ownership is still `trunk_name`/`prev_trunk`'s.
+            pending: prev_trunk.is_none() && matches!(self.state, TrunkState::Changing { .. }),
+            prev_fd: self.prev_fd.as_ref().map(AsFd::as_fd),
+            trunk_fd: self.trunk_fd.as_fd(),
+        }
     }
 }
 
@@ -229,76 +415,19 @@ fn run_root(
     prev_trunk: Option<&str>,
     out: &mut Vec<ShareOutcome>,
 ) {
-    // Defense in depth — `doctor <slug>` takes user input; a bad slug never builds a path.
-    if manifest::validate_slug(slug).is_err() {
-        out.push(err(slug, None, "", "invalid slug"));
-        return;
-    }
-    let root = code_dir(home, slug);
-    // Which directory is the trunk is a manifest question, so it is asked once per
-    // root and carried through every row below — never re-derived per share.
-    let state = match roots::trunk_state(home, slug) {
-        Ok(state) => state,
-        Err(e) => return out.push(err(slug, None, "", &format!("resolve trunk: {e:#}"))),
+    let root = match Root::open(home, slug, prev_trunk) {
+        Ok(root) => root,
+        Err(e) => return out.push(err(slug, None, "", &e)),
     };
-    let trunk = state.trunk();
-    if !trunk.dir.exists() {
-        out.push(err(
-            slug,
-            None,
-            "",
-            "trunk missing — clone/realize the root first",
-        ));
-        return;
-    }
-    let pass = Pass {
-        slug,
-        trunk_name: &trunk.name,
-        prev_trunk: prev_trunk.unwrap_or(&trunk.name),
-        // `HEAD` off the declared trunk: a change only [`carry`] can make, so a source
-        // missing here is its to seed, never this pass's to create empty. Detection only —
-        // ownership is still `trunk_name`/`prev_trunk`'s.
-        pending: prev_trunk.is_none() && matches!(state, TrunkState::Changing { .. }),
-    };
-
-    let root_fd = match open_dir(&root) {
-        Ok(fd) => fd,
-        Err(e) => return out.push(err(slug, None, "", &format!("open root: {e:#}"))),
-    };
-    let trunk_fd = match open_dir_nofollow(&root_fd, OsStr::new(&trunk.name)) {
-        Ok(fd) => fd,
-        Err(e) => {
-            return out.push(err(slug, None, "", &format!("open {}: {e:#}", trunk.name)));
-        }
-    };
-    // The previous trunk seeds a missing source; outside [`carry`] that is the trunk
-    // itself, where an absent source is absent still, so the seed falls through to empty.
-    // Only a missing previous trunk seeds nothing: one that cannot be opened holds.
-    let prev_fd = match open_dir_nofollow(&root_fd, OsStr::new(pass.prev_trunk)) {
-        Ok(fd) => Some(fd),
-        Err(e) if e.downcast_ref() == Some(&Errno::NOENT) => None,
-        Err(e) => {
-            return out.push(err(
-                slug,
-                None,
-                "",
-                &format!("open {}: {e:#}", pass.prev_trunk),
-            ));
-        }
-    };
-    let declared = match manifest::list_shares(&manifest_path(home), slug) {
-        Ok(d) => d,
-        Err(e) => return out.push(err(slug, None, "", &format!("read shares: {e:#}"))),
-    };
+    let pass = root.pass(slug, prev_trunk);
 
     // 1. Source pass — ensure each `<trunk>/<p>` exists. A carry is all-or-nothing: a
     // dry run first, so a source it cannot seed holds it before any seed is written, and
     // a failed row returns before a link is moved off the trunk `HEAD` has not left — or,
     // while a change is pending, laid onto the new trunk's still-missing source.
     let sources = |action| -> Vec<_> {
-        declared
-            .iter()
-            .map(|share| source_outcome(pass, action, &trunk_fd, prev_fd.as_ref(), share))
+        (root.declared.iter())
+            .map(|share| row(pass, None, action, pass.trunk_fd, share).0)
             .collect()
     };
     let failed = |rows: &[ShareOutcome]| rows.iter().any(|o| o.status.is_error());
@@ -314,229 +443,221 @@ fn run_root(
 
     // 2/3. Link + GC pass, per present worktree (never the trunk/reserved dirs).
     for wt in present_worktrees(home, slug) {
-        let wt_fd = match open_dir_nofollow(&root_fd, OsStr::new(&wt)) {
+        let wt_fd = match open_dir_nofollow(&root.fd, OsStr::new(&wt)) {
             Ok(fd) => fd,
             Err(e) => {
                 out.push(err(slug, Some(&wt), "", &format!("open worktree: {e:#}")));
                 continue;
             }
         };
-        for share in &declared {
-            out.push(match share.mode {
-                ShareMode::Symlink => link_outcome(pass, &wt, action, &wt_fd, &share.path),
-                ShareMode::Copy => copy_outcome(pass, &wt, action, &trunk_fd, &wt_fd, &share.path),
-            });
+        for share in &root.declared {
+            out.push(row(pass, Some(&wt), action, &wt_fd, share).0);
         }
-        gc_worktree(pass, &wt, &root.join(&wt), &wt_fd, &declared, action, out);
+        let wt_dir = root.dir.join(&wt);
+        gc_worktree(pass, &wt, &wt_dir, &wt_fd, &root.declared, action, out);
     }
 }
 
-/// Source row: classify `<trunk>/<p>`, create it when missing (materialize) — seeded
-/// from the previous trunk's `<p>` across a trunk change, so a link repointed onto
-/// the new trunk reads the same bytes (a symlink source as the same link); empty only
-/// when that source is absent too, and an `Error` row, nothing created, when it cannot
-/// be read or the change is pending. The seed is read on a dry run too, so a carry's
-/// dry run fails exactly where its real pass would.
-fn source_outcome<Fd: AsFd>(
+/// One share row under `base` — the trunk for a source row (`wt` is `None`), else
+/// worktree `wt`: descend to the leaf, decide, and act when materializing. A dry run
+/// hands back the decision; a mutating one has spent it.
+fn row<Fd: AsFd>(
     pass: Pass,
+    wt: Option<&str>,
     action: Action,
-    trunk_fd: Fd,
-    prev_fd: Option<&OwnedFd>,
+    base: Fd,
     share: &Share,
-) -> ShareOutcome {
+) -> (ShareOutcome, Option<Op>) {
     let rel = Path::new(&share.path);
-    let seed = || -> Result<_> {
-        let seed = prev_fd
-            .map(|fd| read_present(fd, rel))
-            .transpose()?
-            .flatten();
-        // A relative target that never climbs out of the trunk names the old trunk's own
-        // file: carried verbatim it would dangle in the new one.
-        if let Some(Seed::Link(target)) = &seed
-            && target.is_relative()
-            && rel
-                .with_file_name(target)
-                .components()
-                .try_fold(0, |depth: u32, c| match c {
-                    Component::ParentDir => depth.checked_sub(1),
-                    Component::Normal(_) => Some(depth + 1),
-                    _ => Some(depth),
-                })
-                .is_some()
-        {
-            bail!(
-                "symlink source points inside the old trunk; re-create it in {}",
-                pass.trunk_name
-            );
+    let result = descend_parent(&base, rel, action.mutates()).and_then(|at| {
+        let op = match wt {
+            None => source_op(pass, at.as_ref(), rel)?,
+            Some(_) => share_op(pass, share.mode, at.as_ref(), rel)?,
+        };
+        match (action, at) {
+            (Action::Materialize(fix), Some((parent_fd, leaf))) => {
+                Ok((act(pass, fix, &parent_fd, &leaf, rel, op)?, None))
+            }
+            _ => Ok((op.status(), Some(op))),
         }
-        Ok(seed)
+    });
+    let path = &share.path;
+    match result {
+        Ok((ShareStatus::Conflict, op)) => (
+            ShareOutcome {
+                reason: Some(
+                    "a real file/dir/foreign symlink exists here; not clobbered (use --fix)".into(),
+                ),
+                ..ok(pass.slug, wt, path, ShareStatus::Conflict)
+            },
+            op,
+        ),
+        Ok((status, op)) => (ok(pass.slug, wt, path, status), op),
+        Err(e) => (err(pass.slug, wt, path, &format!("{e:#}")), None),
+    }
+}
+
+/// Source decision: classify `<trunk>/<p>` (`at` is `None` when a parent is missing,
+/// which only a dry run sees) and create it when missing — seeded from the previous
+/// trunk's `<p>` across a trunk change, so a link repointed onto the new trunk reads
+/// the same bytes (a symlink source as the same link); empty only when that source is
+/// absent too, and an error, nothing created, when it cannot be read or the change is
+/// pending. The seed is read on a dry run too, so a carry's dry run fails exactly where
+/// its real pass would.
+fn source_op(pass: Pass, at: Option<&(OwnedFd, OsString)>, rel: &Path) -> Result<Op> {
+    // parent missing, diagnose → would-create; the pending check below is never reached
+    // here, though the real pass, having made the parent, fails it
+    let Some((parent_fd, leaf)) = at else {
+        return Ok(Op::Seed {
+            laid: false,
+            seed: seed(pass, rel)?,
+        });
     };
-    let result = (|| -> Result<ShareStatus> {
-        match descend_parent(&trunk_fd, rel, action.mutates())? {
-            // parent missing, diagnose → would-create
-            None => seed().map(|_| ShareStatus::Created),
-            Some((parent_fd, leaf)) => {
-                let state = classify_leaf(&parent_fd, &leaf)?;
-                // The share link grove laid where a carry's source goes, while the new
-                // trunk was a worktree, is no source of the user's: seeded over, as if
-                // absent — unless it reads a directory, which no seed carries.
-                let laid = matches!(&state, LeafState::Symlink { target }
-                    if pass.prev_trunk != pass.trunk_name
-                        && *target == trunk_relative_target(pass.prev_trunk, rel)
-                        && !statat(&parent_fd, &leaf, AtFlags::empty())
-                            .is_ok_and(|s| FileType::from_raw_mode(s.st_mode).is_dir()));
-                match if laid { LeafState::Absent } else { state } {
-                    LeafState::Absent => {
-                        if pass.pending {
-                            bail!("trunk change pending; reconcile carries it");
-                        }
-                        let seed = seed()?;
-                        if action.mutates() {
-                            // a file seed renames over the link; a link or empty one cannot
-                            if laid && !matches!(seed, Some(Seed::File(..))) {
-                                unlinkat(&parent_fd, &leaf, AtFlags::empty())
-                                    .context("unlink the share link in the source's place")?;
-                            }
-                            match seed {
-                                Some(Seed::File(bytes, mode)) => {
-                                    write_file(&parent_fd, &leaf, &bytes, mode)?;
-                                }
-                                Some(Seed::Link(target)) => link_leaf(&parent_fd, &leaf, &target)?,
-                                None => create_empty(&parent_fd, &leaf)?,
-                            }
-                        }
-                        Ok(ShareStatus::Created)
-                    }
-                    // A real file or pre-made dir IS the source; leave it. And D5: a
-                    // *symlink* where the source belongs is the user's own choice of
-                    // source — respected too, never unlinked/replaced. A `_.symlink` share
-                    // reads *through* it (worktree → `<trunk>/<p>` → the user's target); a
-                    // `_.copy` share's `NOFOLLOW` source open refuses it downstream (a copy
-                    // from a link is reported per-worktree, not silently followed).
-                    LeafState::RealFile | LeafState::Dir | LeafState::Symlink { .. } => {
-                        Ok(ShareStatus::Ok)
-                    }
-                    // A non-file/dir/symlink oddity (fifo, socket, …) can't serve as a
-                    // source — it's inside the trunk (grove's domain), so replace it.
-                    LeafState::Other => {
-                        if action.mutates() {
-                            unlinkat(&parent_fd, &leaf, AtFlags::empty())
-                                .context("unlink non-file source")?;
-                            create_empty(&parent_fd, &leaf)?;
-                        }
-                        Ok(ShareStatus::Created)
-                    }
-                }
+    let state = classify_leaf(parent_fd, leaf)?;
+    // The share link grove laid where a carry's source goes, while the new trunk was a
+    // worktree, is no source of the user's: seeded over, as if absent — unless it reads
+    // a directory, which no seed carries.
+    let laid = matches!(&state, LeafState::Symlink { target }
+        if pass.prev_trunk != pass.trunk_name
+            && *target == trunk_relative_target(pass.prev_trunk, rel)
+            && !statat(parent_fd, leaf, AtFlags::empty())
+                .is_ok_and(|s| FileType::from_raw_mode(s.st_mode).is_dir()));
+    Ok(match if laid { LeafState::Absent } else { state } {
+        LeafState::Absent => {
+            if pass.pending {
+                bail!("trunk change pending; reconcile carries it");
+            }
+            Op::Seed {
+                laid,
+                seed: seed(pass, rel)?,
             }
         }
-    })();
-    match result {
-        Ok(status) => ok(pass.slug, None, &share.path, status),
-        Err(e) => err(pass.slug, None, &share.path, &format!("{e:#}")),
-    }
+        // A real file or pre-made dir IS the source; leave it. And D5: a *symlink* where
+        // the source belongs is the user's own choice of source — respected too, never
+        // unlinked/replaced. A `_.symlink` share reads *through* it (worktree →
+        // `<trunk>/<p>` → the user's target); a `_.copy` share's `NOFOLLOW` source open
+        // refuses it downstream (a copy from a link is reported per-worktree, not
+        // silently followed).
+        LeafState::RealFile | LeafState::Dir | LeafState::Symlink { .. } => Op::Keep,
+        // A non-file/dir/symlink oddity (fifo, socket, …) can't serve as a source — it's
+        // inside the trunk (grove's domain), so replace it.
+        LeafState::Other => Op::Replace,
+    })
 }
 
-/// Link row: classify `<wt>/<p>`, link/repoint to `../…/<trunk>/<p>`, never clobber.
+/// The previous trunk's `<p>`, to seed a missing source from. A relative symlink target
+/// that never climbs out of the trunk names the old trunk's own file: carried verbatim
+/// it would dangle in the new one, so it is refused.
+fn seed(pass: Pass, rel: &Path) -> Result<Option<Seed>> {
+    let seed = (pass.prev_fd)
+        .map(|fd| read_present(fd, rel))
+        .transpose()?
+        .flatten();
+    if let Some(Seed::Link(target)) = &seed
+        && target.is_relative()
+        && rel
+            .with_file_name(target)
+            .components()
+            .try_fold(0, |depth: u32, c| match c {
+                Component::ParentDir => depth.checked_sub(1),
+                Component::Normal(_) => Some(depth + 1),
+                _ => Some(depth),
+            })
+            .is_some()
+    {
+        bail!(
+            "symlink source points inside the old trunk; re-create it in {}",
+            pass.trunk_name
+        );
+    }
+    Ok(seed)
+}
+
+/// Worktree decision for `<wt>/<p>` (`at` as in [`source_op`]). A `_.symlink` share
+/// links/repoints to `../…/<trunk>/<p>` and never clobbers. A `_.copy` share is seeded
+/// once as an independent real file from `<trunk>/<p>`: only into an empty slot, or over
+/// a stale *grove-owned* symlink — the mode migration from a prior `_.symlink`
+/// declaration, data-free and safe to replace. A real file, foreign symlink or dir
+/// already there is the worktree's own: seed-once **never clobbers**, and `--fix` has
+/// no bearing (a copy has no "wrong state" to heal — it is fire-and-forget).
 // ※ never-clobber
-fn link_outcome<Fd: AsFd>(
+fn share_op(
     pass: Pass,
-    wt: &str,
-    action: Action,
-    wt_fd: Fd,
-    path: &str,
-) -> ShareOutcome {
-    let rel = Path::new(path);
-    let target = trunk_relative_target(pass.trunk_name, rel);
-    let result = (|| -> Result<ShareStatus> {
-        let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, action.mutates())? else {
-            return Ok(ShareStatus::Linked); // parent missing, diagnose → would-link
-        };
-        match classify_leaf(&parent_fd, &leaf)? {
-            LeafState::Absent => {
-                if action.mutates() {
-                    link_leaf(&parent_fd, &leaf, &target)?;
-                }
-                Ok(ShareStatus::Linked)
-            }
-            LeafState::Symlink { target: cur } if cur == target => Ok(ShareStatus::Ok),
-            // A *grove-shaped* link (points under the trunk) but at the wrong path is
-            // a stale grove link — self-heal by repointing.
-            LeafState::Symlink { target: cur } if pass.owns(rel, &cur) => {
-                if action.mutates() {
-                    repoint_leaf(&parent_fd, &leaf, &target)?;
-                }
-                Ok(ShareStatus::Repointed)
-            }
-            // A FOREIGN symlink (user-authored, points elsewhere), a real file, or a
-            // dir: never silently clobbered — report a conflict (or, with `--fix`,
-            // back it up then link).
-            LeafState::Symlink { .. } | LeafState::RealFile | LeafState::Dir | LeafState::Other => {
-                match action {
-                    Action::Materialize(Fix::Force) => {
-                        backup_then_link(&parent_fd, &leaf, &target).map(|_| ShareStatus::Created)
-                    }
-                    _ => Ok(ShareStatus::Conflict),
-                }
-            }
+    mode: ShareMode,
+    at: Option<&(OwnedFd, OsString)>,
+    rel: &Path,
+) -> Result<Op> {
+    let state = at.map(|(fd, leaf)| classify_leaf(fd, leaf)).transpose()?;
+    Ok(match (mode, state) {
+        // parent missing, diagnose → would-link / would-copy
+        (ShareMode::Symlink, None | Some(LeafState::Absent)) => Op::Link,
+        (ShareMode::Copy, None | Some(LeafState::Absent)) => Op::Copy,
+        (ShareMode::Symlink, Some(LeafState::Symlink { target }))
+            if target == trunk_relative_target(pass.trunk_name, rel) =>
+        {
+            Op::Keep
         }
-    })();
-    match result {
-        Ok(ShareStatus::Conflict) => ShareOutcome {
-            slug: pass.slug.into(),
-            worktree: Some(wt.into()),
-            path: path.into(),
-            status: ShareStatus::Conflict,
-            reason: Some(
-                "a real file/dir/foreign symlink exists here; not clobbered (use --fix)".into(),
-            ),
-        },
-        Ok(status) => ok(pass.slug, Some(wt), path, status),
-        Err(e) => err(pass.slug, Some(wt), path, &format!("{e:#}")),
-    }
+        // A *grove-shaped* link (points under the trunk) at the wrong path is a stale
+        // grove link — self-heal by repointing, or replace it with the seeded copy.
+        (ShareMode::Symlink, Some(LeafState::Symlink { target })) if pass.owns(rel, &target) => {
+            Op::Repoint
+        }
+        (ShareMode::Copy, Some(LeafState::Symlink { target })) if pass.owns(rel, &target) => {
+            Op::Copy
+        }
+        // A FOREIGN symlink (user-authored, points elsewhere), a real file, or a dir:
+        // never silently clobbered — a link reports a conflict (or, with `--fix`, backs
+        // it up then links); a copy leaves it to the worktree.
+        (ShareMode::Symlink, Some(_)) => Op::Conflict,
+        (ShareMode::Copy, Some(_)) => Op::Keep,
+    })
 }
 
-/// Copy row: seed `<wt>/<p>` as an independent real file from `<trunk>/<p>`, once.
-/// Written only into an empty slot (or over a stale *grove-owned* symlink — the
-/// mode migration from a prior `_.symlink` declaration; data-free, safe to replace).
-/// A real file, a foreign symlink, or a dir already there is the worktree's own:
-/// seed-once **never clobbers**, and `--fix` has no bearing (a copy has no "wrong
-/// state" to heal — it is fire-and-forget).
-fn copy_outcome<Tf: AsFd, Wf: AsFd>(
+/// The acting half of a row: make `op`'s write at `leaf` under `parent` and report the
+/// row's status — a conflict `--fix` backs up is `Created`.
+fn act<Fd: AsFd>(
     pass: Pass,
-    wt: &str,
-    action: Action,
-    trunk_fd: Tf,
-    wt_fd: Wf,
-    path: &str,
-) -> ShareOutcome {
-    let rel = Path::new(path);
-    let result = (|| -> Result<ShareStatus> {
-        let Some((parent_fd, leaf)) = descend_parent(&wt_fd, rel, action.mutates())? else {
-            return Ok(ShareStatus::Copied); // parent missing, diagnose → would-copy
-        };
-        let seed = match classify_leaf(&parent_fd, &leaf)? {
-            LeafState::Absent => true,
-            // A grove-owned symlink (prior `_.symlink` for this path) is data-free —
-            // replace it with the seeded copy (symlink→copy migration).
-            LeafState::Symlink { target } if pass.owns(rel, &target) => true,
-            // Foreign symlink / real file / dir: the worktree owns it. Leave it.
-            LeafState::Symlink { .. } | LeafState::RealFile | LeafState::Dir | LeafState::Other => {
-                false
+    fix: Fix,
+    parent: Fd,
+    leaf: &OsStr,
+    rel: &Path,
+    op: Op,
+) -> Result<ShareStatus> {
+    let status = op.status();
+    let target = trunk_relative_target(pass.trunk_name, rel);
+    match op {
+        Op::Conflict if fix == Fix::Force => {
+            backup_then_link(&parent, leaf, &target)?;
+            return Ok(ShareStatus::Created);
+        }
+        Op::Conflict | Op::Keep => {}
+        Op::Copy => {
+            let (bytes, mode) = read_source(pass.trunk_fd, rel)?;
+            write_file(&parent, leaf, &bytes, mode)?;
+        }
+        // `unlinkat` removes the LINK, never its target.
+        Op::Gc => unlinkat(&parent, leaf, AtFlags::empty())
+            .with_context(|| format!("gc {}", leaf.display()))?,
+        Op::Link => link_leaf(&parent, leaf, &target)?,
+        Op::Repoint => repoint_leaf(&parent, leaf, &target)?,
+        Op::Replace => {
+            unlinkat(&parent, leaf, AtFlags::empty()).context("unlink non-file source")?;
+            create_empty(&parent, leaf)?;
+        }
+        Op::Seed { laid, seed } => {
+            // a file seed renames over the link; a link or empty one cannot
+            if laid && !matches!(seed, Some(Seed::File(..))) {
+                unlinkat(&parent, leaf, AtFlags::empty())
+                    .context("unlink the share link in the source's place")?;
             }
-        };
-        if !seed {
-            return Ok(ShareStatus::Ok);
+            match seed {
+                Some(Seed::File(bytes, mode)) => write_file(&parent, leaf, &bytes, mode)?,
+                Some(Seed::Link(target)) => link_leaf(&parent, leaf, &target)?,
+                None => create_empty(&parent, leaf)?,
+            }
         }
-        if action.mutates() {
-            let (bytes, mode) = read_source(&trunk_fd, rel)?;
-            write_file(&parent_fd, &leaf, &bytes, mode)?;
-        }
-        Ok(ShareStatus::Copied)
-    })();
-    match result {
-        Ok(status) => ok(pass.slug, Some(wt), path, status),
-        Err(e) => err(pass.slug, Some(wt), path, &format!("{e:#}")),
     }
+    Ok(status)
 }
 
 /// GC pass: a worktree top-level symlink pointing through the trunk
@@ -577,11 +698,12 @@ fn gc_worktree<Fd: AsFd>(
         // Grove-shaped is the one ownership test in this module: the same predicate
         // that lets a stale link be repointed lets an undeclared one be collected, so
         // a link laid through the legacy trunk name is GC'd rather than stranded.
-        let gc = if action.mutates() {
-            gc_leaf(&wt_fd, &name, pass)
-        } else {
-            is_grove_link(&wt_fd, &name, pass)
-        };
+        let gc = is_grove_link(&wt_fd, &name, pass).and_then(|gc| match action {
+            Action::Materialize(fix) if gc => {
+                act(pass, fix, &wt_fd, &name, Path::new(&name), Op::Gc).map(|_| gc)
+            }
+            _ => Ok(gc),
+        });
         if let Ok(true) = gc {
             out.push(ok(pass.slug, Some(wt), name_str, ShareStatus::Gc));
         }
@@ -781,19 +903,8 @@ fn write_file<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, bytes: &[u8], mode: Mode) -> Re
         .with_context(|| format!("rename {} -> {}", tmp.display(), leaf.display()))
 }
 
-/// GC a leaf IFF it is a symlink grove's own — one [`Pass::owns`]. A real
-/// file or foreign-target symlink is left untouched. `unlinkat` removes the LINK,
-/// never its target.
-fn gc_leaf<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
-    if is_grove_link(&dirfd, leaf, pass)? {
-        unlinkat(&dirfd, leaf, AtFlags::empty())
-            .with_context(|| format!("gc {}", leaf.display()))?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
+/// Is `leaf` a symlink grove's own — one [`Pass::owns`]? Only such a link is GC'd; a
+/// real file or foreign-target symlink is left untouched.
 fn is_grove_link<Fd: AsFd>(dirfd: Fd, leaf: &OsStr, pass: Pass) -> Result<bool> {
     Ok(
         matches!(classify_leaf(dirfd, leaf)?, LeafState::Symlink { target } if pass.owns(Path::new(leaf), &target)),
@@ -1456,6 +1567,8 @@ mod tests {
             trunk_name: "main",
             prev_trunk: "main",
             pending: false,
+            prev_fd: None,
+            trunk_fd: fd.as_fd(),
         };
         let mut out = Vec::new();
         gc_worktree(pass, "feat", &feat, &fd, &[], Action::Diagnose, &mut out);
