@@ -236,11 +236,8 @@ fn run_root(
     }
     let root = code_dir(home, slug);
     // Which directory is the trunk is a manifest question, so it is asked once per
-    // root and carried through every row below — never re-derived per share. A `HEAD`
-    // git cannot read is no pending change: the pass runs on the declared trunk.
-    let state = match roots::trunk_state(home, slug)
-        .or_else(|_| roots::trunk(home, slug).map(|trunk| TrunkState::Settled { trunk }))
-    {
+    // root and carried through every row below — never re-derived per share.
+    let state = match roots::trunk_state(home, slug) {
         Ok(state) => state,
         Err(e) => return out.push(err(slug, None, "", &format!("resolve trunk: {e:#}"))),
     };

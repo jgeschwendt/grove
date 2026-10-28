@@ -183,9 +183,15 @@
   <ol id="next" class="steps">
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
-    <li><strong>The seven trunk-change findings wait on the owner</strong>:
-      <code class="code">proposal:jgeschwendt/grove:share-plan-apply</code> (plan/apply over one trunk state)
-      would supersede <code class="code">trunk-change-shares</code>; touch neither until one is answered.</li>
+    <li><strong>Share plan/apply, stages 2–5</strong> (approved 2026-10-27, thread 0109c212; supersedes
+      <code class="code">trunk-change-shares</code>): stage 1's <code class="code">roots::TrunkState</code> is on trunk.
+      Next, a pure <code class="code">env::plan</code> run in parallel with the walker until
+      <code class="code">diagnose</code> equals <code class="code">plan().render()</code>; then
+      <code class="code">apply</code>, which deletes <code class="code">Action</code>; then the owner-ruled
+      seeding rules; then the <code class="code">default_branch</code> fitness guard.</li>
+    <li><strong>Wire telemetry into <code class="code">grove serve</code></strong> (approved A, thread 2f4f0398):
+      opt-in through <code class="code">GROVE_TELEMETRY</code>, with a batch exporter and a
+      <code class="code">tracing-opentelemetry</code> layer.</li>
   </ol>
 </section>
 

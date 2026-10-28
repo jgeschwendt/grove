@@ -92,8 +92,9 @@ pub fn trunk(home: &Path, slug: &str) -> Result<Trunk> {
 
 /// A root's trunk with whether a change onto it is pending: `Changing` while the bare's
 /// `HEAD` (`from`) still names another branch than [`trunk`] resolves (`to`) — a
-/// manifest edit `converge_trunk` has not yet made disk — else `Settled`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// manifest edit `converge_trunk` has not yet made disk, or a hand-moved `HEAD` —
+/// else `Settled`.
+#[derive(Debug)]
 pub enum TrunkState {
     Changing { from: String, to: Trunk },
     Settled { trunk: Trunk },
