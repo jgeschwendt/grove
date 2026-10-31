@@ -20,17 +20,18 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
     };
     let gone = |rel: &str| drop(fs::remove_file(tmp.path().join(rel)));
+    // stubs carry a shebang: Linux's spawn, unlike macOS's, never falls back to sh
     // `print` answers loaded while `loaded` exists; `print-disabled` prints `disabled`; `fail`
     // fails the bootstrap of the agent it names
     put(
         "stub/launchctl",
-        "echo \"$*\" >> \"$HOME/log\"\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ]; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
+        "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ]; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
     );
     put(
         "stub/mise",
-        "case $1 in ls) echo '{\"packslip:jgeschwendt/grove\":[{\"active\":true,\"installed\":true,\"version\":\"2026.10.1\"}]}' ;; latest) echo 2026.10.1 ;; esac",
+        "#!/bin/sh\ncase $1 in ls) echo '{\"packslip:jgeschwendt/grove\":[{\"active\":true,\"installed\":true,\"version\":\"2026.10.1\"}]}' ;; latest) echo 2026.10.1 ;; esac",
     );
-    put("stub/curl", "echo \"curl $*\" >> \"$HOME/log\"");
+    put("stub/curl", "#!/bin/sh\necho \"curl $*\" >> \"$HOME/log\"");
     put("disabled", "");
     let bind = TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -69,7 +70,7 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["setup"], 1),
         format!(
-            "grove: no mise shim at {shim}: install with `mise use -g packslip:jgeschwendt/grove` first\nprint-disabled {gui}\n"
+            "grove: no mise shim at {shim}: install with `mise use -g packslip:jgeschwendt/grove` first\n"
         )
     );
     fs::create_dir_all(Path::new(&shim).parent().expect("shims")).expect("shims");
