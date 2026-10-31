@@ -22,6 +22,13 @@ const UPGRADE: &str = "dev.gigantic.grove.upgrade";
 /// disabled gets its plist and a hint, never a bootstrap or bootout; a failed bootstrap
 /// fails the run only after every other agent is loaded.
 pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
+    let shim = hotswap::shims().join("grove");
+    if !remove && !shim.exists() {
+        return Err(CliError::Api(format!(
+            "no mise shim at {}: install with `mise use -g packslip:jgeschwendt/grove` first",
+            shim.display()
+        )));
+    }
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
     let uid = Command::new("id").arg("-u").output();
     let gui = format!(
@@ -42,7 +49,6 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
         .unwrap_or_default();
     let held = |label: &str| disabled.contains(&format!("\"{label}\" => disabled"));
     let agents = home.join("Library/LaunchAgents");
-    let shim = hotswap::shims().join("grove");
     let link = home.join(".local/bin/grove");
     let make = |path: &Path, op: &dyn Fn() -> std::io::Result<()>| {
         fs::create_dir_all(path.parent().unwrap_or(path))
@@ -66,12 +72,6 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
         }
         hotswap::forget("grove");
         return Ok(());
-    }
-    if !shim.exists() {
-        return Err(CliError::Api(format!(
-            "no mise shim at {}: install with `mise use -g packslip:jgeschwendt/grove` first",
-            shim.display()
-        )));
     }
     fs::remove_file(&link).ok();
     make(&link, &|| symlink(&shim, &link))?;
