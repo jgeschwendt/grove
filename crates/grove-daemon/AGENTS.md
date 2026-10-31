@@ -29,7 +29,7 @@ invariants:
     anchor: crates/grove-daemon/src/app.rs#DEFAULT_DRAIN
     enforced_by: crates/grove-daemon/tests/drain.rs
 hazards:
-  - claim: "a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or the self-update health gate would accept the bundle that broke it."
+  - claim: "a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or `grove upgrade`'s health smoke would accept the release that broke it."
     anchor: ※ boot-degrade-sticky
   - claim: "the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed loopback allowlist — checked against every request's Host and every mutation's Origin — are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin"
     anchor: ※ unauthenticated-api
@@ -42,7 +42,7 @@ edges:
 ## Anchors in this territory
 
 - ※ boot-degrade-sticky → src/boot.rs:68
-- ※ loopback-bind-gate → src/config.rs:189
+- ※ loopback-bind-gate → src/config.rs:192
 - ※ mutation-guard → src/guard.rs:96
 - ※ per-root-lane → src/lane.rs:174
 - ※ push-only → src/engine/mod.rs:364

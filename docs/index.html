@@ -53,7 +53,7 @@
   <nav class="row docs-toc" aria-label="sections">
     <a class="pill" href="#layout">root layout</a>
     <a class="pill" href="#engine">engine lanes</a>
-    <a class="pill" href="#update">self-update</a>
+    <a class="pill" href="#update">install and upgrade</a>
     <a class="pill" href="#decisions">decisions</a>
     <a class="pill" href="#plan">next</a>
     <a class="pill" href="#findings">open findings</a>
@@ -63,7 +63,6 @@
     <a class="pill" href="architecture.html">architecture</a>
     <a class="pill" href="deployment.html">deployment</a>
     <a class="pill" href="engine.html">engine</a>
-    <a class="pill" href="updates.html">updates</a>
     <a class="pill" href="worktrees.html">worktrees</a>
   </nav>
 </header>
@@ -89,13 +88,25 @@
 
 <section class="docs-section" id="update" data-component="update">
   <header>
-    <h2 class="h2">Self-update</h2>
-    <p class="docs-note"><code class="code">grove up</code> installs into an immutable
-      <code class="code">versions/&lt;v&gt;/</code> and moves only <code class="code">current</code>. The
-      flip lands before the health gate answers, so the verdict it owes is written first, as the
-      <code class="code">pending</code> marker. Detail: <a class="link" href="updates.html">updates</a>.</p>
+    <h2 class="h2">Install and upgrade</h2>
+    <p class="docs-note">mise installs and moves the version; <a class="link" href="https://gigantic.dev/hotswap/">hotswap</a>,
+      linked into the binary, swaps it. Every merge to <code class="code">main</code> is a GitHub
+      Release <code class="code">vYYYY.M.N</code> (<code class="code">N</code> counts the month's
+      releases from 0), macOS arm64 only, signed by packslip.</p>
   </header>
-  <figure class="figure"><img class="figure-light" src="figures/self-update.png" alt="Six steps: fetch, verify the checksum, install into an immutable versions directory, flip current after writing the pending marker, bounce the daemon, gate on GET /api/health; a healthy gate clears pending and prunes, a rejected one flips back to previous; every grove up first recovers an unproven flip from pending." /><img class="figure-dark" src="figures/self-update-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>Self-update. Source: Claude Design canvas <em>grove figures</em>, board self-update.</figcaption></figure>
+  <pre class="snippet"><code>mise use -g packslip:jgeschwendt/grove   # install the latest release
+grove setup                              # link ~/.local/bin/grove, load the agents
+grove upgrade [--check|--back|--retry]   # what the upgrade agent runs every 900 s
+grove setup --remove                     # boot out, unlink, forget; ~/.grove stays</code></pre>
+  <p class="docs-note"><code class="code">grove setup</code> writes two launchd agents:
+    <code class="code">dev.gigantic.grove</code> keeps <code class="code">&lt;mise shims&gt;/grove serve</code>
+    alive, so every start resolves mise's active version, and
+    <code class="code">dev.gigantic.grove.upgrade</code> runs <code class="code">grove upgrade</code>
+    every 900 s. An upgrade drains with <code class="code">grove off</code> (the daemon finishes
+    in-flight git work under its drain budget; launchd restarts it), re-runs setup, kickstarts the
+    server, and smokes <code class="code">grove --version</code> and <code class="code">GET /api/health</code>;
+    red rolls back to the previous version. The last swap is recorded in
+    <code class="code">~/.local/state/hotswap/grove.json</code>.</p>
 </section>
 
 <section class="docs-section" id="decisions" data-component="decisions">
@@ -105,20 +116,13 @@
       reference docs; history is in git.</p>
   </header>
   <div class="stack">
-    <h3 class="h3">The install is not the workspace <small>· v0.2.0, ea9629a</small></h3>
-    <p>Two roots with opposite lifecycles: <code class="code">$GROVE_INSTALL</code> (default
-      <code class="code">~/.local/share/grove</code> — <code class="code">versions/</code>,
-      <code class="code">current</code>, <code class="code">previous</code>,
-      <code class="code">channel</code>, <code class="code">pending</code>,
-      <code class="code">update.lock</code>) is disposable and owned by <code class="code">grove up</code>;
-      <code class="code">$GROVE_HOME</code> (default <code class="code">~/.grove</code>) is the
-      workspace and nothing else. Each has one resolution
-      (<code class="code">grove_ops::install_home</code>, <code class="code">home</code>), and the
-      launcher passes <code class="code">GROVE_INSTALL</code> to a served daemon. Why: uninstall used
-      to delete every checkout with the binary, and a second home had to carry its own install.
-      <code class="code">uninstall.sh</code> now removes the workspace only behind
-      <code class="code">--purge</code>; a stale layout is the doctor finding
-      <code class="code">install-under-home</code>, whose fix line is the four-line move.</p>
+    <h3 class="h3">mise installs, hotswap swaps <small>· 2026-10-31</small></h3>
+    <p>grove ships as a packslip release that mise installs, and its <code class="code">setup</code>
+      and <code class="code">upgrade</code> verbs are hotswap's tool contract, shared with sandman and
+      routines. mise keeps versions side by side outside <code class="code">$GROVE_HOME</code>, so the
+      workspace holds nothing an install can delete. A home that still carries an install tree is the
+      doctor finding <code class="code">install-under-home</code>, whose fix line removes it. Why: one
+      install and swap path for every gigantic tool, instead of a self-updater per tool.</p>
 
     <h3 class="h3">The trunk is a branch, named by that branch <small>· v0.2.0, ea9629a</small></h3>
     <p>Every checkout directory is <code class="code">worktrees::name_for(branch)</code>; the trunk is
@@ -181,6 +185,10 @@
       <code class="code">※</code> anchors, never line numbers.</p>
   </header>
   <ol id="next" class="steps">
+    <li><strong>Cut the first release</strong> (owner): merge to <code class="code">main</code>, then
+      <code class="code">mise use -g packslip:jgeschwendt/grove &amp;&amp; grove setup</code> on this Mac,
+      which repoints <code class="code">dev.gigantic.grove</code> at the shim; delete
+      <code class="code">~/.local/share/grove</code> after, and the self-update board on the canvas.</li>
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
     <li><strong>Share plan/apply, stage 4</strong> (approved 2026-10-27, thread 0109c212; supersedes
@@ -253,10 +261,6 @@
     <li>Coverage is measured under <code class="code">shift-test</code>
       (<code class="code">cargo llvm-cov nextest --workspace --summary-only</code>, loopback allowed
       there): 98.55 % lines at the s-20261022T0630Z landing.</li>
-    <li><code class="code">test/install_smoke.sh</code> needs a <code class="code">mktemp</code> shim on
-      <code class="code">PATH</code> that roots templates under <code class="code">$TMPDIR</code>: macOS
-      <code class="code">mktemp -d</code> ignores <code class="code">TMPDIR</code> and the sandbox
-      denies <code class="code">/var/folders</code>.</li>
   </ul>
 </section>
 
@@ -274,7 +278,6 @@
         <tr><td class="table-mono"><a class="link" href="architecture.html">architecture</a></td><td>crates, desired vs actual state, reconcile</td></tr>
         <tr><td class="table-mono"><a class="link" href="deployment.html">deployment</a></td><td>requirements, environment, served mode</td></tr>
         <tr><td class="table-mono"><a class="link" href="engine.html">engine</a></td><td>per-root engines, lanes, status derivation</td></tr>
-        <tr><td class="table-mono"><a class="link" href="updates.html">updates</a></td><td>releases, channels, <code class="code">grove up</code> and rollback</td></tr>
         <tr><td class="table-mono"><a class="link" href="worktrees.html">worktrees</a></td><td>trunk, worktrees, pool, recovery, adoption; shares and the per-worktree environment</td></tr>
         <tr><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/grove">jgeschwendt/grove</a></td><td>the repository</td></tr>
       </tbody>

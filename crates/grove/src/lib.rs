@@ -5,8 +5,8 @@
 //! This file is the command *surface* and nothing else: the clap tree, the dispatch,
 //! and `serve`. The behaviour behind each command lives beside its own reasoning —
 //! [`commands`] holds the single-realizer gate, [`render`] what gets printed and the
-//! exit verdicts, [`api`] the HTTP client, [`server`] process custody, and
-//! [`timeouts`] every budget any of them spends.
+//! exit verdicts, [`api`] the HTTP client, [`server`] process custody, [`setup`] the
+//! install and upgrade verbs, and [`timeouts`] every budget any of them spends.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -21,20 +21,19 @@ mod commands;
 mod error;
 mod render;
 mod server;
+mod setup;
 mod timeouts;
-mod update;
 
 pub use api::{ApiClient, Reachability};
 pub use error::CliError;
 pub use server::ServerControl;
-pub use update::{Bounce, BundleSource, Layout, Updater, host_target};
 
-/// The version `grove --version` and `grove version` report, and the one the
-/// self-update health gate expects a freshly flipped daemon to answer with.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version `grove --version` and `grove version` report: the release's `YYYY.M.N`,
+/// stamped through `GROVE_VERSION` by the release workflow, else the crate's.
+pub const VERSION: &str = grove_daemon::VERSION;
 
 #[derive(Debug, Parser)]
-#[command(name = "grove", version, about = "Cultivate git worktrees")]
+#[command(name = "grove", version = VERSION, about = "Cultivate git worktrees")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -70,6 +69,12 @@ enum Command {
     Reboot,
     /// Run the server in the foreground (the launcher contract: `grove serve`).
     Serve,
+    /// Install the launchd agents and link `~/.local/bin/grove` to mise's shim.
+    Setup {
+        /// Undo it: boot the agents out, delete their plists and the link.
+        #[arg(long)]
+        remove: bool,
+    },
     /// Fetch a root and fast-forward its trunk checkout (never forced).
     Sync {
         /// Repository slug (`owner/name`).
@@ -80,18 +85,18 @@ enum Command {
         #[command(subcommand)]
         action: TreeAction,
     },
-    /// Update grove via the versioned-dir symlink flip (auto-rolls-back on failure).
-    Up {
-        /// Pin a specific version instead of resolving the channel.
-        #[arg(long)]
-        version: Option<String>,
-        /// Release channel to follow (stable, canary). Default: the box's persisted
-        /// channel, else stable.
-        #[arg(long)]
-        channel: Option<String>,
-        /// Flip back to the previous version and restart.
-        #[arg(long)]
-        rollback: bool,
+    /// Move to mise's latest release: drain, swap, smoke, settle or roll back.
+    #[command(group(clap::ArgGroup::new("mode").multiple(false)))]
+    Upgrade {
+        /// Report what would happen; touch nothing.
+        #[arg(long, group = "mode")]
+        check: bool,
+        /// Roll back to the previous version.
+        #[arg(long, group = "mode")]
+        back: bool,
+        /// Upgrade past a red hold.
+        #[arg(long, group = "mode")]
+        retry: bool,
     },
     /// Print the grove version.
     Version,
@@ -184,6 +189,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Some(Command::On) => ServerControl::from_env()?.on(),
         Some(Command::Reboot) => ServerControl::from_env()?.reboot(),
         Some(Command::Serve) => serve(),
+        Some(Command::Setup { remove }) => setup::setup(*remove),
         Some(Command::Sync { slug }) => commands::sync(&home(), &api()?, slug),
         Some(Command::Tree { action }) => match action {
             TreeAction::Add { repo, branch, base } => {
@@ -196,19 +202,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 commands::tree_remove(&home(), &api()?, repo, name)
             }
         },
-        // `--rollback` ignores `--version`/`--channel` by construction: it flips to
-        // whatever `previous` names, which is the one version a rollback can mean.
-        Some(Command::Up {
-            version,
-            channel,
-            rollback,
-        }) => {
-            let updater = Updater::from_env()?.with_channel(channel.as_deref());
-            if *rollback {
-                updater.rollback()
-            } else {
-                updater.up(version.as_deref())
-            }
+        Some(Command::Upgrade { check, back, retry }) => {
+            setup::upgrade(&[("--check", *check), ("--back", *back), ("--retry", *retry)])
         }
         Some(Command::Version) => {
             println!("grove {VERSION}");
@@ -230,16 +225,6 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
 /// they are for.
 fn grove_home() -> std::path::PathBuf {
     grove_ops::home()
-}
-
-/// The install root every command launches from and `grove up` flips:
-/// `GROVE_INSTALL` → `~/.local/share/grove`.
-///
-/// Resolved by [`grove_ops::install_home`] — the one implementation of that rule,
-/// shared with the launcher and the updater, because the install and the workspace
-/// have opposite lifecycles and only one of the two may ever be thrown away.
-fn grove_install_home() -> std::path::PathBuf {
-    grove_ops::install_home()
 }
 
 /// How long the process waits, after the daemon's own bounded drain, for blocking
@@ -347,7 +332,7 @@ mod tests {
     }
 
     /// The launcher contract is a *published* string: `grove on` spawns
-    /// `<binary> serve`, `install.sh` and any supervisor unit spell it the same way,
+    /// `<binary> serve`, and the launchd agent `grove setup` writes spells it the same way,
     /// and a rename here would strand every one of them.
     #[test]
     fn serve_is_the_launcher_subcommand() {
@@ -482,44 +467,22 @@ mod tests {
         );
     }
 
-    /// `up`'s flags are the contract `install.sh` and the release flow are written
-    /// against — `install.sh` hands off with `up --version <v>`, and a canary box
-    /// follows `--channel` — so the surface is pinned here, separately from the
-    /// updater's own tests.
     #[test]
-    fn parses_up_with_flags() {
+    fn parses_setup_and_upgrade() {
+        assert_eq!(parse(&["setup"]), Some(Command::Setup { remove: false }));
         assert_eq!(
-            parse(&["up"]),
-            Some(Command::Up {
-                version: None,
-                channel: None,
-                rollback: false
-            })
+            parse(&["setup", "--remove"]),
+            Some(Command::Setup { remove: true })
         );
         assert_eq!(
-            parse(&["up", "--version", "0.4.0"]),
-            Some(Command::Up {
-                version: Some("0.4.0".into()),
-                channel: None,
-                rollback: false
+            parse(&["upgrade", "--back"]),
+            Some(Command::Upgrade {
+                check: false,
+                back: true,
+                retry: false
             })
         );
-        assert_eq!(
-            parse(&["up", "--channel", "canary"]),
-            Some(Command::Up {
-                version: None,
-                channel: Some("canary".into()),
-                rollback: false
-            })
-        );
-        assert_eq!(
-            parse(&["up", "--rollback"]),
-            Some(Command::Up {
-                version: None,
-                channel: None,
-                rollback: true
-            })
-        );
+        assert!(Cli::try_parse_from(["grove", "upgrade", "--check", "--retry"]).is_err());
     }
 
     /// A bare invocation is not an error, and an unknown subcommand is — clap's own

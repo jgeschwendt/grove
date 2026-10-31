@@ -224,9 +224,9 @@ async fn health_503s_while_still_booting() {
 }
 
 /// v1 `readiness_plug_test.exs:41-43` — health stays observable while degraded, and
-/// the reason travels. This payload is what the self-update health gate rolls a bad
-/// bundle back on, so a regression that dropped the degraded branch would be
-/// invisible until an update stranded a box.
+/// the reason travels. This payload is what an upgrade's health smoke rolls a bad
+/// release back on, so a regression that dropped the degraded branch would be
+/// invisible until an upgrade stranded a box.
 #[tokio::test]
 async fn health_503s_while_degraded_with_the_reason() {
     let tmp = TempDir::new().unwrap();

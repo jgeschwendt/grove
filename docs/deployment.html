@@ -52,7 +52,6 @@
     <a class="pill" href="api.html">api</a>
     <a class="pill" href="architecture.html">architecture</a>
     <a class="pill" href="engine.html">engine</a>
-    <a class="pill" href="updates.html">updates</a>
     <a class="pill" href="worktrees.html">worktrees</a>
   </nav>
 </header>
@@ -125,18 +124,16 @@ precondition: a daemon killed mid-clone converges on the next boot.</p>
 <tbody>
 <tr><td>a Unix host — Linux or macOS</td><td><code class="code">grove-ops</code> uses <code class="code">openat</code>/<code class="code">renameat</code>/<code class="code">symlinkat</code> through <code class="code">rustix</code>; there is no Windows path</td></tr>
 <tr><td><code class="code">git</code> on <code class="code">PATH</code></td><td>worktree, status, prune, fetch and remote reads shell out to git (<code class="code">grove_ops::git::git_command</code>, which pins <code class="code">LC_ALL=C</code> and scrubs git's local-repo environment). The bare <em>clone</em> itself goes through <code class="code">gix</code> in-process</td></tr>
-<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">grove.log</code>. The valuable half: nothing here is regenerable from a release</td></tr>
-<tr><td>a writable <code class="code">$GROVE_INSTALL</code> — the install</td><td>default <code class="code">~/.local/share/grove</code>; holds <code class="code">versions/</code>, the <code class="code">current</code> and <code class="code">previous</code> symlinks, <code class="code">channel</code>, <code class="code">pending</code>, and the advisory <code class="code">update.lock</code> (concurrent <code class="code">grove up</code>). Disposable: delete it and re-install, and no repo notices</td></tr>
-<tr><td>a filesystem with symlinks</td><td>shares in the workspace, and the whole <code class="code">current</code>/<code class="code">previous</code> install layout</td></tr>
+<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">grove.log</code>. Nothing here is regenerable from a release</td></tr>
+<tr><td>a filesystem with symlinks</td><td>shares in the workspace</td></tr>
 <tr><td>outbound HTTPS/SSH to the git remotes</td><td>clone and fetch</td></tr>
 <tr><td>loopback networking</td><td>the API</td></tr>
 </tbody>
 </table>
 </div>
 <p class="docs-note">No database, no message broker, no second runtime. One executable.</p>
-<p class="docs-note">Released platforms are <code class="code">aarch64-darwin</code>, <code class="code">x86_64-linux</code> and <code class="code">aarch64-linux</code>. Intel macOS
-(<code class="code">x86_64-darwin</code>) is not built — no runner — and both <code class="code">install.sh</code> and <code class="code">grove up</code> refuse it
-up front with that reason rather than 404ing on an asset URL that was never published.</p>
+<p class="docs-note">Releases are built for <code class="code">aarch64-apple-darwin</code> only and installed by mise
+(<a class="link" href="index.html#update">install and upgrade</a>); elsewhere, build from source.</p>
 </div>
 </section>
 
@@ -150,7 +147,6 @@ up front with that reason rather than 404ing on an asset URL that was never publ
 <thead><tr><th>variable</th><th>default</th><th>effect</th></tr></thead>
 <tbody>
 <tr><td><code class="code">GROVE_HOME</code></td><td><code class="code">~/.grove</code></td><td>the workspace grove realizes — <code class="code">manifest.toml</code>, <code class="code">code/</code> (checkouts), <code class="code">roots/</code> (bares, pools, clone markers), <code class="code">grove.{lock,pid,log}</code> — resolved once, in <code class="code">grove_ops::home</code>, for the CLI, the launcher and the daemon alike</td></tr>
-<tr><td><code class="code">GROVE_INSTALL</code></td><td><code class="code">$XDG_DATA_HOME/grove</code> when that is set, else <code class="code">~/.local/share/grove</code></td><td>the install root <code class="code">grove up</code> flips and the launcher runs out of — <code class="code">versions/</code>, <code class="code">current</code>, <code class="code">previous</code>, <code class="code">channel</code>, <code class="code">pending</code>, <code class="code">update.lock</code> — resolved once, in <code class="code">grove_ops::install_home</code></td></tr>
 <tr><td><code class="code">GROVE_BIND</code></td><td><code class="code">127.0.0.1:7777</code></td><td>where the daemon listens (daemon: literal loopback only)</td></tr>
 <tr><td><code class="code">GROVE_LOG</code></td><td><code class="code">info</code></td><td><code class="code">EnvFilter</code> directive for what the process writes to stderr (ANSI colour only when stderr is a terminal, so <code class="code">grove.log</code> stays greppable)</td></tr>
 <tr><td><code class="code">GROVE_LOG_RING</code></td><td><code class="code">info</code></td><td>the level at which lines enter the ring <code class="code">GET /api/events</code> streams</td></tr>
@@ -158,11 +154,6 @@ up front with that reason rather than 404ing on an asset URL that was never publ
 <tr><td><code class="code">GROVE_CLONE_LIMIT</code></td><td>4</td><td>how many roots may hold a clone at once</td></tr>
 <tr><td><code class="code">GROVE_CLONE_TIMEOUT_SECS</code></td><td>3600</td><td>clone budget; <code class="code">0</code> disables</td></tr>
 <tr><td><code class="code">GROVE_FETCH_TIMEOUT_SECS</code></td><td>600</td><td>fetch budget; <code class="code">0</code> disables</td></tr>
-<tr><td><code class="code">GROVE_CHANNEL</code></td><td>—</td><td>overrides the persisted release channel for a <code class="code">grove up</code></td></tr>
-<tr><td><code class="code">GROVE_HEALTH_GATE_SECS</code></td><td>30</td><td>how long <code class="code">grove up</code> waits for the new version to report ready</td></tr>
-<tr><td><code class="code">GROVE_INSTALL_BASE_URL</code></td><td>—</td><td>install from this release base instead of GitHub</td></tr>
-<tr><td><code class="code">GROVE_LINK_DIR</code></td><td>—</td><td>where <code class="code">install.sh</code> puts the <code class="code">grove</code> PATH symlink (and where <code class="code">uninstall.sh</code> looks for it); unset, the script searches <code class="code">/usr/local/bin</code> then <code class="code">~/.local/bin</code></td></tr>
-<tr><td><code class="code">GROVE_MODE</code></td><td>—</td><td><code class="code">served</code> makes <code class="code">grove up</code> stop rather than restart, handing off to a supervisor</td></tr>
 <tr><td><code class="code">GROVE_OTLP_TRACES_ENDPOINT</code></td><td>—</td><td>the OTLP/HTTP collector the span exporter posts to. Required: there is no default destination, so <code class="code">GROVE_TELEMETRY</code> without it stays a no-op</td></tr>
 <tr><td><code class="code">GROVE_TELEMETRY</code></td><td>off</td><td>opts <code class="code">grove-ops</code>' OpenTelemetry span exporter in — see the note in <a class="link" href="architecture.html#telemetry"><code class="code">architecture.html</code> § Telemetry</a>: no binary in this tree initializes it today</td></tr>
 </tbody>
@@ -194,13 +185,11 @@ grove ok       # is it healthy?
 </code></pre>
 <p class="docs-note"><code class="code">grove serve</code> is the published launcher string: <code class="code">grove on</code> spawns <code class="code">&lt;binary&gt; serve</code>, and any
 supervisor unit should spell it the same way (<code class="code">serve_is_the_launcher_subcommand</code> pins it).
-For an installed release the launcher is <code class="code">$GROVE_INSTALL/current/bin/grove</code>; with nothing
-installed it is the running executable itself. It is resolved at each spawn, so the reboot after a
-first install's flip launches the new release. The spawned child is handed both roots —
-<code class="code">GROVE_HOME</code> so it realizes the manifest the operator is looking at, <code class="code">GROVE_INSTALL</code> so its
-own <code class="code">grove up</code> flips the tree it was launched out of.</p>
+<code class="code">grove on</code> launches the running executable itself, and hands the child the resolved
+<code class="code">GROVE_BIND</code> and <code class="code">GROVE_HOME</code> so it realizes the manifest the operator is looking at.</p>
 <p class="docs-note">Under a supervisor, run <code class="code">grove serve</code> in the foreground and let the supervisor own restarts:
-the process ends by returning from <code class="code">serve</code>, never by calling <code class="code">exit</code>.</p>
+the process ends by returning from <code class="code">serve</code>, never by calling <code class="code">exit</code>. On macOS
+<code class="code">grove setup</code> writes that supervisor, the launchd agent <code class="code">dev.gigantic.grove</code>.</p>
 <p class="docs-note">Two daemons are kept off one home by <code class="code">grove on</code>, not by <code class="code">grove serve</code>: <code class="code">on</code> serializes its
 liveness-check → spawn → pid-write under an exclusive <code class="code">flock</code> on <code class="code">$GROVE_HOME/grove.lock</code>
 (opened <code class="code">O_CLOEXEC</code>, so the launched daemon does not inherit and hold it), refuses when a
@@ -208,9 +197,6 @@ pid file names a live process, and refuses when the bind is already held with <s
 file rather than adopting a stranger — a spawn there is doomed to <code class="code">EADDRINUSE</code>, and worse,
 the squatter's 200 could answer grove's own readiness poll. A bare <code class="code">grove serve</code> takes no
 such lock and simply fails to bind.</p>
-<p class="docs-note">For a supervised box set <code class="code">GROVE_MODE=served</code>, which makes <code class="code">grove up</code> stop the daemon and let
-the supervisor bring it back on whatever <code class="code">current</code> points at, rather than restarting it
-itself.</p>
 </div>
 </section>
 

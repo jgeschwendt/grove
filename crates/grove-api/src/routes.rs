@@ -31,9 +31,9 @@ use crate::vocab::wire_enum;
 /// `GET /api/health` — identity, readiness, the running version, and **which home
 /// this daemon realizes**.
 ///
-/// The version is what the self-update health gate compares against the version it
-/// just flipped to; a 200 alone would let a stale process still bound to the port
-/// mask a failed update.
+/// The version is what a caller compares against the version it expects to answer;
+/// a 200 alone would let a stale process still bound to the port mask a failed
+/// upgrade.
 ///
 /// The home is the identity half, and it is on the wire because the CLI resolves
 /// `GROVE_HOME` and `GROVE_BIND` as two unrelated facts: without it, a client pointed

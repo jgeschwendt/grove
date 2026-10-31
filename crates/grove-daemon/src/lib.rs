@@ -67,7 +67,7 @@ pub mod watcher;
 
 pub use app::{AppState, Daemon, ReconcileNudge, ShutdownTrigger};
 pub use boot::BootState;
-pub use config::{Config, DEFAULT_BIND, parse_bind};
+pub use config::{Config, DEFAULT_BIND, VERSION, parse_bind};
 pub use engine::{Engine, EngineError, RootSet, SyncInfo};
 pub use error::Error;
 pub use events::EventBus;
