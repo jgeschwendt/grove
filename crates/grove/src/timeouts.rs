@@ -31,8 +31,7 @@ use std::time::Duration;
 /// [`Reachability`](crate::api::Reachability).
 pub const PROBE: Duration = Duration::from_secs(2);
 
-/// A health read that wants an answer, not a classification: `grove ok`, and the
-/// self-update gate's `ready_version`.
+/// A health read that wants an answer, not a classification: `grove ok`.
 pub const HEALTH: Duration = Duration::from_secs(5);
 
 /// `POST /api/roots/reconcile`. The daemon only schedules the work, so this bounds
@@ -73,14 +72,6 @@ pub const STOP_GRACE: Duration = Duration::from_secs(10);
 /// How long `grove off` waits after SIGKILL before reporting the process survived.
 pub const KILL: Duration = Duration::from_secs(5);
 
-/// How long the self-update gate waits for the freshly-flipped daemon to report ready
-/// **at the new version** before declaring the release bad and rolling back.
-///
-/// Its floor is [`READY`], not a number picked for the updater: the bounce underneath
-/// it is a whole `grove off` + `grove on`, and a gate shorter than the start it is
-/// waiting on would roll back every healthy release that merely booted slowly.
-pub const HEALTH_GATE: Duration = Duration::from_secs(30);
-
 /// Gap between liveness/readiness polls. The ladders are event-poor — a process
 /// either exited or it did not — so this is the one sanctioned busy-wait, bounded by
 /// a `Deadline` read off the clock seam.
@@ -88,7 +79,7 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[cfg(test)]
 mod tests {
-    use super::{HEALTH_GATE, KILL, OPS, PROBE, READY, STOP_GRACE};
+    use super::{KILL, OPS, PROBE, STOP_GRACE};
 
     /// The relationships the constants exist to make checkable. A budget that
     /// violates one of these is not a slow CLI, it is a broken ladder: a stop grace
@@ -105,11 +96,6 @@ mod tests {
         assert!(
             OPS >= STOP_GRACE,
             "a lane job may legitimately outlive a stop"
-        );
-        assert!(
-            HEALTH_GATE >= READY,
-            "the update gate waits on a whole restart; shorter than the start it is \
-             waiting on and every slow-but-healthy release gets rolled back"
         );
     }
 }

@@ -54,8 +54,8 @@ pub async fn health(State(state): State<AppState>) -> Reply<HealthData> {
             // tell — see `HealthData`.
             home: state.config.home.display().to_string(),
         }),
-        // Up but unable to do its job. The reason is the payload the self-update
-        // health gate rolls a bad bundle back on, so it travels rather than being
+        // Up but unable to do its job. The reason is the payload an upgrade's health
+        // smoke rolls a bad release back on, so it travels rather than being
         // flattened into the message.
         status @ BootStatus::Degraded { .. } => Reply::fail(
             StatusCode::SERVICE_UNAVAILABLE,

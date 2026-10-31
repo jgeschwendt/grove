@@ -6,7 +6,7 @@
 //!
 //! Decoding is **strict**: an unrecognized code is a decode failure, not a silent
 //! fallback onto [`ErrorCode::Error`]. The vocabulary is closed (one binary serves
-//! and consumes it, and the self-update gate refuses a version mismatch on the port),
+//! and consumes it),
 //! so an unknown code means genuine drift, and the whole point of this crate is that
 //! drift is loud.
 

@@ -47,14 +47,6 @@ for pid in $p_fmt $p_clippy; do wait "$pid" || fail=1; done
 exit $fail
 """
 
-# The one test in this tree that is not a cargo target: it drives `scripts/install.sh`
-# and `scripts/uninstall.sh` as an operator would, against a local fixture release. It
-# gets its own task (and its own CI job) precisely because v1's release smoke was
-# reachable from no gate and rotted — `harness_meta` pins both ends of that wiring.
-[tasks.smoke]
-description = "Hermetic install → update → rollback → uninstall against a fixture release"
-run = "sh test/install_smoke.sh"
-
 [tasks.fmt]
 description = "Auto-format Rust"
 run = "cargo fmt --all"

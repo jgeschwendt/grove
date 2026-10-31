@@ -61,7 +61,6 @@ the HTTP API.</p>
     <a class="pill" href="api.html">api</a>
     <a class="pill" href="deployment.html">deployment</a>
     <a class="pill" href="engine.html">engine</a>
-    <a class="pill" href="updates.html">updates</a>
     <a class="pill" href="worktrees.html">worktrees</a>
   </nav>
 </header>
@@ -77,7 +76,7 @@ the HTTP API.</p>
 ├── grove-api     # the shared HTTP contract: envelope, route bodies, event vocabulary
 ├── grove-daemon  # tokio/axum: routes, boot state, guards, lanes, engines, watcher,
 │                 #   event bus, log ring, the read surface
-└── grove         # the CLI + `grove serve` + process custody + self-update
+└── grove         # the CLI + `grove serve` + process custody + setup/upgrade
 </code></pre>
 <p class="docs-note">Dependencies run one way: <code class="code">grove-ops</code> ← <code class="code">grove-api</code> ← <code class="code">grove-daemon</code> ← <code class="code">grove</code>. <code class="code">grove</code>
 also depends on <code class="code">grove-ops</code> and <code class="code">grove-api</code> directly, so the offline realizer and the
@@ -261,8 +260,8 @@ stream — snapshot, then every state event, every log line, and a heartbeat com
 <h3 class="h3" id="daemon-boot-state-and-guards">Boot state and guards</h3>
 <p class="docs-note"><code class="code">booting → ready → stopping</code>, with a sticky <code class="code">degraded(reason)</code> beside it. <code class="code">mark_ready</code>
 never clears a degrade: a fault recorded while the process was coming up must survive the
-unconditional post-boot ready signal, or the self-update health gate would accept the
-bundle that broke it. <code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain
+unconditional post-boot ready signal, or <code class="code">grove upgrade</code>'s health smoke would accept the
+release that broke it. <code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain
 <em>is</em> draining.</p>
 <p class="docs-note">Three middleware layers wrap every route, host outermost so it runs first:</p>
 <ul class="claims stack" role="list">
@@ -377,8 +376,7 @@ comment still describes the daemon replacing the transport as a future step.</p>
 </header>
 <div class="stack">
 <p class="docs-note"><code class="code">mise run check</code> is format plus lint; <code class="code">mise run test</code> is <code class="code">cargo nextest run --workspace</code>
-plus <code class="code">cargo test --doc --workspace</code>; <code class="code">mise run smoke</code> drives <code class="code">scripts/install.sh</code> and
-<code class="code">scripts/uninstall.sh</code> against a fixture release. CI runs exactly those three, plus the
+plus <code class="code">cargo test --doc --workspace</code>. CI runs exactly those two, plus the
 stele graph gate below.</p>
 <p class="docs-note">Two tiers, by naming convention: a test whose name begins with <code class="code">slow_</code> is excluded by the
 default nextest profile and included by <code class="code">NEXTEST_PROFILE=ci</code> (<code class="code">.config/nextest.toml</code>). The
@@ -412,8 +410,7 @@ green tick. When <code class="code">check</code> reports a stale claim, re-read 
 the claim still holds, then <code class="code">stele build</code> by hand and commit the lock alongside the change
 that staled it.</p>
 <p class="docs-note"><code class="code">crates/grove-ops/tests/harness_meta.rs</code> is the meta-check that keeps the harness honest:
-every test file is reachable from <code class="code">mise run test</code>, CI runs the same gate as local, the
-install smoke is reachable from a gate, the slow tier is configured and inhabited, every
+every test file is reachable from <code class="code">mise run test</code>, CI runs the same gate as local, the slow tier is configured and inhabited, every
 wall-clock read goes through the seam, no scratch directory is parked in a <code class="code">static</code>, and no
 test hides behind <code class="code">#[ignore]</code>. It reads the <em>committed</em> tree via <code class="code">git ls-files</code> (through
 <code class="code">grove_ops::git::git_command</code>, so an inherited <code class="code">GIT_DIR</code> cannot redirect it) and refuses an

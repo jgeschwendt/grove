@@ -79,7 +79,7 @@ impl SyncNote {
 /// `error.data`: `{"status":"booting"}`, `{"status":"degraded","reason":"…"}`.
 ///
 /// `degraded` is **sticky** — it carries the reason that degraded the boot and is not
-/// cleared by a later ready signal, because the self-update health gate depends on a
+/// cleared by a later ready signal, because `grove upgrade`'s health smoke depends on a
 /// degraded daemon staying visibly degraded until it is replaced.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase", tag = "status")]

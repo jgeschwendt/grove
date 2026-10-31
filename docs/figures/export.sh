@@ -27,5 +27,4 @@ shoot() { # <board .dc.html> <name>
 }
 shoot RootLayout.dc.html  root-layout
 shoot EngineLanes.dc.html engine-lanes
-shoot SelfUpdate.dc.html  self-update
 agent-browser close >/dev/null

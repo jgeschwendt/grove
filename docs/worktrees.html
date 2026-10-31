@@ -64,7 +64,6 @@ and convergence between the two is two-way and additive.</p>
     <a class="pill" href="architecture.html">architecture</a>
     <a class="pill" href="deployment.html">deployment</a>
     <a class="pill" href="engine.html">engine</a>
-    <a class="pill" href="updates.html">updates</a>
   </nav>
 </header>
 
@@ -172,10 +171,9 @@ directory carries everything grove owns.</p>
         ├── pool/slot-0/                   # warm slots, detached at the trunk tip
         └── cloning                        # the marker, while a clone and its passes run
 </code></pre>
-<p class="docs-note">The install layout — <code class="code">versions/</code>, <code class="code">current</code>, <code class="code">previous</code>, <code class="code">channel</code>, <code class="code">pending</code> and
-<code class="code">update.lock</code> — is a separate tree under <code class="code">$GROVE_INSTALL</code> (<a class="link" href="deployment.html"><code class="code">deployment.html</code></a>). The
-split is what makes the two disposable in opposite directions: the install can be deleted
-and re-installed with no repository noticing, and nothing under <code class="code">$GROVE_HOME</code> is
+<p class="docs-note">The binary is not in this tree: mise installs it, versions side by side, outside
+<code class="code">$GROVE_HOME</code> (<a class="link" href="index.html#update">install and upgrade</a>), so the install can be
+deleted and re-installed with no repository noticing, and nothing under <code class="code">$GROVE_HOME</code> is
 regenerable from a release.</p>
 <p class="docs-note"><code class="code">roots::root_dir</code> and <code class="code">roots::code_dir</code> are the published definition of the two joins,
 <code class="code">roots::bare_dir</code> of the bare, <code class="code">pool::pool_dir</code> of the pool and <code class="code">roots::trunk</code> of the

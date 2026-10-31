@@ -54,7 +54,7 @@ pub struct ApiClient {
     probe_timeout: Duration,
     /// The home this client was pointed at, when it was pointed at one — see
     /// [`ApiClient::reachable`]. `None` for the clients that address a *specific*
-    /// daemon by socket (process custody, the self-update health gate), where the
+    /// daemon by socket (process custody), where the
     /// caller already knows whose daemon it is.
     home: Option<std::path::PathBuf>,
 }
@@ -195,16 +195,6 @@ impl ApiClient {
             Envelope::Ok(data) => Some(data),
             Envelope::Err(_) => None,
         }
-    }
-
-    /// The version the daemon reports, and only when it answers a *ready* 200.
-    ///
-    /// The self-update health gate compares this against the version it just flipped
-    /// to: a 200 alone would let a stale process still bound to the port mask a failed
-    /// update, and a draining old daemon's 503 must read as "not there yet".
-    #[must_use]
-    pub fn ready_version(&self) -> Option<String> {
-        self.health().map(|data| data.version)
     }
 
     /// `true` when the listener speaks the grove envelope: `/api/health` returns a
@@ -570,33 +560,28 @@ mod tests {
             client.health().expect("a ready 200 carries it").version,
             "9.9.9"
         );
-        assert_eq!(client.ready_version().as_deref(), Some("9.9.9"));
     }
 
-    /// The self-update gate's rejections: a draining 503, and a 200 whose body is not
-    /// a success envelope — an error envelope, or not JSON at all. Each must read as
-    /// "no version yet", never as an answer.
+    /// A draining 503, and a 200 whose body is not a success envelope — an error
+    /// envelope, or not JSON at all. Each must read as "no health yet", never as an
+    /// answer.
     #[test]
-    fn ready_version_refuses_anything_but_a_ready_200() {
+    fn health_refuses_anything_but_a_ready_200() {
         let draining = r#"{"ok":false,"error":{"code":"unavailable","message":"draining"}}"#;
         for status in ["503 Service Unavailable", "200 OK"] {
             assert!(
                 ApiClient::at(server(status, draining), BUDGET)
-                    .ready_version()
+                    .health()
                     .is_none(),
                 "{status}"
             );
         }
         assert!(
             ApiClient::at(server("200 OK", "not json"), BUDGET)
-                .ready_version()
+                .health()
                 .is_none()
         );
-        assert!(
-            ApiClient::at(closed_port(), BUDGET)
-                .ready_version()
-                .is_none()
-        );
+        assert!(ApiClient::at(closed_port(), BUDGET).health().is_none());
     }
 
     /// A listener that is not grove: no envelope, so no shutdown POST is ever aimed
@@ -789,8 +774,8 @@ mod tests {
         }
     }
 
-    /// Transport, not protocol: nothing answered, so exit 4 — the code `install.sh`
-    /// and every script branch on for "the daemon is not there".
+    /// Transport, not protocol: nothing answered, so exit 4 — the code every script
+    /// branches on for "the daemon is not there".
     #[test]
     fn a_connection_failure_maps_to_daemon() {
         let client = ApiClient::at(closed_port(), Duration::from_millis(300));

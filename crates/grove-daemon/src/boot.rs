@@ -64,7 +64,7 @@ impl BootState {
     /// recorded while the process was coming up must survive the unconditional
     /// "the tree is started, we are ready" signal that follows it. Otherwise a
     /// daemon that came up unable to do its job would answer `/api/health` 200 and
-    /// the self-update health gate would accept the bundle that broke it.
+    /// `grove upgrade`'s health smoke would accept the release that broke it.
     // ※ boot-degrade-sticky
     pub fn mark_ready(&self) {
         let mut status = self.write();

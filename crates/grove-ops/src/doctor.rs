@@ -442,16 +442,15 @@ pub fn checks(home: &Path, slug: Option<&str>) -> Vec<Check> {
 /// Doctor is report-only, so this string *is* the fix: an operator reads it and runs
 /// it. `grove doctor` closes that block and is deliberately absent here — it is the
 /// verification, and it is what printed this line.
-const INSTALL_MIGRATION: &str = "mkdir -p ~/.local/share/grove; \
-     mv ~/.grove/{versions,current,previous,channel,update.lock} ~/.local/share/grove/; \
-     ln -sf ~/.local/share/grove/current/bin/grove ~/.local/bin/grove; \
-     grove off && grove on";
+const INSTALL_MIGRATION: &str = "rm -rf ~/.grove/{versions,current,previous,channel,update.lock}; \
+     mise use -g packslip:jgeschwendt/grove; \
+     grove setup";
 
 /// Is the install still living under the workspace root?
 ///
-/// `versions/` and `current` belong to `$GROVE_INSTALL`; a home that still carries
-/// them is the pre-split layout, and the cost is concrete — `uninstall.sh` removes the
-/// install root, and under the old layout that took every checkout with the binary.
+/// `versions/` and `current` are the retired self-updater's release tree; mise holds the
+/// versions now, so a home that still carries them carries dead weight beside every
+/// checkout, and a careless `rm -rf` of the install would take the checkouts with it.
 /// One row either way, like the manifest check: an operator needs to know the layout
 /// was *looked at*.
 ///
@@ -843,11 +842,9 @@ symlink = ["../../etc/passwd"]
         assert_eq!(found[0].name.as_deref(), Some("current"));
         let detail = found[0].detail.as_ref().unwrap();
         for line in [
-            "mkdir -p ~/.local/share/grove",
-            "mv ~/.grove/{versions,current,previous,channel,update.lock} \
-             ~/.local/share/grove/",
-            "ln -sf ~/.local/share/grove/current/bin/grove ~/.local/bin/grove",
-            "grove off && grove on",
+            "rm -rf ~/.grove/{versions,current,previous,channel,update.lock}",
+            "mise use -g packslip:jgeschwendt/grove",
+            "grove setup",
         ] {
             assert!(detail.contains(line), "{line} missing from {detail}");
         }

@@ -55,10 +55,9 @@ jobs:
   # macOS is not redundant coverage here. Grove is a filesystem and process daemon, and
   # every seam where the two platforms differ is one this repo actually leans on: git
   # canonicalizing worktree paths through `/private/var`, the case-insensitive default
-  # filesystem, `flock` semantics on the manifest and update locks, and the SIGTERM →
-  # SIGKILL path `grove off` walks. `macos-latest` rather than a pinned `macos-14` on
-  # purpose — it is the runner `.github/workflows/release.yaml` builds the
-  # aarch64-darwin bundle on, so CI proves the toolchain that ships.
+  # filesystem, `flock` semantics on the manifest lock, and the SIGTERM → SIGKILL path
+  # `grove off` walks — and macOS arm64 is the one platform
+  # `.github/workflows/release.yaml` ships.
   check-and-test-macos:
     runs-on: macos-latest
     # Same 30 as the ubuntu job, for the same reason: the first run compiles the whole
@@ -75,25 +74,6 @@ jobs:
       - run: mise run test
         env:
           NEXTEST_PROFILE: ci
-
-  # The install path is a shell script driving the real binary, so no cargo target
-  # can reach it — it gets a job of its own rather than the "test exists, no gate
-  # runs it" fate v1's release smoke met. Hermetic: a fixture release in a temp dir,
-  # no network, its own GROVE_HOME and GROVE_BIND.
-  smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
-        with:
-          # smoke shares the ubuntu job's platform key; a suffix keeps its narrower
-          # save from racing that job's, while the restore prefix stays shared.
-          cache-key-suffix: smoke
-      - run: mise run smoke
 
   # The architecture graph: `check` proves the committed lock still describes the code
   # (anchors resolve, declared dependencies match extracted ones, every directory is
