@@ -119,11 +119,9 @@ fn read(rel: &str) -> String {
 ///
 /// Rust-only by construction. The rule this feeds is about Cargo *test targets*, and
 /// its remedy — "move it to `crates/<member>/tests/<name>.rs`" — is only possible for
-/// a `.rs` file: a `docs/smoke-testing.md` or an `install_smoke.sh` matched the
-/// spellings and could never satisfy the rule, so the gate had one permanent
-/// unfixable failure waiting for the first such file. A script's reachability is a
-/// different claim, enforced where scripts are wired in — the CI/mise assertions in
-/// [`ci_runs_the_same_gate_as_local`].
+/// a `.rs` file: a `docs/smoke-testing.md` or a `*_smoke.sh` matched the spellings
+/// and could never satisfy the rule, so the gate had one permanent unfixable failure
+/// waiting for the first such file.
 fn is_test_shaped(rel: &str) -> bool {
     if !is_rust(rel) {
         return false;
@@ -223,79 +221,6 @@ fn ci_runs_the_same_gate_as_local() {
         step.contains("NEXTEST_PROFILE: ci"),
         "the `mise run test` step must set NEXTEST_PROFILE: ci, or the `slow_*` tier \
          never runs anywhere"
-    );
-}
-
-/// The rule's third clause, for the one test no Cargo target can reach.
-///
-/// `test/install_smoke.sh` drives `scripts/install.sh` and `scripts/uninstall.sh` as
-/// an operator would — a shell script exercising the real binary, which
-/// [`is_test_shaped`] deliberately does not judge (its remedy, "move it under
-/// `crates/<member>/tests/`", is impossible for a `.sh`). That exemption is only safe
-/// while something else pins the script's reachability, which is this: it must be a
-/// `mise` task, that task must actually run the script, and CI must invoke the task.
-/// v1's release smoke had all three missing and rotted unnoticed.
-#[test]
-fn the_install_smoke_is_reachable_from_a_gate() {
-    let script = "test/install_smoke.sh";
-    assert!(
-        PathBuf::from(WORKSPACE).join(script).is_file(),
-        "{script} is gone — remove this rule with it, or restore the script"
-    );
-
-    let mise = read("mise.toml");
-    let smoke_task = mise
-        .split("[tasks.smoke]")
-        .nth(1)
-        .expect("mise.toml defines a `smoke` task");
-    assert!(
-        smoke_task.contains(script),
-        "`mise run smoke` must run {script}, not a hand-rolled copy of it"
-    );
-
-    let ci = read(".github/workflows/ci.yaml");
-    assert!(
-        ci.contains("mise run smoke"),
-        "CI must run `mise run smoke` — a smoke no gate runs is the exact hole this \
-         repo closed"
-    );
-}
-
-/// The smoke drives the real installer, and the real installer puts a symlink on
-/// PATH. Its search takes the first *writable* candidate and `/usr/local/bin` is
-/// first — a property of the host, not of the temp HOME the smoke redirects — so on
-/// any box where the invoking user can write it, a "hermetic" run clobbers the
-/// operator's own `grove` link and the uninstall step then deletes it. The escape is
-/// closed by pinning the destination, and the assertion must not accept the escaping
-/// outcome as a pass.
-#[test]
-fn the_install_smoke_links_only_inside_its_own_home() {
-    // Line continuations first: the invocations wrap, and the environment sits on the
-    // far side of the backslash from the script name.
-    let smoke = read("test/install_smoke.sh").replace("\\\n", " ");
-    let invocations: Vec<&str> = smoke
-        .lines()
-        .filter(|l| l.contains("scripts/install.sh") || l.contains("scripts/uninstall.sh"))
-        .filter(|l| !l.trim_start().starts_with('#'))
-        .collect();
-    assert!(!invocations.is_empty(), "the smoke drives the two scripts");
-    for line in &invocations {
-        assert!(
-            line.contains("GROVE_LINK_DIR="),
-            "every install/uninstall invocation in test/install_smoke.sh must pin \
-             GROVE_LINK_DIR, or the PATH-link step reaches outside the temp HOME the \
-             smoke redirects: {line}"
-        );
-    }
-    assert!(
-        !smoke.contains("/usr/local/bin"),
-        "test/install_smoke.sh must not name /usr/local/bin — asserting on it is how \
-         the host-polluting outcome got ratified as a pass"
-    );
-    let install = read("scripts/install.sh");
-    assert!(
-        install.contains("GROVE_LINK_DIR"),
-        "scripts/install.sh must honour GROVE_LINK_DIR for the smoke to pin anything"
     );
 }
 
@@ -436,7 +361,7 @@ fn no_test_is_parked_behind_ignore() {
         "`#[ignore]` in {offenders:?} — an ignored test runs under neither nextest \
          profile, so it is a test no gate runs whatever its reason string says. For a \
          merely slow test, name it `slow_*`: the `ci` profile runs that tier. For one \
-         that needs the network or an operator's machine, it is not a unit test — move \
-         it to `scripts/` where `test/install_smoke.sh` already lives, or delete it."
+         that needs the network or an operator's machine, it is not a unit test — \
+         delete it."
     );
 }

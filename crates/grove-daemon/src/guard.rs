@@ -17,8 +17,8 @@ use crate::reply::error_response;
 
 /// Routes that answer while the daemon is draining or degraded.
 ///
-/// Health, so the state stays *observable* — it is what the self-update gate reads
-/// to decide a bundle went bad — and shutdown, so a late or repeated stop request
+/// Health, so the state stays *observable* — it is what `grove upgrade`'s smoke reads
+/// to decide a release went bad — and shutdown, so a late or repeated stop request
 /// (and stopping an already-degraded daemon) is not itself 503'd.
 // ※ readiness-whitelist
 const READINESS_WHITELIST: [&str; 2] = ["/api/health", "/api/daemon/shutdown"];

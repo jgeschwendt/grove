@@ -4,14 +4,8 @@
 //! under `GROVE_HOME`, and stops it gracefully (drain over the API, then signal).
 //! The CLI is not itself a daemon — this type *controls* one. Since v2 ships a
 //! single executable, the thing it launches is the grove binary itself: the launcher
-//! contract is `$GROVE_INSTALL/current/bin/grove serve` for an installed release, and
-//! this very binary (`current_exe`) when nothing is installed yet.
-//!
-//! Both roots are held, because they are different things: `GROVE_HOME` is the
-//! workspace the daemon realizes (pid file, lock, log, manifest, `code/`), and
-//! `GROVE_INSTALL` is the release tree the launcher runs out of. The child is handed
-//! both, so a daemon that runs its own `grove up` flips the install this CLI
-//! resolved rather than one it re-derives.
+//! contract is `<this binary> serve`. Under launchd the server agent `grove setup`
+//! writes runs `<mise shims>/grove serve` instead, and this custody is not involved.
 //!
 //! Every external dependency is held as data (paths, bind, timeouts, the [`Clock`],
 //! the server [`Interface`]), so tests construct the struct with fakes — no env
@@ -21,7 +15,7 @@ use std::fs::{self, OpenOptions};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -84,9 +78,8 @@ type PidProbe = fn(Pid) -> PidState;
 /// Controls the local grove daemon: start, stop, restart.
 pub struct ServerControl {
     home: PathBuf,
-    install: PathBuf,
     bind: SocketAddr,
-    server_program: fn(&Path) -> PathBuf,
+    server_program: fn() -> PathBuf,
     server_args: Vec<String>,
     interface: Interface,
     ready_timeout: Duration,
@@ -97,24 +90,17 @@ pub struct ServerControl {
 }
 
 impl ServerControl {
-    /// Resolve from the environment: `GROVE_HOME` (→ `~/.grove`), `GROVE_INSTALL`
-    /// (→ `~/.local/share/grove`) and `GROVE_BIND` (→ `127.0.0.1:7777`). An
-    /// unparseable `GROVE_BIND` is a loud error, never a silent default — otherwise
-    /// `on`/`off` would target one address while the API client talks to another.
-    ///
-    /// The launcher hangs off the *install* root, not the workspace: what to run is
-    /// release state, and the two roots are resolved once each in `grove-ops`. It
-    /// resolves at spawn, not here: the updater builds this before `grove up` flips
-    /// `current`, and a launcher chosen then would reboot into the old binary.
+    /// Resolve from the environment: `GROVE_HOME` (→ `~/.grove`) and `GROVE_BIND`
+    /// (→ `127.0.0.1:7777`). An unparseable `GROVE_BIND` is a loud error, never a
+    /// silent default — otherwise `on`/`off` would target one address while the API
+    /// client talks to another.
     pub fn from_env() -> Result<Self, CliError> {
         let home = grove_ops::home();
-        let install = grove_ops::install_home();
         let bind = resolve_bind(std::env::var("GROVE_BIND").ok())?;
         Ok(Self {
             home,
-            install,
             bind,
-            server_program: launcher,
+            server_program: || std::env::current_exe().unwrap_or_default(),
             server_args: vec!["serve".to_string()],
             interface: Interface::Http,
             ready_timeout: READY_TIMEOUT,
@@ -130,7 +116,7 @@ impl ServerControl {
         fs::create_dir_all(&self.home)
             .map_err(|e| CliError::Daemon(format!("create {}: {e}", self.home.display())))?;
 
-        // Resolve the launcher before locking, so "not installed" errors cheaply.
+        // Resolve the launcher before locking, so a missing binary errors cheaply.
         let cmd = self.server_command()?;
 
         // Serialize the liveness-check → spawn → pid-write under an exclusive
@@ -455,28 +441,23 @@ impl ServerControl {
     }
 
     /// The command that launches the daemon. Seam: the program/args are fields, so
-    /// tests inject a fake. Production runs `<grove> serve` — the installed release's
-    /// binary when there is one, otherwise this very executable.
+    /// tests inject a fake. Production runs `<this binary> serve`.
     fn server_command(&self) -> Result<Command, CliError> {
-        let program = (self.server_program)(&self.install);
+        let program = (self.server_program)();
         if !program.exists() {
             return Err(CliError::Daemon(format!(
-                "no grove binary to launch at {} — run `grove up` to install one",
+                "no grove binary to launch at {}",
                 program.display()
             )));
         }
         let mut cmd = Command::new(&program);
         cmd.args(&self.server_args);
-        // Hand the child the RESOLVED bind and both roots this CLI decided on. The
-        // CLI accepts a hostname (`localhost:7777`, resolved above) but the daemon
-        // binds only literal IPs, and a child that inherited a *different*
-        // `GROVE_HOME` would realize a different manifest than the one the operator
-        // is looking at. `GROVE_INSTALL` travels for the mirror-image reason: a
-        // served daemon runs its own `grove up`, and one that re-derived the install
-        // root would flip a different tree than the one it was launched out of.
+        // Hand the child the RESOLVED bind and home this CLI decided on. The CLI
+        // accepts a hostname (`localhost:7777`, resolved above) but the daemon binds
+        // only literal IPs, and a child that inherited a *different* `GROVE_HOME`
+        // would realize a different manifest than the one the operator is looking at.
         cmd.env("GROVE_BIND", self.bind.to_string());
         cmd.env("GROVE_HOME", &self.home);
-        cmd.env("GROVE_INSTALL", &self.install);
         Ok(cmd)
     }
 
@@ -560,26 +541,6 @@ impl ServerControl {
     }
 }
 
-/// The launcher: the installed release's binary when one is laid down, else this
-/// very executable.
-///
-/// It reads the *install* root, not the workspace, because `current` is the symlink
-/// `grove up` flips and every version behind it is disposable release state — the
-/// one thing the workspace must never hold.
-///
-/// v1 launched a *separate* Mix release (`current/bin/grove_server start`) and had
-/// nothing to fall back on, so `grove on` before an install was an error. v2 ships
-/// one binary, so a dev or freshly-built grove can start its own daemon; `current`
-/// still wins when present, because that is the path `grove up` flips and the
-/// version the health gate expects to see answer.
-fn launcher(install: &Path) -> PathBuf {
-    let installed = install.join("current/bin/grove");
-    if installed.exists() {
-        return installed;
-    }
-    std::env::current_exe().unwrap_or(installed)
-}
-
 /// Resolve `GROVE_BIND` to a socket address. A literal `host:port` parses
 /// directly; anything else (e.g. `localhost:8080`) goes through name resolution
 /// so the CLI and the API client agree on the target. An absent value is the
@@ -634,7 +595,7 @@ fn process_start_time(pid: Pid) -> Option<u64> {
 /// an absolute, per-process-stable timestamp — a recycled pid started later
 /// yields a different string — hashed to the token with FNV-1a, NOT
 /// `DefaultHasher`: the token is written by one binary and compared by a
-/// *different* binary after self-update, and `DefaultHasher`'s algorithm is
+/// *different* binary after an upgrade, and `DefaultHasher`'s algorithm is
 /// documented as unstable across Rust releases (a rustc bump would read every
 /// live server as recycled). FNV-1a is fixed by its constants.
 #[cfg(target_os = "macos")]
@@ -701,20 +662,14 @@ mod tests {
     /// timeouts. `/bin/sleep` is the fake server (POSIX; unix-only target). The
     /// `Tcp` interface probes the port directly — no HTTP server to stand up.
     ///
-    /// The fake install root is a `install/` subdirectory of the same `TempDir`: these
-    /// ladders never launch the installed binary (`server_program` is the fake), so
-    /// the only thing the root has to be is *distinct from the home* — which is the
-    /// property [`the_child_command_carries_the_resolved_bind_and_both_roots`] reads.
-    ///
     /// The clock is the real one: these ladders poll a *live* process, so a frozen
     /// clock would spin forever rather than fail fast. The seam is exercised on its
     /// own in `a_ready_deadline_expires_on_the_injected_clock`.
     fn control(home: &TempDir, bind: SocketAddr) -> ServerControl {
         ServerControl {
             home: home.path().to_path_buf(),
-            install: home.path().join("install"),
             bind,
-            server_program: |_| PathBuf::from("/bin/sleep"),
+            server_program: || PathBuf::from("/bin/sleep"),
             server_args: vec!["600".to_string()],
             interface: Interface::Tcp,
             ready_timeout: Duration::from_secs(2),
@@ -941,7 +896,7 @@ mod tests {
         // A pre-v2 pid file (bare-number token from an older binary) whose live
         // process probes with a DIFFERENT token value: the derivation changed
         // underneath it, not the process. Identity must degrade to liveness-only
-        // — live is live; the file survives. (Deleting it here is the self-update
+        // — live is live; the file survives. (Deleting it here is the upgrade
         // failure mode: the fresh binary would orphan the running server.)
         let sc = ServerControl {
             pid_probe: |_| PidState::Alive(Some(222)),
@@ -1079,7 +1034,7 @@ mod tests {
     fn on_errors_when_no_server_installed() {
         let home = TempDir::new().unwrap();
         let sc = ServerControl {
-            server_program: |_| PathBuf::from("/no/such/grove"),
+            server_program: || PathBuf::from("/no/such/grove"),
             ..control(&home, closed_port())
         };
 
@@ -1141,7 +1096,7 @@ mod tests {
         let home = TempDir::new().unwrap();
         // A server answering on the port but with NO pid file (served mode: a
         // supervisor owns the process). `off` must drain it over the API, not
-        // no-op — otherwise a served-mode self-update bounce can never land.
+        // no-op — otherwise `grove upgrade`'s drain can never land.
         let sc = ServerControl {
             interface: Interface::Http,
             ..control(&home, http_shutdown_server())
@@ -1284,54 +1239,11 @@ mod tests {
         assert!(resolve_bind(Some("not a bind".into())).is_err());
     }
 
-    /// The v2 launcher contract: `<grove> serve`, pointed at the installed release
-    /// when one is laid down and at this very binary when none is.
+    /// The child inherits the resolved bind and home the CLI decided on: a hostname
+    /// the daemon would refuse never reaches it, and the child realizes the same
+    /// manifest the operator is looking at.
     #[test]
-    fn the_launcher_prefers_an_installed_release_then_falls_back_to_this_binary() {
-        let install = TempDir::new().unwrap();
-        let fallback = launcher(install.path());
-        assert_eq!(
-            fallback,
-            std::env::current_exe().unwrap(),
-            "no install → run our own binary"
-        );
-
-        let installed = install.path().join("current/bin");
-        fs::create_dir_all(&installed).unwrap();
-        fs::write(installed.join("grove"), "#!/bin/sh\n").unwrap();
-        assert_eq!(
-            launcher(install.path()),
-            installed.join("grove"),
-            "an installed release wins — it is what `grove up` flips"
-        );
-    }
-
-    /// A first install: the control is built before `current` exists (the updater
-    /// builds it before the flip), so the launcher must resolve at spawn time — a
-    /// reboot after the flip launches the new release, not this binary.
-    #[test]
-    fn the_launcher_resolves_at_spawn_not_at_construction() {
-        let home = TempDir::new().unwrap();
-        let install = home.path().join("install");
-        let sc = ServerControl {
-            server_program: launcher,
-            ..control(&home, SocketAddr::from(([127, 0, 0, 1], 7777)))
-        };
-        fs::create_dir_all(install.join("versions/X/bin")).unwrap();
-        fs::write(install.join("versions/X/bin/grove"), "").unwrap();
-        std::os::unix::fs::symlink("versions/X", install.join("current")).unwrap();
-        assert_eq!(
-            sc.server_command().unwrap().get_program(),
-            install.join("current/bin/grove")
-        );
-    }
-
-    /// The child inherits the resolved bind and *both* roots the CLI decided on: a
-    /// hostname the daemon would refuse never reaches it, the child realizes the same
-    /// manifest the operator is looking at, and its own `grove up` flips the same
-    /// install this CLI resolved rather than one it re-derives from its environment.
-    #[test]
-    fn the_child_command_carries_the_resolved_bind_and_both_roots() {
+    fn the_child_command_carries_the_resolved_bind_and_home() {
         use std::ffi::OsStr;
         let home = TempDir::new().unwrap();
         let sc = control(&home, SocketAddr::from(([127, 0, 0, 1], 7777)));
@@ -1345,11 +1257,6 @@ mod tests {
         };
         assert_eq!(value("GROVE_BIND"), Some(OsStr::new("127.0.0.1:7777")));
         assert_eq!(value("GROVE_HOME"), Some(home.path().as_os_str()));
-        assert_eq!(
-            value("GROVE_INSTALL"),
-            Some(home.path().join("install").as_os_str()),
-            "the install root travels too, and is not the home"
-        );
         assert_eq!(
             cmd.get_args().collect::<Vec<_>>(),
             vec![OsStr::new("600")],

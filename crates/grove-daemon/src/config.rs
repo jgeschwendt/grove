@@ -15,10 +15,13 @@ use crate::logs::{DEFAULT_LEVEL, parse_level};
 /// `GROVE_BIND`'s default: the loopback interface, port 7777.
 pub const DEFAULT_BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7777);
 
-/// The version this daemon reports on `/api/health` and `/api/daemon/version` — the
-/// single workspace version, which is also what the self-update health gate compares
-/// against the bundle it just flipped to.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version this daemon reports on `/api/health` and `/api/daemon/version`: the
+/// release's `YYYY.M.N` when the release workflow stamps `GROVE_VERSION` at build
+/// time, else the workspace version.
+pub const VERSION: &str = match option_env!("GROVE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// Everything the daemon needs before it can bind: where to listen, which home it
 /// realizes, whether the shutdown route is armed, and the version it publishes.

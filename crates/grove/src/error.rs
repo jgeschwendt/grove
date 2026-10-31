@@ -17,8 +17,6 @@ pub enum CliError {
     Conflict(String),
     /// Health check failed. Exit 6.
     Unhealthy(String),
-    /// Self-update failed. Exit 7.
-    Update(String),
 }
 
 impl CliError {
@@ -31,7 +29,6 @@ impl CliError {
             Self::Daemon(_) => 4,
             Self::Conflict(_) => 5,
             Self::Unhealthy(_) => 6,
-            Self::Update(_) => 7,
         }
     }
 }
@@ -42,8 +39,7 @@ impl fmt::Display for CliError {
         | Self::NotFound(m)
         | Self::Daemon(m)
         | Self::Conflict(m)
-        | Self::Unhealthy(m)
-        | Self::Update(m)) = self;
+        | Self::Unhealthy(m)) = self;
         f.write_str(m)
     }
 }
@@ -113,7 +109,6 @@ mod tests {
         assert_eq!(CliError::Daemon(m()).exit_code(), 4);
         assert_eq!(CliError::Conflict(m()).exit_code(), 5);
         assert_eq!(CliError::Unhealthy(m()).exit_code(), 6);
-        assert_eq!(CliError::Update(m()).exit_code(), 7);
     }
 
     #[test]

@@ -88,7 +88,6 @@ fn grove(home: &Path, bind: Option<&str>, args: &[&str]) -> Run {
         cmd.env("GROVE_BIND", bind);
     }
     let out = cmd.output().expect("the grove binary runs");
-    no_stray_install(home);
     Run {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -96,30 +95,10 @@ fn grove(home: &Path, bind: Option<&str>, args: &[&str]) -> Run {
     }
 }
 
-/// Point a child at this test's *install* root and at a `HOME` inside the scratch.
-///
-/// Nothing here installs a release, but every command resolves the install root on its
-/// way through `ServerControl::from_env` — and an unnamed one is whoever ran the
-/// tests' real `~/.local/share/grove`. Naming it is half the fix; redirecting `HOME`
-/// is the other half, because it moves the *default* the resolver falls back to into
-/// the scratch, where [`no_stray_install`] can see it.
+/// Point a child's `HOME` inside the scratch, so nothing it resolves off `HOME` lands in
+/// the operator's own.
 fn hermetic_roots(cmd: &mut Command, home: &Path) {
-    cmd.env("GROVE_INSTALL", install_dir(home))
-        .env("HOME", scratch_dir(home))
-        .env_remove("XDG_DATA_HOME");
-}
-
-/// Assert no child resolved the default install root — i.e. none was spawned without
-/// `GROVE_INSTALL`. Run after each command, the only placement that names the culprit.
-#[track_caller]
-fn no_stray_install(home: &Path) {
-    let default = scratch_dir(home).join(".local/share/grove");
-    assert!(
-        !default.exists(),
-        "a child resolved the default install root at {} — it was spawned without \
-         GROVE_INSTALL, and on a real box that is the operator's own",
-        default.display()
-    );
+    cmd.env("HOME", scratch_dir(home));
 }
 
 /// A `grove serve` child, killed when the test's binding goes out of scope — including
@@ -248,7 +227,6 @@ fn ahead(src: &str) {
 fn scratch(tmp: &TempDir) -> (PathBuf, String) {
     let home = tmp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(install_dir(&home)).unwrap();
     // The slug `clone add` derives is the source's last two path segments.
     let src = tmp.path().join("src/o/r");
     testfix::fixture_repo(&src);
@@ -259,19 +237,13 @@ fn code_dir(home: &Path) -> PathBuf {
     grove_ops::roots::code_dir(home, SLUG)
 }
 
-/// The scratch the workspace home was laid inside, and with it the install root and
-/// the redirected `HOME` — derived from the one path every helper here already takes,
+/// The scratch the workspace home was laid inside, and with it the redirected `HOME` —
+/// derived from the one path every helper here already takes,
 /// rather than threaded through this file's every call site.
 fn scratch_dir(home: &Path) -> PathBuf {
     home.parent()
         .expect("the home lives inside the scratch")
         .to_owned()
-}
-
-/// The install root beside the workspace: `versions/`, `current`, `channel` — release
-/// state with the opposite lifecycle from the manifest and `code/`.
-fn install_dir(home: &Path) -> PathBuf {
-    scratch_dir(home).join("install")
 }
 
 /// The bare and the trunk checkout through the layout helpers rather than by hand —
@@ -465,8 +437,7 @@ fn slow_the_offline_flow_realizes_in_process() {
 
     // And the exit codes an operator reads. Listing a root that is not there is not an
     // error — a read of nothing is an empty list — while creating a worktree under one
-    // cannot work. (`up` is exercised in `update_e2e`, which owns the release fixtures
-    // it needs to run without reaching the network.)
+    // cannot work.
     grove(&home, bind, &["tree", "list", "o/nope"])
         .ok()
         .says("no worktrees for o/nope");
