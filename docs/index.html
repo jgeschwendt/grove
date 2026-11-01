@@ -42,11 +42,10 @@
   <p class="eyebrow">desired state vs actual state</p>
   <p class="lead docs-lead">grove cultivates git worktrees. <code class="code">manifest.toml</code>
     declares desired state, git on disk is actual state, and grove converges them additively —
-    never deleting what it did not create. One Rust workspace, one binary;
-    <code class="code">grove serve</code> is the daemon, and every status it holds is a cache
-    re-derived from disk.</p>
+    never deleting what it did not create. One binary; <code class="code">grove serve</code> is the
+    daemon, and every status it holds is a cache re-derived from disk.</p>
   <div class="row">
-    <span class="badge badge-accent">v0.3.0 · store and pool</span>
+    <span class="badge badge-accent">store and pool</span>
     <span class="badge">files are authoritative</span>
     <span class="badge">push-based, no timers</span>
   </div>
@@ -74,7 +73,7 @@
       each: <code class="code">roots/&lt;owner&gt;/&lt;repo&gt;/</code> holds everything grove owns,
       <code class="code">code/&lt;owner&gt;/&lt;repo&gt;/</code> holds checkouts and only checkouts.</p>
   </header>
-  <figure class="figure"><img class="figure-light" src="figures/root-layout.png" alt="manifest.toml, the desired state, feeds roots::reconcile_one, which realizes two trees: roots/owner/repo holding bare/, pool/slot-N and the cloning marker, and code/owner/repo holding the trunk checkout, named worktrees and nothing else but .DS_Store; engine status, the warm-pool count and the log ring are daemon-memory caches re-derived from disk." /><img class="figure-dark" src="figures/root-layout-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>The root layout: files are authoritative, the daemon holds only caches of them. Source: Claude Design canvas <em>grove figures</em>, board root-layout (<code class="code">docs/figures/project/</code>).</figcaption></figure>
+  <figure class="figure"><img class="figure-light" src="figures/root-layout.png" alt="manifest.toml, the desired state, feeds roots::reconcile_one, which realizes two trees: roots/owner/repo holding bare/, pool/slot-N and the cloning marker, and code/owner/repo holding the trunk checkout, named worktrees and nothing else but .DS_Store; engine status, the warm-pool count and the log ring are daemon-memory caches re-derived from disk." /><img class="figure-dark" src="figures/root-layout-dark.png" alt="" aria-hidden="true" loading="lazy" /><figcaption>The root layout. Source: Claude Design canvas <em>grove figures</em>, board root-layout (<code class="code">docs/figures/project/</code>).</figcaption></figure>
 </section>
 
 <section class="docs-section" id="engine" data-component="engine">
@@ -91,8 +90,9 @@
     <h2 class="h2">Install and upgrade</h2>
     <p class="docs-note">mise installs and moves the version; <a class="link" href="https://gigantic.dev/hotswap/">hotswap</a>,
       linked into the binary, swaps it. Every merge to <code class="code">main</code> is a GitHub
-      Release <code class="code">vYYYY.M.N</code> (<code class="code">N</code> counts the month's
-      releases from 0), macOS arm64 only, signed by packslip.</p>
+      Release <code class="code">YYYY.M.N</code> (<code class="code">N</code> counts the month's
+      releases from 0; the first was <code class="code">2026.11.0</code>), macOS arm64 only, signed
+      by packslip.</p>
   </header>
   <pre class="snippet"><code>mise use -g packslip:jgeschwendt/grove   # install the latest release
 grove setup                              # link ~/.local/bin/grove, load the agents
@@ -102,27 +102,26 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
     <code class="code">dev.gigantic.grove</code> keeps <code class="code">&lt;mise shims&gt;/grove serve</code>
     alive, so every start resolves mise's active version, and
     <code class="code">dev.gigantic.grove.upgrade</code> runs <code class="code">grove upgrade</code>
-    every 900 s. An upgrade drains with <code class="code">grove off</code> (the daemon finishes
-    in-flight git work under its drain budget; launchd restarts it), re-runs setup, kickstarts the
-    server, and smokes <code class="code">grove --version</code> and <code class="code">GET /api/health</code>;
-    red rolls back to the previous version. The last swap is recorded in
+    every 900 s. An upgrade drains with <code class="code">grove off</code> (in-flight git work
+    finishes under the drain budget), re-runs setup, kickstarts the server, and smokes
+    <code class="code">grove --version</code> and <code class="code">GET /api/health</code>; red
+    rolls back to the previous version. The last swap is recorded in
     <code class="code">~/.local/state/hotswap/grove.json</code>.</p>
 </section>
 
 <section class="docs-section" id="decisions" data-component="decisions">
   <header>
     <h2 class="h2">Decisions</h2>
-    <p class="docs-note">Shipped designs, the choice each made and why. The mechanics live in the
-      reference docs; history is in git.</p>
+    <p class="docs-note">Shipped designs, the choice each made and why.</p>
   </header>
   <div class="stack">
     <h3 class="h3">mise installs, hotswap swaps <small>· 2026-10-31</small></h3>
     <p>grove ships as a packslip release that mise installs, and its <code class="code">setup</code>
       and <code class="code">upgrade</code> verbs are hotswap's tool contract, shared with sandman and
-      routines. mise keeps versions side by side outside <code class="code">$GROVE_HOME</code>, so the
-      workspace holds nothing an install can delete. A home that still carries an install tree is the
-      doctor finding <code class="code">install-under-home</code>, whose fix line removes it. Why: one
-      install and swap path for every gigantic tool, instead of a self-updater per tool.</p>
+      routines. mise keeps versions outside <code class="code">$GROVE_HOME</code>, so the workspace
+      holds nothing an install can delete; an install tree inside it is the doctor finding
+      <code class="code">install-under-home</code>. Why: one install and swap path for every gigantic
+      tool.</p>
 
     <h3 class="h3">The trunk is a branch, named by that branch <small>· v0.2.0, ea9629a</small></h3>
     <p>Every checkout directory is <code class="code">worktrees::name_for(branch)</code>; the trunk is
@@ -130,8 +129,8 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
       bare's <code class="code">HEAD</code>. The manifest key is desired state, the bare's
       <code class="code">HEAD</code> actual state, and reconcile sets one from the other
       (<code class="code">git::set_head</code>). Changing the trunk is a manifest edit: the new trunk
-      checkout is ensured, shares repoint, and the old trunk stays on disk as an ordinary worktree —
-      no trunk change deletes anything. Why: a hidden role-named <code class="code">.trunk</code>
+      checkout is ensured, shares repoint, and the old trunk stays on disk as an ordinary worktree.
+      Why: a hidden role-named <code class="code">.trunk</code>
       beside branch-named worktrees was two naming schemes, and some repos integrate on a branch other
       than the remote default. The wire carries <code class="code">trunk_branch</code>.</p>
 
@@ -142,16 +141,15 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
       <code class="code">.DS_Store</code> is refused naming the entries. Migration happens only in
       <code class="code">doctor --fix</code>, where the operator asked for it; the error reaches
       <code class="code">RootView.error</code> and <code class="code">grove tree list</code>, and the
-      doctor route nudges a migrated root to re-derive. Why: a daemon booted over sixteen pre-0.2 roots
-      re-cloned each beside its legacy layout — reconcile never consulted the doctor finding that
-      already knew.</p>
+      doctor route nudges a migrated root to re-derive. Why: a daemon booted over legacy roots
+      re-cloned each beside its old layout.</p>
 
     <h3 class="h3">A root holds checkouts and nothing else <small>· v0.3.0, 99b7299</small></h3>
     <p>A <em>root</em> is a declared repo — <code class="code">[roots."o/r"]</code> in the manifest,
       <code class="code">roots/o/r/</code> on disk (<code class="code">root_dir</code>) holding
       <code class="code">bare/</code>, <code class="code">pool/slot-N</code> and the
       <code class="code">cloning</code> marker; its <em>code dir</em> is
-      <code class="code">code/o/r/</code> (<code class="code">code_dir</code>). One word, one thing.
+      <code class="code">code/o/r/</code> (<code class="code">code_dir</code>).
       <code class="code">clone remove</code> deletes both, so nothing of a root survives elsewhere;
       <code class="code">adopt</code> walks <code class="code">roots/</code>, and checkouts without a
       root are the report-only finding <code class="code">orphan-code</code>. One detector
@@ -160,43 +158,34 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
       half-moved root rather than guessing. The root view gains <code class="code">root</code>
       (shown under <code class="code">--verbose</code>), and <code class="code">grove workspace</code>
       writes a <code class="code">.code-workspace</code> of every checkout on demand. Why: grove's
-      private <code class="code">.bare</code> and <code class="code">.pool</code> sat in every editor
-      explorer beside the operator's checkouts, and every rule had to say "except grove's own
-      entries".</p>
+      private entries sat in every editor explorer beside the operator's checkouts, and every rule
+      had to except them.</p>
 
     <h3 class="h3">A stopped engine writes nothing new <small>· <a class="link" href="https://github.com/jgeschwendt/grove/issues/2">#2</a></small></h3>
     <p><code class="code">Engine::stop</code> raises a flag the reconcile lane job reads before
-      its clone-permit try, so a queued reconcile of a stopped engine never begins — no permit, no
-      <code class="code">realize</code>. grove-ops work already running cannot be cancelled: a clone
-      mid-transfer finishes and reports to a mailbox nobody reads. The
+      its clone-permit try, so a queued reconcile of a stopped engine never begins. grove-ops work
+      already running cannot be cancelled: a clone mid-transfer finishes and reports to a mailbox
+      nobody reads. The
       <code class="code">remove</code> ordering stays <code class="code">※ delete-before-undeclare</code>:
       undeclaring first would let <code class="code">adopt</code>, which runs off the lane, re-declare
       the still-present bare, while the window it was to close never reaches reconcile —
       <code class="code">remove</code> holds the root's lane, and <code class="code">reconcile_one</code>
-      re-reads the declaration under it. Why: a reconcile queued behind a stopped engine (a daemon
-      shutting down) still cloned the root.</p>
+      re-reads the declaration under it. Why: a reconcile queued behind a daemon shutting down still
+      cloned the root.</p>
   </div>
 </section>
 
 <section class="docs-section" id="plan" data-component="plan">
   <header>
     <h2 class="h2">Next</h2>
-    <p class="docs-note">What is open, in order. Locations are symbols and
-      <code class="code">※</code> anchors, never line numbers.</p>
+    <p class="docs-note">Open, in order.</p>
   </header>
   <ol id="next" class="steps">
-    <li><strong>Delete the self-update board</strong> on the canvas (owner): the first release,
-      <code class="code">2026.11.0</code>, cut on 2026-11-01, this Mac runs <code class="code">dev.gigantic.grove</code>
-      from the mise shim, and <code class="code">~/.local/share/grove</code> is gone.</li>
+    <li><strong>Delete the self-update board</strong> on the canvas (owner).</li>
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
-    <li><strong>Bump hk 2.5.0 → 2.8.0</strong>; the shift sandbox cannot reach mise-versions, so on a host.</li>
-    <li><strong>Share plan/apply, stage 4</strong> (approved 2026-10-27, thread 0109c212; supersedes
-      <code class="code">trunk-change-shares</code>): <code class="code">roots::TrunkState</code> and a pure
-      <code class="code">env::plan</code> are on trunk; <code class="code">diagnose</code> renders the plan,
-      <code class="code">materialize</code> applies it, and a carry applies it only when it holds no error row.
-      A test, <code class="code">only_roots_reads_the_bares_head</code>, keeps every other module from
-      reading <code class="code">HEAD</code>. What remains is the two owner-ruled seeding rules, still waiting
-      on the owner (b7981283): how a directory source seeds, and whether an ex-trunk's seeded source
+    <li><strong>Bump hk 2.5.0 → 2.8.0</strong> on a host; the shift sandbox cannot reach mise-versions.</li>
+    <li><strong>Share plan/apply, stage 4</strong> (thread 0109c212): the two seeding rules, waiting
+      on the owner (b7981283) — how a directory source seeds, and whether an ex-trunk's seeded source
       becomes a link.</li>
     <li><strong>Wire telemetry into <code class="code">grove serve</code></strong> (approved A, thread 2f4f0398):
       opt-in through <code class="code">GROVE_TELEMETRY</code>, with a batch exporter and a
@@ -207,26 +196,17 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
 <section class="docs-section" id="findings" data-component="findings">
   <header>
     <h2 class="h2">Open sweep findings</h2>
-    <p class="docs-note">The s-20261012T0155Z gigasweep confirmed 21 defects by probe and the
-      s-20261019T0455Z sweep three more, all fixed on trunk; the s-20261020T0445Z sweep of the 48 commits
-      since confirmed eight, six of them fixed in its own landing and one by s-20261020T0540Z, and its review
-      added one; s-20261022T0630Z fixed the canary page walk and the password-only redirect hop, swept the
-      18 commits since, fixed a rollback that died before its rename and <code class="code">grove ok</code>'s
-      exit on a mid-body hangup, and filed one; s-20261023T0200Z fixed <code class="code">install.sh</code>'s
-      cleartext redirect hop and a nested slug pair's remove and realize writing into the other's
-      bare; s-20261028T0216Z's plan/apply fixed a carry wedged half-done by a link or copy error the plan
-      can see (one that fails only as it is written still can) and a dry run that disagreed with the real
-      pass on a nested pending source. Open, highest first:</p>
+    <p class="docs-note">Highest first.</p>
   </header>
   <ol class="steps">
     <li><strong>A symlink share whose source is a directory refuses every trunk change</strong>
       (confirmed, medium; <code class="code">env.rs</code> carry seed). <code class="code">read_present</code>
-      bails on a directory, which <code class="code">source_op</code> accepts everywhere else. Seeding a
-      recursive copy, an empty directory or a clear refusal is the owner's call, on the same proposal.</li>
+      bails on a directory, which <code class="code">source_op</code> accepts everywhere else; the fix
+      is the directory seeding rule above.</li>
     <li><strong>Only <code class="code">origin</code> counts as a branch's remote</strong> (plausible,
       low; <code class="code">git::branch_target</code>, <code class="code">branch_exists</code>). A
       branch living only on a remote the operator added (<code class="code">upstream/x</code>) is minted off <code class="code">HEAD</code>,
-      untracked. grove clones only <code class="code">origin</code>. Waits on
+      untracked. Waits on
       <code class="code">proposal:jgeschwendt/grove:only-origin-counts</code>.</li>
     <li><strong>The old trunk's own share source reads as a conflict after a trunk change</strong>
       (confirmed, low; c079973). The ex-trunk is adopted as a worktree and its real <code class="code">.env</code>
@@ -266,8 +246,7 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
 <section class="docs-section" id="reference" data-component="reference">
   <header>
     <h2 class="h2">Reference</h2>
-    <p class="docs-note">Present-tense descriptions of the shipped system. This page is the design and
-      the plan; these are the mechanics.</p>
+    <p class="docs-note">The mechanics; this page is the design and the plan.</p>
   </header>
   <div class="table-wrap">
     <table data-table>
@@ -282,7 +261,7 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
       </tbody>
     </table>
   </div>
-  <p class="docs-foot">grove v0.3.0 · figures render behind <code class="code">mise run figures</code>.</p>
+  <p class="docs-foot">Figures render behind <code class="code">mise run figures</code>.</p>
 </section>
 
 </main>

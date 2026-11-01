@@ -61,30 +61,24 @@
 <h2 class="h2">Posture: loopback-only, unauthenticated, guarded</h2>
 </header>
 <div class="stack">
-<p class="docs-note">The API is <strong>unauthenticated</strong>. Served-mode auth is a later phase, so four compensating
-controls stand in its place, and all four retire together when it lands:</p>
+<p class="docs-note">The API is <strong>unauthenticated</strong>. Four compensating controls stand in for served-mode
+auth and retire together when it lands (mechanics: <a class="link" href="api.html#guards"><code class="code">api.html</code> § Guards</a>):</p>
 <ol class="steps">
 <li id="posture-loopback-only-unauthenticated-guarded-bind-gate"><strong>The bind gate.</strong> <code class="code">GROVE_BIND</code> accepts a <strong>literal</strong> <code class="code">ip:port</code> and only a loopback
-address. A hostname is refused rather than resolved — what a name points at is not the
-daemon's to decide, and a gate applied after resolution is a gate applied to whatever
-the resolver said that second. There is no override, and the check runs both in
+address. A hostname is refused rather than resolved, there is no override, and the check runs both in
 <code class="code">Config::new</code> and again at <code class="code">Daemon::bind</code>, so a hand-built config cannot slip past it.</li>
 <li id="posture-loopback-only-unauthenticated-guarded-host-guard"><strong>The host guard.</strong> Every request — reads and the event stream included — must carry a
-<code class="code">Host</code> of <code class="code">localhost</code>, <code class="code">127.0.0.1</code>, <code class="code">::1</code> or the bind address, any port. A page whose
-name was rebound to 127.0.0.1 still sends its own name as <code class="code">Host</code>, so it can read
-neither the snapshot nor the stream.</li>
+<code class="code">Host</code> of <code class="code">localhost</code>, <code class="code">127.0.0.1</code>, <code class="code">::1</code> or the bind address, any port.</li>
 <li id="posture-loopback-only-unauthenticated-guarded-readiness-gate"><strong>The readiness gate.</strong> While draining or degraded, every <code class="code">/api</code> path but
 <code class="code">/api/health</code> and <code class="code">/api/daemon/shutdown</code> answers 503.</li>
 <li id="posture-loopback-only-unauthenticated-guarded-mutation-guard"><strong>The mutation guard.</strong> A state-changing request must carry no <code class="code">Origin</code> (every
 non-browser client) or one whose host is <code class="code">localhost</code>, <code class="code">127.0.0.1</code> or <code class="code">::1</code> — a fixed
-list, never the request's own <code class="code">Host</code>, which is what makes it the mutating half of the
-DNS-rebinding defense.</li>
+list, never the request's own <code class="code">Host</code>.</li>
 </ol>
-<p class="docs-note">Residual and accepted: another process already on a loopback port can present a loopback
-origin, and any local user who can reach the port can drive the API. Both need request
-authentication to close. Putting grove on a LAN is another service's job; grove refuses to
-do it itself.</p>
-<p class="docs-note">The CLI's client is deliberately looser than the daemon: it accepts a hostname in
+<p class="docs-note">Residual until auth: another process on a loopback port can present a loopback origin, and
+any local user who can reach the port can drive the API. Putting grove on a LAN is another
+service's job.</p>
+<p class="docs-note">The CLI's client is looser than the daemon: it accepts a hostname in
 <code class="code">GROVE_BIND</code>, because it only has to reach whatever is listening — though the host guard
 answers only <code class="code">localhost</code> among names, so any other alias is refused with 403 — and it builds its HTTP
 client with <code class="code">no_proxy</code> so an <code class="code">HTTP_PROXY</code> in the operator's environment cannot sit between
@@ -97,8 +91,7 @@ it and a daemon on its own loopback address.</p>
 <h2 class="h2">Reactivation is a cold boot</h2>
 </header>
 <div class="stack">
-<p class="docs-note">The daemon may be killed at any moment and restarted with only the filesystem intact.
-Nothing depends on process continuity:</p>
+<p class="docs-note">The daemon may be killed at any moment and restarted with only the filesystem intact:</p>
 <ul class="claims stack" role="list">
 <li>desired state is <code class="code">manifest.toml</code>, actual state is git on disk, and there is no database;</li>
 <li>engine status, the pool count and the log ring are caches, re-derived or simply empty on
@@ -107,9 +100,9 @@ the next boot;</li>
 the half-realized state <code class="code">reconcile_one</code> finishes;</li>
 <li><code class="code">roots::adopt</code> at boot re-declares any on-disk bare that lost its manifest entry.</li>
 </ul>
-<p class="docs-note">So a substrate may stop, snapshot, move and restart the process freely. The bounded drain
-(<a class="link" href="architecture.html"><code class="code">architecture.html</code></a>) is a courtesy that lets in-flight git work land, not a
-precondition: a daemon killed mid-clone converges on the next boot.</p>
+<p class="docs-note">A substrate may stop, snapshot, move and restart the process freely. The bounded drain
+(<a class="link" href="architecture.html#daemon-drain"><code class="code">architecture.html</code> § Drain</a>) lets in-flight git work land; it is
+not a precondition.</p>
 </div>
 </section>
 
@@ -124,7 +117,7 @@ precondition: a daemon killed mid-clone converges on the next boot.</p>
 <tbody>
 <tr><td>a Unix host — Linux or macOS</td><td><code class="code">grove-ops</code> uses <code class="code">openat</code>/<code class="code">renameat</code>/<code class="code">symlinkat</code> through <code class="code">rustix</code>; there is no Windows path</td></tr>
 <tr><td><code class="code">git</code> on <code class="code">PATH</code></td><td>worktree, status, prune, fetch and remote reads shell out to git (<code class="code">grove_ops::git::git_command</code>, which pins <code class="code">LC_ALL=C</code> and scrubs git's local-repo environment). The bare <em>clone</em> itself goes through <code class="code">gix</code> in-process</td></tr>
-<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">grove.log</code>. Nothing here is regenerable from a release</td></tr>
+<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">grove.log</code>. No install lives here</td></tr>
 <tr><td>a filesystem with symlinks</td><td>shares in the workspace</td></tr>
 <tr><td>outbound HTTPS/SSH to the git remotes</td><td>clone and fetch</td></tr>
 <tr><td>loopback networking</td><td>the API</td></tr>
@@ -155,7 +148,7 @@ precondition: a daemon killed mid-clone converges on the next boot.</p>
 <tr><td><code class="code">GROVE_CLONE_TIMEOUT_SECS</code></td><td>3600</td><td>clone budget; <code class="code">0</code> disables</td></tr>
 <tr><td><code class="code">GROVE_FETCH_TIMEOUT_SECS</code></td><td>600</td><td>fetch budget; <code class="code">0</code> disables</td></tr>
 <tr><td><code class="code">GROVE_OTLP_TRACES_ENDPOINT</code></td><td>—</td><td>the OTLP/HTTP collector the span exporter posts to. Required: there is no default destination, so <code class="code">GROVE_TELEMETRY</code> without it stays a no-op</td></tr>
-<tr><td><code class="code">GROVE_TELEMETRY</code></td><td>off</td><td>opts <code class="code">grove-ops</code>' OpenTelemetry span exporter in — see the note in <a class="link" href="architecture.html#telemetry"><code class="code">architecture.html</code> § Telemetry</a>: no binary in this tree initializes it today</td></tr>
+<tr><td><code class="code">GROVE_TELEMETRY</code></td><td>off</td><td>opts <code class="code">grove-ops</code>' OpenTelemetry span exporter in; no binary initializes it yet (<a class="link" href="architecture.html#telemetry"><code class="code">architecture.html</code> § Telemetry</a>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -165,10 +158,8 @@ to another.</p>
 <p class="docs-note" id="configuration-two-are-independent-so-they-are-cross-checked"><strong>The two are independent, so they are cross-checked.</strong> <code class="code">GET /api/health</code> carries the home
 the daemon realizes, and the CLI treats a daemon serving a <em>different</em> home as absent: this
 home has no realizer, so it realizes in-process against the home it was pointed at. Setting
-<code class="code">GROVE_HOME</code> alone — a second home, a sandbox, a script — leaves <code class="code">GROVE_BIND</code> on its own
-default, which is exactly how a client scoped to one home ends up talking to another's
-daemon; before the check, that delegated <code class="code">clone remove</code> deleted from the daemon's home and
-printed success.</p>
+<code class="code">GROVE_HOME</code> alone — a second home, a sandbox, a script — leaves <code class="code">GROVE_BIND</code> on its
+default, which is how a client scoped to one home reaches another's daemon.</p>
 </div>
 </section>
 
@@ -194,8 +185,7 @@ the process ends by returning from <code class="code">serve</code>, never by cal
 liveness-check → spawn → pid-write under an exclusive <code class="code">flock</code> on <code class="code">$GROVE_HOME/grove.lock</code>
 (opened <code class="code">O_CLOEXEC</code>, so the launched daemon does not inherit and hold it), refuses when a
 pid file names a live process, and refuses when the bind is already held with <strong>no</strong> pid
-file rather than adopting a stranger — a spawn there is doomed to <code class="code">EADDRINUSE</code>, and worse,
-the squatter's 200 could answer grove's own readiness poll. A bare <code class="code">grove serve</code> takes no
+file rather than adopting a stranger, whose 200 could answer grove's readiness poll. A bare <code class="code">grove serve</code> takes no
 such lock and simply fails to bind.</p>
 </div>
 </section>

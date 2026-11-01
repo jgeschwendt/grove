@@ -83,8 +83,8 @@ also depends on <code class="code">grove-ops</code> and <code class="code">grove
 API client speak the same types the daemon serves. Edition 2024, resolver 3,
 <code class="code">unsafe_code = "forbid"</code> workspace-wide, <code class="code">clippy::pedantic</code> warn-by-default with named
 opt-outs (<code class="code">Cargo.toml</code>).</p>
-<p class="docs-note"><code class="code">grove-ops</code> is a library only — no subprocess, no framing, no handshake. The CLI, the
-daemon's lanes, and the offline realizer all call it in-process.</p>
+<p class="docs-note"><code class="code">grove-ops</code> is a library only: the CLI, the daemon's lanes and the offline realizer
+call it in-process.</p>
 </div>
 </section>
 
@@ -93,8 +93,7 @@ daemon's lanes, and the offline realizer all call it in-process.</p>
 <h2 class="h2">Files are authoritative</h2>
 </header>
 <div class="stack">
-<p class="docs-note">Desired state is <code class="code">manifest.toml</code>; actual state is git on disk. There is no database and
-no second source of truth. Everything the daemon holds in memory is a cache:</p>
+<p class="docs-note">There is no database. Everything the daemon holds in memory is a cache:</p>
 <ul class="claims stack" role="list">
 <li>a root's engine status (<code class="code">unknown | missing | ready | degraded | cloning | unavailable</code>)
 is re-derived from disk on every roots-changed event, and from scratch on restart;</li>
@@ -102,10 +101,10 @@ is re-derived from disk on every roots-changed event, and from scratch on restar
 stale hint costs at most one no-op fill;</li>
 <li>the log ring is a bounded tail of what this process said, not a record.</li>
 </ul>
-<p class="docs-note">A daemon may be killed and restarted with only the filesystem intact. Nothing depends on
-process continuity, and an abandoned clone is re-derived from disk on the next boot.</p>
+<p class="docs-note">A daemon may be killed and restarted with only the filesystem intact; an abandoned clone is
+re-derived from disk on the next boot.</p>
 <p class="docs-note">Reading actual state means reading both of a root's directories, not the one entry the
-realizer came for. Grove keeps them apart on purpose: <code class="code">roots/&lt;slug&gt;/</code> holds everything
+realizer came for: <code class="code">roots/&lt;slug&gt;/</code> holds everything
 grove owns — the bare, the warm pool, the in-flight-clone marker — and <code class="code">code/&lt;slug&gt;/</code>, the
 root's <em>code dir</em>, holds checkouts and only checkouts. A root carrying a superseded layout
 (its bare inside the code dir) and a root whose code dir already holds somebody's files
@@ -165,10 +164,8 @@ only one of them can see.</p>
 to race, so a snapshot that does not arrive — or whose row the daemon marks
 <code class="code">unavailable</code> — falls back to the disk rather than reporting the daemon's empty list as
 an answer.</p>
-<p class="docs-note"><code class="code">apply</code> is the deliberate exception, and the only one: it probes nothing and realizes in
-this process whatever the manifest declares. It <em>is</em> the offline realizer, exposed as a
-command — an operator who types it is reaching for the local one. The cost is that it
-opts out of the guarantee the rest of the table buys: with a daemon up, <code class="code">grove apply</code>
+<p class="docs-note"><code class="code">apply</code> is the one exception: it probes nothing and realizes in this process whatever
+the manifest declares — the offline realizer, exposed as a command. With a daemon up, <code class="code">grove apply</code>
 drives <code class="code">roots::reconcile_one</code> on roots whose engine may be mid-reconcile, off any lane,
 which is exactly the concurrent-caller hazard <code class="code">grove-ops</code> warns about (<code class="code">lm:lane-is-callers</code>,
 <a class="link" href="worktrees.html#serialization"><code class="code">worktrees.html</code> § Serialization</a>). It is carried as a hazard on <code class="code">crates/grove</code> rather
@@ -263,30 +260,16 @@ never clears a degrade: a fault recorded while the process was coming up must su
 unconditional post-boot ready signal, or <code class="code">grove upgrade</code>'s health smoke would accept the
 release that broke it. <code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain
 <em>is</em> draining.</p>
-<p class="docs-note">Three middleware layers wrap every route, host outermost so it runs first:</p>
-<ul class="claims stack" role="list">
-<li id="daemon-host"><strong>Host</strong> 403s (<code class="code">forbidden</code>) any request whose <code class="code">Host</code> is not <code class="code">localhost</code>, <code class="code">127.0.0.1</code>,
-<code class="code">::1</code> or the bind address — reads and the event stream included, so a page rebound to
-127.0.0.1 cannot read the snapshot. A missing or unparseable <code class="code">Host</code> is refused.</li>
-<li id="daemon-readiness"><strong>Readiness</strong> 503s every non-whitelisted <code class="code">/api</code> path while <code class="code">stopping</code> or <code class="code">degraded</code>.
-The whitelist is exactly <code class="code">/api/health</code> and <code class="code">/api/daemon/shutdown</code> — health so the state
-stays observable, shutdown so a late or repeated stop is not itself refused. <code class="code">booting</code>
-is deliberately not gated.</li>
-<li id="daemon-mutation"><strong>Mutation</strong> passes safe methods (GET/HEAD/OPTIONS) untouched. For the rest it allows a
-<strong>missing</strong> <code class="code">Origin</code> (the CLI and every non-browser client send none) or an origin whose
-host is one of the fixed set <code class="code">localhost</code>, <code class="code">127.0.0.1</code>, <code class="code">::1</code>; anything else is 403
-<code class="code">forbidden</code>. The list is fixed, never the request's own <code class="code">Host</code> — that is what makes it a
-DNS-rebinding defense.</li>
-</ul>
-<p class="docs-note">All three, plus the loopback bind refusal in <code class="code">config::guard_loopback</code>, are compensating controls
-for an unauthenticated API and retire only when served-mode auth lands.</p>
+<p class="docs-note">Three middleware layers — host, readiness, mutation — wrap every route
+(<a class="link" href="api.html#guards"><code class="code">api.html</code> § Guards</a>); with the loopback bind refusal in
+<code class="code">config::guard_loopback</code> they compensate for an unauthenticated API until served-mode auth lands.</p>
 <h3 class="h3" id="daemon-drain">Drain</h3>
 <p class="docs-note"><code class="code">POST /api/daemon/shutdown</code> marks stopping <em>before</em> it answers, then schedules the accept
 loop to stop after a 100 ms grace so the acknowledgement reaches the client. <code class="code">Daemon::serve</code>
 then spends one budget (<code class="code">drain_budget</code>, default 5 s, armed off the clock seam at the
 trigger) in two phases: open responses first, then lane work via <code class="code">Lanes::quiesced</code>. What
 does not land in either phase is logged by slug and abandoned.</p>
-<p class="docs-note">The bound is not a nicety. An SSE response finishes only when its body stops being written,
+<p class="docs-note">An SSE response finishes only when its body stops being written,
 so one peer that stopped reading would hold <code class="code">grove serve</code> open forever and make every stop
 end at SIGTERM. The default sits under the CLI's own 10 s stop grace — pinned from both
 sides by <code class="code">the_drain_budget_fits_inside_the_cli_stop_grace</code> and
@@ -320,15 +303,10 @@ and the engine's policy curations are enums, declared through the <code class="c
 the variant list, the serde spelling and the <code class="code">ALL</code> array are one piece of text.</li>
 </ol>
 <p class="docs-note"><code class="code">contracts/wire-vocab.json</code> is the fixture: every vocabulary plus a key set per payload
-shape, all derived from the producing types by <code class="code">crates/grove-api/tests/wire_vocab.rs</code>. Each
-key set is one object deep, so a nested shape carries its own group (<code class="code">git_status_keys</code>,
-<code class="code">log_field_keys</code>) — one added under an existing shape and not given a group is pinned by
-nothing. A rename fails that test; re-bless with
-<code class="code">BLESS_WIRE=1 cargo test -p grove-api</code>. Nothing outside this repo reads the fixture — the
-dashboard decodes the wire by hand — so the guard is grove-side only: a rename is caught
-here, deliberately re-blessed here, and still reaches a consumer as a runtime miss.
-The byte-for-byte JSON — which optionals are omitted, how each event tags itself — is
-pinned by round-trip tests beside the types in <code class="code">grove-api</code>. Details in <a class="link" href="api.html"><code class="code">api.html</code></a>.</p>
+shape, derived from the producing types. Each key set is one object deep, so a nested shape
+carries its own group (<code class="code">git_status_keys</code>, <code class="code">log_field_keys</code>); one added under an
+existing shape without a group is pinned by nothing. Details in
+<a class="link" href="api.html#vocabulary-fixture"><code class="code">api.html</code> § The vocabulary fixture</a>.</p>
 </div>
 </section>
 
@@ -342,8 +320,7 @@ a <code class="code">Deadline</code> read off an injected <code class="code">Clo
 <code class="code">TestClock</code> and step time by hand, so a "60 s idle reap" test costs milliseconds and cannot
 flake on a loaded machine. <code class="code">Deadline</code> is absolute rather than a re-based <code class="code">Duration</code>, so
 handing it down a call chain cannot multiply the budget by the chain's depth.</p>
-<p class="docs-note">The seam is enforced, not conventional:
-<code class="code">harness_meta::every_wall_clock_read_goes_through_the_clock_seam</code> fails the build the moment
+<p class="docs-note"><code class="code">harness_meta::every_wall_clock_read_goes_through_the_clock_seam</code> fails the build when
 an <code class="code">Instant::now()</code> appears outside <code class="code">clock.rs</code>.</p>
 <p class="docs-note"><code class="code">tokio::time</code> has a clock of its own, so the daemon's two timers do not use it directly:
 <code class="code">wait::until</code> / <code class="code">wait::within</code> poll the injected clock on a 50 ms tick, which is what lets
@@ -361,12 +338,10 @@ with a redacting URL helper and the span attribute discipline (<code class="code
 <code class="code">grove.slug</code>, redacted <code class="code">grove.url</code>). The transport is a simple (synchronous) span exporter
 over blocking HTTP, and it has no default destination: with <code class="code">GROVE_TELEMETRY</code> on but
 <code class="code">GROVE_OTLP_TRACES_ENDPOINT</code> unset, <code class="code">init</code> hands back the same no-op handle it hands back
-when telemetry is off. A daemon that wires this up wants a batch exporter first, so an
-export cannot sit on a runtime thread.</p>
-<p class="docs-note" id="telemetry-no-binary-in-this-tree-calls-telemetry-init-today"><strong>No binary in this tree calls <code class="code">telemetry::init</code> today</strong> — neither <code class="code">grove serve</code> nor any
-CLI dispatch path — so the module ships unwired: the daemon's observability is the
-<code class="code">tracing</code> subscriber (stderr plus the log ring) described above. The module's own doc
-comment still describes the daemon replacing the transport as a future step.</p>
+when telemetry is off.</p>
+<p class="docs-note" id="telemetry-unwired"><strong>No binary calls <code class="code">telemetry::init</code></strong>, so the
+daemon's observability is the <code class="code">tracing</code> subscriber (stderr plus the log ring) above
+(<a class="link" href="index.html#next">next</a>: wire it into <code class="code">grove serve</code>).</p>
 </div>
 </section>
 
@@ -379,8 +354,7 @@ comment still describes the daemon replacing the transport as a future step.</p>
 plus <code class="code">cargo test --doc --workspace</code>. CI runs exactly those two, plus the
 stele graph gate below.</p>
 <p class="docs-note">Two tiers, by naming convention: a test whose name begins with <code class="code">slow_</code> is excluded by the
-default nextest profile and included by <code class="code">NEXTEST_PROFILE=ci</code> (<code class="code">.config/nextest.toml</code>). The
-tier is visible at the call site and needs no registration anywhere.</p>
+default nextest profile and included by <code class="code">NEXTEST_PROFILE=ci</code> (<code class="code">.config/nextest.toml</code>).</p>
 </div>
 </section>
 
@@ -394,7 +368,7 @@ container and per crate, declared in that directory's <code class="code">AGENTS.
 commands that prove it, and its invariants and hazards. Every claim is anchored to a
 <code class="code">// stele:landmark &lt;slug&gt;</code> comment (or a <code class="code">path#symbol</code>) in the code it governs. A claim
 proved by a <em>separate</em> test target names it in <code class="code">enforced_by:</code>; a claim proved by the inline
-<code class="code">mod tests</code> beside its own anchor names nothing, deliberately — <code class="code">enforced_by</code> exempts a
+<code class="code">mod tests</code> beside its own anchor names nothing — <code class="code">enforced_by</code> exempts a
 claim from digest-staling, and the digest gate is the only thing watching a region whose
 tests live inside it. <code class="code">.stele/graph.lock</code> is the compiled
 graph; the <code class="code">&lt;!-- stele:begin router --&gt;</code> regions and <code class="code">.stele/index/</code> are projections of it.
