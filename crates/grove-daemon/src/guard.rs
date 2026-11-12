@@ -18,10 +18,16 @@ use crate::reply::error_response;
 /// Routes that answer while the daemon is draining or degraded.
 ///
 /// Health, so the state stays *observable* — it is what `grove upgrade`'s smoke reads
-/// to decide a release went bad — and shutdown, so a late or repeated stop request
-/// (and stopping an already-degraded daemon) is not itself 503'd.
+/// to decide a release went bad — shutdown, so a late or repeated stop request
+/// (and stopping an already-degraded daemon) is not itself 503'd, and the reconcile
+/// nudge, which only schedules a roots read and is how a daemon degraded by an
+/// unreadable manifest learns it was fixed.
 // ※ readiness-whitelist
-const READINESS_WHITELIST: [&str; 2] = ["/api/health", "/api/daemon/shutdown"];
+const READINESS_WHITELIST: [&str; 3] = [
+    "/api/health",
+    "/api/daemon/shutdown",
+    "/api/roots/reconcile",
+];
 
 /// The **fixed** allowlist of hosts an `Origin` — and, with the bind address, a
 /// `Host` — may name.
@@ -66,7 +72,7 @@ pub async fn host(State(bind): State<SocketAddr>, request: Request, next: Next) 
 /// Note what is *not* gated: `booting`. v1's plug tested only `:stopping` and
 /// `{:degraded,_}`, and its endpoint was listening before the post-boot ready signal
 /// — so a request arriving in that window was served. Carried as written; in v2 the
-/// window is a few microseconds wide, between `Daemon::bind` and `mark_ready`.
+/// window runs from `Daemon::bind` to the watcher's first roots read.
 pub async fn readiness(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if !is_api(path) || READINESS_WHITELIST.contains(&path) {
@@ -257,7 +263,11 @@ mod tests {
         assert_eq!(LOOPBACK_ORIGINS, ["localhost", "127.0.0.1", "::1"]);
         assert_eq!(
             READINESS_WHITELIST,
-            ["/api/health", "/api/daemon/shutdown"],
+            [
+                "/api/health",
+                "/api/daemon/shutdown",
+                "/api/roots/reconcile"
+            ],
             "widening this list exposes a route on a draining server"
         );
     }

@@ -33,8 +33,8 @@ pub trait Clock: Send + Sync {
         Deadline::at(self.now() + budget)
     }
 
-    /// Wall-clock time, for **labelling only** — a log line's timestamp, never a
-    /// budget.
+    /// Wall-clock time, for **labelling only** — a log line's timestamp, the daemon's
+    /// uptime, never a budget.
     ///
     /// [`now`](Self::now) is monotonic and unmappable to a calendar, so a UI that
     /// draws "14:02:11" beside a log line needs this. It is on the seam rather than

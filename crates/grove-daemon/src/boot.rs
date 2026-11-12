@@ -2,17 +2,21 @@
 //! `degraded(reason)` beside it.
 //!
 //! Read by the readiness guard, `GET /api/health` and `GET /api/daemon/version`
-//! (uptime). Written at exactly three moments: `mark_ready` once the process is
-//! serving, `mark_stopping` from the shutdown route before it answers, and
-//! `mark_degraded` from whatever discovers the daemon cannot do its job.
+//! (uptime). Written by the watcher's roots reads ([`BootState::derived`]), by
+//! `mark_stopping` from the shutdown route and the stop signals before the drain, and by
+//! `mark_ready`/`mark_degraded` from a caller driving the daemon itself.
 
 use std::sync::RwLock;
-use std::time::Instant;
+use std::time::SystemTime;
 
 use grove_api::BootStatus;
 use grove_ops::clock::Clock;
 
-/// The lifecycle state plus the instant this process started serving.
+/// What a degrade set by a failed roots read starts with — the one degrade a later
+/// successful read may clear.
+pub const ROOTS_UNREADABLE: &str = "roots unreadable: ";
+
+/// The lifecycle state plus the wall-clock time this process started.
 ///
 /// `RwLock` rather than a channel: every reader is a request handler asking one
 /// question, the writers are three rare transitions, and the answer must be visible
@@ -21,7 +25,7 @@ use grove_ops::clock::Clock;
 #[derive(Debug)]
 pub struct BootState {
     status: RwLock<BootStatus>,
-    started: Instant,
+    started: SystemTime,
 }
 
 impl BootState {
@@ -30,7 +34,7 @@ impl BootState {
     pub fn new(clock: &(impl Clock + ?Sized)) -> Self {
         Self {
             status: RwLock::new(BootStatus::Booting),
-            started: clock.now(),
+            started: clock.wall(),
         }
     }
 
@@ -46,32 +50,49 @@ impl BootState {
         self.read().is_ready()
     }
 
-    /// How long this process has been up, per `clock`.
+    /// How long this process has been up, on the wall clock: a monotonic instant stops
+    /// while macOS sleeps, so it under-reports a laptop daemon's age by the nights.
     #[must_use]
     pub fn uptime_ms(&self, clock: &(impl Clock + ?Sized)) -> u64 {
-        u64::try_from(
-            clock
-                .now()
-                .saturating_duration_since(self.started)
-                .as_millis(),
-        )
-        .unwrap_or(u64::MAX)
+        let up = clock
+            .wall()
+            .duration_since(self.started)
+            .unwrap_or_default();
+        u64::try_from(up.as_millis()).unwrap_or(u64::MAX)
     }
 
-    /// Enter `ready` — **unless already degraded**.
+    /// Leave `booting` for `ready` — never a degrade, and never a drain already begun.
     ///
     /// The stickiness is the point (v1 hazard `boot-degrade-sticky`): a degrade
-    /// recorded while the process was coming up must survive the unconditional
-    /// "the tree is started, we are ready" signal that follows it. Otherwise a
-    /// daemon that came up unable to do its job would answer `/api/health` 200 and
-    /// `grove upgrade`'s health smoke would accept the release that broke it.
+    /// recorded while the process was coming up must survive the "we are ready"
+    /// signal that follows it. Otherwise a daemon that came up unable to do its job
+    /// would answer `/api/health` 200 and `grove upgrade`'s health smoke would accept
+    /// the release that broke it. Only [`derived`](Self::derived) clears a degrade, and
+    /// only the one a failed roots read set.
     // ※ boot-degrade-sticky
     pub fn mark_ready(&self) {
         let mut status = self.write();
-        if matches!(*status, BootStatus::Degraded { .. }) {
-            return;
+        if *status == BootStatus::Booting {
+            *status = BootStatus::Ready;
         }
-        *status = BootStatus::Ready;
+    }
+
+    /// The verdict of one read of the declared roots: the first success lifts
+    /// `booting`, a failure degrades with its reason, a later success clears that
+    /// degrade. A drain or any other degrade is left as it is.
+    pub fn derived(&self, read: Result<(), String>) {
+        let mut status = self.write();
+        let open = *status == BootStatus::Booting
+            || matches!(&*status, BootStatus::Degraded { reason } if reason.starts_with(ROOTS_UNREADABLE));
+        match read {
+            Ok(()) if open => *status = BootStatus::Ready,
+            Err(e) if open || *status == BootStatus::Ready => {
+                *status = BootStatus::Degraded {
+                    reason: format!("{ROOTS_UNREADABLE}{e}"),
+                };
+            }
+            _ => {}
+        }
     }
 
     /// Enter `stopping`. Overrides a degrade: a daemon asked to drain *is* draining,
@@ -152,6 +173,33 @@ mod tests {
         // second ready signal gets past.
         state.mark_ready();
         assert!(matches!(state.status(), BootStatus::Degraded { .. }));
+        state.derived(Ok(()));
+        assert!(
+            matches!(state.status(), BootStatus::Degraded { .. }),
+            "a roots read clears only its own degrade"
+        );
+    }
+
+    /// The roots read drives readiness: booting until the first one lands, degraded
+    /// while one fails, ready again on recovery — and a drain is never undone.
+    #[test]
+    fn a_roots_read_lifts_booting_degrades_and_recovers() {
+        let state = BootState::new(&TestClock::new());
+        state.derived(Ok(()));
+        assert_eq!(state.status(), BootStatus::Ready);
+        state.derived(Err("bad toml".into()));
+        assert_eq!(
+            state.status(),
+            BootStatus::Degraded {
+                reason: "roots unreadable: bad toml".into()
+            }
+        );
+        state.derived(Ok(()));
+        assert_eq!(state.status(), BootStatus::Ready);
+        state.mark_stopping();
+        state.derived(Err("bad toml".into()));
+        state.mark_ready();
+        assert_eq!(state.status(), BootStatus::Stopping);
     }
 
     /// The one transition a degrade does *not* block: an operator asking a degraded

@@ -35,15 +35,14 @@
 //! use grove_ops::clock::SystemClock;
 //!
 //! let daemon = Daemon::bind(Config::from_env()?, Arc::new(SystemClock)).await?;
-//! daemon.state().boot.mark_ready();
 //! daemon.serve().await?;
 //! # Ok(()) }
 //! ```
 //!
-//! Binding, readiness and serving are three separate steps on purpose: a port-0
-//! bind must report the address it got before anything can reach it, and readiness
-//! is the *caller's* signal — `grove serve` gives it once the process is up, and a
-//! test serves a deliberately `booting` or `degraded` daemon to exercise the gate.
+//! Binding and serving are separate steps on purpose: a port-0 bind must report the
+//! address it got before anything can reach it. Health stays `booting` until the
+//! watcher's first read of the declared roots lands, and reads `degraded` while that
+//! read fails ([`BootState::derived`]).
 //!
 //! `serve` also starts the engine room — the watcher and the engine set — unless
 //! the caller has claimed the reconcile mailbox with

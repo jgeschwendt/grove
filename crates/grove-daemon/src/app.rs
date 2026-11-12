@@ -201,9 +201,9 @@ pub fn router(state: AppState) -> Router {
 /// A daemon holding its listener, before it serves.
 ///
 /// Binding and serving are separate so the caller can learn the real address of a
-/// port-0 bind, and so the readiness signal is the caller's to give: `grove serve`
-/// marks ready once the process is up, and a test can serve a deliberately
-/// `booting` or `degraded` daemon to exercise the gate.
+/// port-0 bind. Readiness comes from the watcher's first roots read; a caller that
+/// claims the mailbox drives it instead, serving a deliberately `booting` or
+/// `degraded` daemon to exercise the gate.
 pub struct Daemon {
     state: AppState,
     listener: TcpListener,
@@ -267,7 +267,8 @@ impl Daemon {
         self.nudges.take()
     }
 
-    /// Start the engine room: the manifest watcher and the engine set.
+    /// Start the engine room: the manifest watcher and the engine set. The watcher's
+    /// first roots read is what moves health off `booting`.
     ///
     /// Order matters. The set subscribes to the bus before the watcher can publish
     /// its boot announcement, so the announcement is not lost to a subscriber that
@@ -286,6 +287,7 @@ impl Daemon {
         let _ = self.state.engines.set(set);
         Watcher::start(
             self.state.config.home.clone(),
+            Arc::clone(&self.state.boot),
             Arc::clone(&self.state.clock),
             self.state.events.clone(),
             nudges,
@@ -313,8 +315,6 @@ impl Daemon {
     ///
     /// [`Lanes::quiesced`]: crate::lane::Lanes::quiesced
     pub async fn serve(mut self) -> Result<(), Error> {
-        // Readiness stays the caller's signal (see the crate doc); serving only
-        // starts the machinery that convergence needs.
         let watcher = self
             .nudges
             .take()

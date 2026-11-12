@@ -15,7 +15,7 @@ invariants:
   - claim: "POST /api/roots/sync is ACCEPT-ONLY and takes no lane of its own: it answers {sync: accepted} once the root's engine has recorded the request, so a burst coalesces through the engine's single background slot, and completion is observed on root_sync_changed / the snapshot's syncing+sync_note rather than returned. Declaredness is read off the manifest first (404), and a declared root no engine is driving is 503 — acknowledging there would be a request nothing recorded and a root_sync_changed no client ever sees"
     anchor: crates/grove-daemon/src/routes.rs#sync
     enforced_by: crates/grove-daemon/tests/http_contract.rs
-  - claim: "the readiness gate 503s every non-whitelisted /api route while draining or degraded; the whitelist is exactly /api/health and /api/daemon/shutdown, so state stays observable and a stop request stays reachable"
+  - claim: "the readiness gate 503s every non-whitelisted /api route while draining or degraded; the whitelist is exactly /api/health, /api/daemon/shutdown and /api/roots/reconcile, so state stays observable, a stop request stays reachable, and a daemon degraded by an unreadable manifest can be nudged to read it again"
     anchor: ※ readiness-whitelist
     enforced_by: crates/grove-daemon/tests/http_contract.rs
   - claim: "the mutation guard allows a state-changing request only with NO Origin (every non-browser client) or an Origin whose host is in a FIXED loopback set — never the request's own Host, which is what makes it a DNS-rebinding defense"
@@ -25,11 +25,11 @@ invariants:
     anchor: ※ loopback-bind-gate
   - claim: "the status transition table is the one place a root's status changes: disk-ready always wins upward, a Derive preserves the driver-owned cloning/degraded transients, and a ReconcileError trusts disk plainly so no stale transient is stranded"
     anchor: crates/grove-daemon/src/engine/status.rs#next_status
-  - claim: "the graceful drain is BOUNDED — open responses first, then lane work, on one budget under the CLI's stop grace — because an SSE response finishes only when its body is written and one peer that stopped reading would otherwise hold every stop open until SIGTERM"
+  - claim: "the graceful drain is BOUNDED — open responses first, then lane work, on one budget under the CLI's stop grace — because an SSE response finishes only when its body is written and one peer that stopped reading would otherwise hold every stop open until SIGKILL"
     anchor: crates/grove-daemon/src/app.rs#DEFAULT_DRAIN
     enforced_by: crates/grove-daemon/tests/drain.rs
 hazards:
-  - claim: "a degrade is STICKY: mark_ready never clears it, only a fresh process does. A boot-time degrade must survive the unconditional post-boot ready signal, or `grove upgrade`'s health smoke would accept the release that broke it."
+  - claim: "a degrade is STICKY: mark_ready never clears it, a successful roots read clears only the degrade a failed one set, and anything else only a fresh process clears. A boot-time degrade must survive the ready signal, or `grove upgrade`'s health smoke would accept the release that broke it."
     anchor: ※ boot-degrade-sticky
   - claim: "the mutating API is UNAUTHENTICATED until served-mode auth lands; the loopback bind gate, the readiness gate and this fixed loopback allowlist — checked against every request's Host and every mutation's Origin — are the whole of the compensating control, and another app already on a loopback port can still present a loopback origin"
     anchor: ※ unauthenticated-api
@@ -41,13 +41,13 @@ edges:
 
 ## Anchors in this territory
 
-- ※ boot-degrade-sticky → src/boot.rs:68
+- ※ boot-degrade-sticky → src/boot.rs:72
 - ※ loopback-bind-gate → src/config.rs:192
-- ※ mutation-guard → src/guard.rs:96
+- ※ mutation-guard → src/guard.rs:102
 - ※ per-root-lane → src/lane.rs:174
 - ※ push-only → src/engine/mod.rs:364
-- ※ readiness-whitelist → src/guard.rs:23
+- ※ readiness-whitelist → src/guard.rs:25
 - ※ status-is-a-cache → src/engine/status.rs:52
-- ※ unauthenticated-api → src/guard.rs:34
+- ※ unauthenticated-api → src/guard.rs:40
 
 <!-- @end -->
