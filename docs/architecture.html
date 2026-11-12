@@ -181,11 +181,14 @@ is the gated way to ask for the same convergence.</p>
 <h2 class="h2">The daemon</h2>
 </header>
 <div class="stack">
-<p class="docs-note"><code class="code">grove serve</code> builds a multi-thread tokio runtime, installs a <code class="code">tracing</code> subscriber with
-two sinks (stderr, and the daemon's log ring), binds, signals readiness, and serves until
-the shutdown route drains the accept loop. Binding, readiness and serving are three
-separate steps: a port-0 bind must report the address it got, and readiness is the
-caller's signal — nothing inside the daemon may declare itself ready.</p>
+<p class="docs-note"><code class="code">grove serve</code> installs a <code class="code">tracing</code> subscriber with three sinks
+(<code class="code">$GROVE_HOME/serve.log</code>, stderr unless it is a file, and the daemon's log ring) and a panic hook that logs
+first, writes a start line with its version and pid, builds a multi-thread tokio runtime,
+binds, and serves until the shutdown route or SIGTERM, SIGINT or SIGHUP drains the accept
+loop; then it kills any git child still running, by process group, and writes an exit line
+naming the reason. <code class="code">serve.log</code> rotates to <code class="code">serve.log.1</code> at 10 MiB, one generation kept.
+Health reads <code class="code">booting</code> until the watcher's first read of the declared roots
+lands.</p>
 <h3 class="h3" id="daemon-lanes">Lanes — per-root serialization</h3>
 <p class="docs-note"><code class="code">grove-ops</code> was written against a single-git-writer-per-root invariant and does not
 enforce it; its <code class="code">flock</code> serializes the <em>manifest</em>, deliberately not git. So every
@@ -255,25 +258,31 @@ as <code class="code">GET /api/roots</code> and as the opening frame of <code cl
 stream — snapshot, then every state event, every log line, and a heartbeat comment every
 15 s of silence, read off the clock seam.</p>
 <h3 class="h3" id="daemon-boot-state-and-guards">Boot state and guards</h3>
-<p class="docs-note"><code class="code">booting → ready → stopping</code>, with a sticky <code class="code">degraded(reason)</code> beside it. <code class="code">mark_ready</code>
-never clears a degrade: a fault recorded while the process was coming up must survive the
-unconditional post-boot ready signal, or <code class="code">grove upgrade</code>'s health smoke would accept the
-release that broke it. <code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain
-<em>is</em> draining.</p>
+<p class="docs-note"><code class="code">booting → ready → stopping</code>, with a sticky <code class="code">degraded(reason)</code> beside it. The
+watcher's roots read drives it: the first success lifts <code class="code">booting</code>, a failure (a
+<code class="code">manifest.toml</code> that will not parse) degrades with <code class="code">roots unreadable: …</code>, and a later
+success clears that degrade and no other. <code class="code">mark_ready</code> never clears a degrade: a fault
+recorded while the process was coming up must survive the ready signal, or
+<code class="code">grove upgrade</code>'s health smoke would accept the release that broke it.
+<code class="code">mark_stopping</code> does override a degrade — a daemon asked to drain <em>is</em> draining.
+<code class="code">uptime_ms</code> is wall-clock, so it counts the hours a laptop slept.</p>
 <p class="docs-note">Three middleware layers — host, readiness, mutation — wrap every route
 (<a class="link" href="api.html#guards"><code class="code">api.html</code> § Guards</a>); with the loopback bind refusal in
 <code class="code">config::guard_loopback</code> they compensate for an unauthenticated API until served-mode auth lands.</p>
 <h3 class="h3" id="daemon-drain">Drain</h3>
 <p class="docs-note"><code class="code">POST /api/daemon/shutdown</code> marks stopping <em>before</em> it answers, then schedules the accept
-loop to stop after a 100 ms grace so the acknowledgement reaches the client. <code class="code">Daemon::serve</code>
+loop to stop after a 100 ms grace so the acknowledgement reaches the client; a stop signal
+marks stopping and stops it at once. <code class="code">Daemon::serve</code>
 then spends one budget (<code class="code">drain_budget</code>, default 5 s, armed off the clock seam at the
 trigger) in two phases: open responses first, then lane work via <code class="code">Lanes::quiesced</code>. What
 does not land in either phase is logged by slug and abandoned.</p>
 <p class="docs-note">An SSE response finishes only when its body stops being written,
 so one peer that stopped reading would hold <code class="code">grove serve</code> open forever and make every stop
-end at SIGTERM. The default sits under the CLI's own 10 s stop grace — pinned from both
-sides by <code class="code">the_drain_budget_fits_inside_the_cli_stop_grace</code> and
-<code class="code">the_budgets_stay_in_their_intended_order</code>.</p>
+end at SIGKILL. The default, plus the 2 s the runtime gets after it, sits under the CLI's own
+10 s stop grace — pinned from both sides by
+<code class="code">the_drain_budget_fits_inside_the_cli_stop_grace</code> and
+<code class="code">the_budgets_stay_in_their_intended_order</code> — and under the server agent's
+<code class="code">ExitTimeOut</code>, which <code class="code">grove setup</code> writes from that grace.</p>
 <h3 class="h3" id="daemon-process-custody">Process custody</h3>
 <p class="docs-note">Custody lives in the CLI (<code class="code">grove::server::ServerControl</code>), not the daemon: <code class="code">grove on</code>
 launches the grove binary detached as <code class="code">&lt;launcher&gt; serve</code>, tracks it by
@@ -282,7 +291,17 @@ the API, then escalates SIGTERM → SIGKILL; the drain goes only to a listener t
 grove for <em>this</em> home, never to a stranger or to another home's daemon on the bind. A pid is re-verified before every escalation
 signal — liveness plus a start-time identity token — so a recycled pid reads as stale
 rather than as grove still running. A bind held with no pid file refuses the start rather
-than adopting a stranger. <code class="code">grove reboot</code> is off then on.</p>
+than adopting a stranger. <code class="code">grove reboot</code> is off then on. When launchd has the
+<code class="code">dev.gigantic.grove</code> agent loaded for this home, launchd owns the process: <code class="code">grove off</code> is
+<code class="code">launchctl bootout</code> and <code class="code">grove reboot</code> one <code class="code">launchctl kickstart -k</code>, never a drain
+raced against <code class="code">KeepAlive</code>'s respawn.</p>
+<p class="docs-note">The client shakes hands on version: when the daemon's health names another
+version than the CLI's, one stderr line names both and the fix
+(<code class="code">launchctl kickstart -k gui/&lt;uid&gt;/dev.gigantic.grove</code>), and the command carries on. A
+request that failed to connect is sent again, up to three sends 100 then 200 ms apart, so a
+daemon mid-respawn answers it; a read is resent the same way on any failure short of a
+timeout; a mutation that reached the daemon and got no answer is exit 7, outcome unknown,
+and never resent.</p>
 </div>
 </section>
 
@@ -340,7 +359,7 @@ over blocking HTTP, and it has no default destination: with <code class="code">G
 <code class="code">GROVE_OTLP_TRACES_ENDPOINT</code> unset, <code class="code">init</code> hands back the same no-op handle it hands back
 when telemetry is off.</p>
 <p class="docs-note" id="telemetry-unwired"><strong>No binary calls <code class="code">telemetry::init</code></strong>, so the
-daemon's observability is the <code class="code">tracing</code> subscriber (stderr plus the log ring) above
+daemon's observability is the <code class="code">tracing</code> subscriber (<code class="code">serve.log</code>, stderr and the log ring) above
 (<a class="link" href="index.html#next">next</a>: wire it into <code class="code">grove serve</code>).</p>
 </div>
 </section>

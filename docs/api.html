@@ -108,7 +108,7 @@ path parameter.</p>
 <thead><tr><th>method + path</th><th>request</th><th>200 <code class="code">data</code></th></tr></thead>
 <tbody>
 <tr><td><code class="code">GET /api/health</code></td><td>—</td><td><code class="code">{status: "ready", version, home}</code></td></tr>
-<tr><td><code class="code">GET /api/daemon/version</code></td><td>—</td><td><code class="code">{version, uptime_ms}</code></td></tr>
+<tr><td><code class="code">GET /api/daemon/version</code></td><td>—</td><td><code class="code">{version, uptime_ms}</code> — uptime on the wall clock, sleep included</td></tr>
 <tr><td><code class="code">POST /api/daemon/shutdown</code></td><td>—</td><td><code class="code">{stopping: true}</code></td></tr>
 <tr><td><code class="code">POST /api/roots/reconcile</code></td><td>—</td><td><code class="code">{reconcile: "scheduled"}</code></td></tr>
 <tr><td><code class="code">POST /api/roots/sync</code></td><td><code class="code">{slug}</code></td><td><code class="code">{sync: "accepted"}</code></td></tr>
@@ -168,12 +168,13 @@ too. This is the read half of the DNS-rebinding defense: after <code class="code
 127.0.0.1 a page's <code class="code">fetch("/api/roots")</code> is same-origin to its browser and carries no
 <code class="code">Origin</code>, but its <code class="code">Host</code> is still <code class="code">evil.example</code>.</p>
 <p class="docs-note" id="guards-readiness"><strong>Readiness</strong> 503s every non-whitelisted <code class="code">/api</code> path while the boot state is <code class="code">stopping</code> or
-<code class="code">degraded</code>. The whitelist is exactly two paths:</p>
+<code class="code">degraded</code>. The whitelist is exactly three paths:</p>
 <pre class="snippet"><code>/api/health              # so the state stays observable — grove upgrade's smoke reads it
 /api/daemon/shutdown     # so a late, repeated, or degraded-daemon stop is not refused
+/api/roots/reconcile     # so a daemon degraded by an unreadable manifest can be told it was fixed
 </code></pre>
-<p class="docs-note"><code class="code">booting</code> is not gated: the window between <code class="code">Daemon::bind</code> and the caller's
-<code class="code">mark_ready</code> is microseconds wide.</p>
+<p class="docs-note"><code class="code">booting</code> is not gated: it lasts from <code class="code">Daemon::bind</code> to the watcher's first
+roots read, and only health reports it.</p>
 <p class="docs-note" id="guards-mutation"><strong>Mutation</strong> passes GET/HEAD/OPTIONS untouched. For every other method it allows:</p>
 <ul class="claims stack" role="list">
 <li>a <strong>missing</strong> <code class="code">Origin</code> — the CLI and every other non-browser client sends none, so

@@ -100,7 +100,8 @@ the next boot;</li>
 the half-realized state <code class="code">reconcile_one</code> finishes;</li>
 <li><code class="code">roots::adopt</code> at boot re-declares any on-disk bare that lost its manifest entry.</li>
 </ul>
-<p class="docs-note">A substrate may stop, snapshot, move and restart the process freely. The bounded drain
+<p class="docs-note">A substrate may stop, snapshot, move and restart the process freely; SIGTERM, SIGINT and
+SIGHUP each drain and exit 0. The bounded drain
 (<a class="link" href="architecture.html#daemon-drain"><code class="code">architecture.html</code> § Drain</a>) lets in-flight git work land; it is
 not a precondition.</p>
 </div>
@@ -117,7 +118,7 @@ not a precondition.</p>
 <tbody>
 <tr><td>a Unix host — Linux or macOS</td><td><code class="code">grove-ops</code> uses <code class="code">openat</code>/<code class="code">renameat</code>/<code class="code">symlinkat</code> through <code class="code">rustix</code>; there is no Windows path</td></tr>
 <tr><td><code class="code">git</code> on <code class="code">PATH</code></td><td>worktree, status, prune, fetch and remote reads shell out to git (<code class="code">grove_ops::git::git_command</code>, which pins <code class="code">LC_ALL=C</code> and scrubs git's local-repo environment). The bare <em>clone</em> itself goes through <code class="code">gix</code> in-process</td></tr>
-<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">grove.log</code>. No install lives here</td></tr>
+<tr><td>a writable <code class="code">$GROVE_HOME</code> — the workspace</td><td>default <code class="code">~/.grove</code>; holds <code class="code">manifest.toml</code> and its advisory <code class="code">manifest.toml.lock</code> (manifest read-modify-write), every checkout under <code class="code">code/&lt;slug&gt;/</code>, everything grove owns for each root under <code class="code">roots/&lt;slug&gt;/</code> (the bare, the warm pool, the in-flight-clone marker), and the daemon's <code class="code">grove.lock</code>, <code class="code">grove.pid</code> and <code class="code">serve.log</code> (with one rotated <code class="code">serve.log.1</code>, and the server agent's stderr in <code class="code">serve.err</code>). No install lives here</td></tr>
 <tr><td>a filesystem with symlinks</td><td>shares in the workspace</td></tr>
 <tr><td>outbound HTTPS/SSH to the git remotes</td><td>clone and fetch</td></tr>
 <tr><td>loopback networking</td><td>the API</td></tr>
@@ -139,9 +140,9 @@ not a precondition.</p>
 <table data-table>
 <thead><tr><th>variable</th><th>default</th><th>effect</th></tr></thead>
 <tbody>
-<tr><td><code class="code">GROVE_HOME</code></td><td><code class="code">~/.grove</code></td><td>the workspace grove realizes — <code class="code">manifest.toml</code>, <code class="code">code/</code> (checkouts), <code class="code">roots/</code> (bares, pools, clone markers), <code class="code">grove.{lock,pid,log}</code> — resolved once, in <code class="code">grove_ops::home</code>, for the CLI, the launcher and the daemon alike</td></tr>
+<tr><td><code class="code">GROVE_HOME</code></td><td><code class="code">~/.grove</code></td><td>the workspace grove realizes — <code class="code">manifest.toml</code>, <code class="code">code/</code> (checkouts), <code class="code">roots/</code> (bares, pools, clone markers), <code class="code">grove.{lock,pid}</code>, <code class="code">serve.log</code> — resolved once, in <code class="code">grove_ops::home</code>, for the CLI, the launcher and the daemon alike</td></tr>
 <tr><td><code class="code">GROVE_BIND</code></td><td><code class="code">127.0.0.1:7777</code></td><td>where the daemon listens (daemon: literal loopback only)</td></tr>
-<tr><td><code class="code">GROVE_LOG</code></td><td><code class="code">info</code></td><td><code class="code">EnvFilter</code> directive for what the process writes to stderr (ANSI colour only when stderr is a terminal, so <code class="code">grove.log</code> stays greppable)</td></tr>
+<tr><td><code class="code">GROVE_LOG</code></td><td><code class="code">info</code></td><td><code class="code">EnvFilter</code> directive for what the process writes to <code class="code">serve.log</code> and stderr (ANSI colour on stderr only, and only when it is a terminal)</td></tr>
 <tr><td><code class="code">GROVE_LOG_RING</code></td><td><code class="code">info</code></td><td>the level at which lines enter the ring <code class="code">GET /api/events</code> streams</td></tr>
 <tr><td><code class="code">GROVE_MANIFEST_FS_WATCH</code></td><td>on</td><td>the opportunistic <code class="code">manifest.toml</code> filesystem watch</td></tr>
 <tr><td><code class="code">GROVE_CLONE_LIMIT</code></td><td>4</td><td>how many roots may hold a clone at once</td></tr>
@@ -169,9 +170,9 @@ default, which is how a client scoped to one home reaches another's daemon.</p>
 </header>
 <div class="stack">
 <pre class="snippet"><code>grove serve    # the launcher contract: run the daemon in this process, in the foreground
-grove on       # start it detached; stdout+stderr land in $GROVE_HOME/grove.log
-grove off      # drain over the API, then SIGTERM → SIGKILL if it will not go
-grove reboot   # off, then on
+grove on       # start it detached; it logs to $GROVE_HOME/serve.log
+grove off      # drain over the API, then SIGTERM → SIGKILL if it will not go; launchd's agent: bootout
+grove reboot   # off, then on; launchd's agent: kickstart -k
 grove ok       # is it healthy?
 </code></pre>
 <p class="docs-note"><code class="code">grove serve</code> is the published launcher string: <code class="code">grove on</code> spawns <code class="code">&lt;binary&gt; serve</code>, and any
