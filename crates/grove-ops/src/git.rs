@@ -1,10 +1,10 @@
 //! Git operations: bare clone (gix) and worktree creation (git CLI).
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -229,9 +229,39 @@ fn drain<R: std::io::Read + Send + 'static>(r: R) -> thread::JoinHandle<Vec<u8>>
     })
 }
 
+/// The process groups of running git children while this process supervises them
+/// (`grove serve`), `None` in the CLI: there git stays in the terminal's foreground group,
+/// so Ctrl-C reaches it and an ssh passphrase prompt is not stopped by `SIGTTIN`.
+static GROUPS: Mutex<Option<BTreeSet<u32>>> = Mutex::new(None);
+
+/// Set once [`kill_children`] ran: a git spawned after it would outlive the daemon.
+static CLOSED: AtomicBool = AtomicBool::new(false);
+
+/// Run every later git child in its own process group, so a kill reaches what it
+/// spawned too (ssh, credential helpers, hooks).
+pub fn supervise() {
+    *groups() = Some(BTreeSet::new());
+}
+
+/// Kill every supervised git child by group and refuse any further spawn — the
+/// daemon's last act, so no git work outlives it.
+pub fn kill_children() {
+    let mut groups = groups();
+    CLOSED.store(true, Ordering::Relaxed);
+    for group in groups.iter().flatten() {
+        let _ = rustix::process::Pid::from_raw(group.cast_signed())
+            .map(|pid| rustix::process::kill_process_group(pid, rustix::process::Signal::KILL));
+    }
+    *groups = None;
+}
+
+fn groups() -> std::sync::MutexGuard<'static, Option<BTreeSet<u32>>> {
+    GROUPS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// The single git runner: spawn `cmd`, wait for it, and collect its `Output`,
-/// optionally under a wall-clock cap. `None` = unbounded (plain `output()`); a
-/// `Some(timeout)` bound is a kill of the child at the deadline — the git CLI has
+/// optionally under a wall-clock cap. `None` = unbounded; a `Some(timeout)` bound is a
+/// kill of the child — by group, when supervised — at the deadline: the git CLI has
 /// no interrupt flag to trip (unlike the gix clone's watchdog). Pipes are drained
 /// on threads so a chatty child can't deadlock against a full pipe buffer while the
 /// deadline loop polls `try_wait`. `Err` is reserved for real faults — a failed
@@ -254,37 +284,63 @@ fn run_until(
     clock: &dyn Clock,
     what: &str,
 ) -> Result<std::process::Output> {
+    use std::os::unix::process::CommandExt as _;
     use std::process::Stdio;
-
-    let Some(deadline) = deadline else {
-        return cmd.output().with_context(|| format!("spawn {what}"));
-    };
 
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // held across the spawn, so `kill_children` cannot miss a child mid-registration
+    let mut live = groups();
+    if CLOSED.load(Ordering::Relaxed) {
+        bail!("{what} refused: the daemon is stopping");
+    }
+    let grouped = live.is_some();
+    if grouped {
+        cmd.process_group(0);
+    }
     let mut child = cmd.spawn().with_context(|| format!("spawn {what}"))?;
+    let id = child.id();
+    if let Some(g) = live.as_mut() {
+        g.insert(id);
+    }
+    drop(live);
 
-    let stdout = drain(child.stdout.take().expect("piped stdout"));
-    let stderr = drain(child.stderr.take().expect("piped stderr"));
-
-    let status = loop {
-        if let Some(status) = child.try_wait().with_context(|| format!("wait {what}"))? {
-            break status;
-        }
-        if deadline.expired(clock) {
-            let _ = child.kill();
-            let _ = child.wait(); // reap; never leave a zombie
-            bail!("{what} aborted: exceeded its timeout");
-        }
-        thread::sleep(Duration::from_millis(100));
-    };
-
-    Ok(std::process::Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    })
+    let out = (|| {
+        let Some(deadline) = deadline else {
+            return child
+                .wait_with_output()
+                .with_context(|| format!("wait {what}"));
+        };
+        let stdout = drain(child.stdout.take().expect("piped stdout"));
+        let stderr = drain(child.stderr.take().expect("piped stderr"));
+        let status = loop {
+            if let Some(status) = child.try_wait().with_context(|| format!("wait {what}"))? {
+                break status;
+            }
+            if deadline.expired(clock) {
+                if grouped {
+                    let _ = rustix::process::kill_process_group(
+                        rustix::process::Pid::from_child(&child),
+                        rustix::process::Signal::KILL,
+                    );
+                }
+                let _ = child.kill();
+                let _ = child.wait(); // reap; never leave a zombie
+                bail!("{what} aborted: exceeded its timeout");
+            }
+            thread::sleep(Duration::from_millis(100));
+        };
+        Ok(std::process::Output {
+            status,
+            stdout: stdout.join().unwrap_or_default(),
+            stderr: stderr.join().unwrap_or_default(),
+        })
+    })();
+    if let Some(g) = groups().as_mut() {
+        g.remove(&id);
+    }
+    out
 }
 
 /// `out`'s stdout, decoded lossily and trimmed — the "read a line of git output"
@@ -987,6 +1043,56 @@ mod tests {
         cmd.arg("0");
         let out = run_until(cmd, Some(deadline), &clock, "sleep").unwrap();
         assert!(out.status.success());
+    }
+
+    /// Supervised, a git child runs in its own group: its timeout kills what it spawned,
+    /// `kill_children` kills a running one the same way, and nothing spawns after it.
+    #[test]
+    fn supervised_children_die_by_group_on_timeout_and_on_shutdown() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let clock = Arc::new(crate::clock::TestClock::new());
+        supervise();
+        let orphan = |n: &str, deadline: Option<Deadline>| {
+            let file = tmp.path().join(n);
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "sleep 60 & echo $! > \"$0\"; wait"])
+                .arg(&file);
+            let clock = Arc::clone(&clock);
+            let run = thread::spawn(move || run_until(cmd, deadline, &*clock, "sh").map(drop));
+            while !std::fs::read_to_string(&file).is_ok_and(|s| s.ends_with('\n')) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let pid = std::fs::read_to_string(&file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            (run, rustix::process::Pid::from_raw(pid).unwrap())
+        };
+        let dead = |pid| {
+            (0..200).any(|_| {
+                thread::sleep(Duration::from_millis(10));
+                rustix::process::test_kill_process(pid).is_err()
+            })
+        };
+
+        let (run, pid) = orphan("timeout", Some(clock.deadline(Duration::from_secs(1))));
+        clock.advance(Duration::from_secs(2));
+        assert!(run.join().unwrap().is_err(), "the deadline kills the child");
+        assert!(dead(pid), "…and its group");
+
+        let (run, pid) = orphan("shutdown", None);
+        kill_children();
+        assert!(
+            run.join().unwrap().is_ok(),
+            "a killed child is a nonzero exit"
+        );
+        assert!(dead(pid), "shutdown kills the group");
+        let refused = run_until(Command::new("true"), None, &*clock, "true").unwrap_err();
+        assert!(
+            refused.to_string().contains("daemon is stopping"),
+            "{refused}"
+        );
     }
 
     /// The clone watchdog trips off the same seam: a `TestClock` already past the
