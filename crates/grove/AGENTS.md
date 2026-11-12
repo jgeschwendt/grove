@@ -16,8 +16,11 @@ invariants:
     anchor: ※ busy-refuses-destructive
   - claim: "`grove on` polls GET /api/health in a loop until ready — the sanctioned exception to the push-only rule: a one-shot CLI has no channel for the daemon it spawned to push readiness back"
     anchor: ※ cli-health-poll
-  - claim: "exit codes 1/3/4/5/6 are a published contract, and the grove_ops::Error to CliError map is what makes the offline codes reachable; an error envelope from the server is exit 1 carrying its code, its message AND error.data's detail, since two of the codes say nothing else"
+  - claim: "exit codes 1/3/4/5/6/7 are a published contract, and the grove_ops::Error to CliError map is what makes the offline codes reachable; an error envelope from the server is exit 1 carrying its code, its message AND error.data's detail, since two of the codes say nothing else"
     anchor: crates/grove/src/error.rs#exit_code
+  - claim: "SIGTERM, SIGINT and SIGHUP run the shutdown route's drain and exit 0 with an exit line, inside the server agent's ExitTimeOut; a daemon launchd owns is stopped by bootout and swapped by one kickstart -k, never by a drain raced against KeepAlive's respawn"
+    anchor: ※ stop-signals-drain
+    enforced_by: crates/grove/tests/cli_e2e.rs
   - claim: "`grove setup` reloads a loaded agent whose plist changed, never the upgrade agent's: setup runs inside the swap that agent started, and its bootout would kill that swap"
     anchor: ※ upgrade-agent-kept
     enforced_by: crates/grove/tests/setup_e2e.rs
@@ -34,9 +37,10 @@ edges:
 
 - ※ apply-is-ungated → src/commands.rs:554
 - ※ busy-refuses-destructive → src/commands.rs:71
-- ※ cli-health-poll → src/server.rs:470
-- ※ reachability-tri-state → src/api.rs:136
+- ※ cli-health-poll → src/server.rs:488
+- ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
+- ※ stop-signals-drain → src/lib.rs:260
 - ※ upgrade-agent-kept → src/setup.rs:103
 
 <!-- @end -->

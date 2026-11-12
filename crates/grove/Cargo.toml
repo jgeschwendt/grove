@@ -20,8 +20,8 @@ grove-ops = { path = "../grove-ops" }
 # (https://gigantic.dev/hotswap/).
 hotswap = { git = "https://github.com/jgeschwendt/hotswap", rev = "84dda4eb24b0243cd684718c1f65132ce98fee0e" }
 # Signals + `waitpid` for the drain ladder, which needs to distinguish "exited" from
-# "still alive" without racing a reaped child.
-nix = { version = "0.31", features = ["process", "signal"] }
+# "still alive" without racing a reaped child; `getuid` for the launchd domain.
+nix = { version = "0.31", features = ["process", "signal", "user"] }
 # Loopback HTTP only: the readiness, identity and drain probes. Blocking because the
 # CLI is one-shot — `grove serve` builds the only runtime in this binary, and none of
 # these probes run inside it.
@@ -31,8 +31,9 @@ rustix = { version = "1", features = ["fs"] }
 # as a bound on the shared POST helper.
 serde = "1"
 serde_json = "1"
-# The daemon's own runtime, built by `grove serve` and nothing else.
-tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
+# The daemon's own runtime, built by `grove serve` and nothing else; `signal` turns
+# SIGTERM, SIGINT and SIGHUP into the shutdown route's drain.
+tokio = { version = "1", features = ["net", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 

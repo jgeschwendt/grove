@@ -18,6 +18,10 @@ use serde::de::DeserializeOwned;
 use crate::CliError;
 use crate::timeouts;
 
+/// How many times one request is sent at most: enough to span the moment launchd takes
+/// to respawn a daemon a swap just restarted.
+const SENDS: u32 = 3;
+
 /// `GROVE_BIND`'s default, spelled as the CLI writes it into a URL.
 ///
 /// Derived from the daemon's own [`grove_daemon::DEFAULT_BIND`] rather than written
@@ -138,11 +142,14 @@ impl ApiClient {
     pub fn reachable(&self) -> Reachability {
         match self.get("/api/health", self.probe_timeout) {
             Ok(response) => {
-                if self.serves_another_home(response) {
-                    Reachability::Offline
-                } else {
-                    Reachability::Up
+                let health = ready(response);
+                if self.serves_another_home(health.as_ref()) {
+                    return Reachability::Offline;
                 }
+                if let Some(health) = health {
+                    self.skew(&health.version);
+                }
+                Reachability::Up
             }
             Err(e) if e.is_connect() => Reachability::Offline,
             Err(_) => Reachability::Busy,
@@ -156,12 +163,23 @@ impl ApiClient {
     /// — a non-2xx, an undecodable body, a client with no home of its own — is "not
     /// proven different", which keeps the answer `Up` and leaves the single-realizer
     /// gate exactly as it was.
-    fn serves_another_home(&self, response: reqwest::blocking::Response) -> bool {
-        response.status().is_success()
-            && matches!(
-                response.json::<Envelope<HealthData>>(),
-                Ok(Envelope::Ok(data)) if self.is_another_home(&data.home)
-            )
+    fn serves_another_home(&self, health: Option<&HealthData>) -> bool {
+        health.is_some_and(|data| self.is_another_home(&data.home))
+    }
+
+    /// One stderr line when the daemon answering runs another version than this CLI,
+    /// naming the fix; the command carries on, since a restart is the operator's call.
+    fn skew(&self, theirs: &str) {
+        if theirs != crate::VERSION {
+            eprintln!(
+                "grove: this CLI is {} but the server at {} is {theirs}; restart it: \
+                 launchctl kickstart -k {}/{}",
+                crate::VERSION,
+                self.base,
+                crate::setup::gui(),
+                crate::setup::SERVER
+            );
+        }
     }
 
     /// Whether `theirs` names a home other than the one this client was pointed at;
@@ -187,14 +205,7 @@ impl ApiClient {
     /// non-2xx (a draining daemon's 503), transport error, or decode failure.
     #[must_use]
     pub fn health(&self) -> Option<HealthData> {
-        let response = self.get("/api/health", timeouts::HEALTH).ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        match response.json::<Envelope<HealthData>>().ok()? {
-            Envelope::Ok(data) => Some(data),
-            Envelope::Err(_) => None,
-        }
+        ready(self.get("/api/health", timeouts::HEALTH).ok()?)
     }
 
     /// `true` when the listener speaks the grove envelope: `/api/health` returns a
@@ -259,11 +270,14 @@ impl ApiClient {
             .map_err(|e| CliError::Api(format!("invalid response from {}: {e}", self.base)))?;
 
         match envelope {
-            Envelope::Ok(data) if healthy => Ok(format!(
-                "grove server: {} (v{})",
-                spelling(data.status),
-                data.version
-            )),
+            Envelope::Ok(data) if healthy => {
+                self.skew(&data.version);
+                Ok(format!(
+                    "grove server: {} (v{})",
+                    spelling(data.status),
+                    data.version
+                ))
+            }
             // A success payload behind a failure status. The daemon never writes one,
             // so the status wins and the operator is told what it claimed to be.
             Envelope::Ok(data) => Err(CliError::Unhealthy(format!(
@@ -281,22 +295,15 @@ impl ApiClient {
     /// (single-realizer), so realization is a reliable trigger rather than a hope that
     /// the fs watcher notices the manifest write. Returns as soon as the work is
     /// *scheduled*; a connection failure is `Daemon`, a reachable-but-refusing daemon
-    /// (draining/degraded → non-2xx) is `Api`.
+    /// (draining → non-2xx) is `Api`.
     pub fn reconcile(&self) -> Result<(), CliError> {
-        let response = self
-            .http
-            .post(format!("{}/api/roots/reconcile", self.base))
-            .timeout(timeouts::NUDGE)
-            .send()
-            .map_err(|e| self.unreachable(&e))?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(CliError::Api(format!(
-                "grove server refused to reconcile (HTTP {})",
-                response.status()
-            )))
-        }
+        self.call::<_, serde_json::Value>(
+            "/api/roots/reconcile",
+            Some(&()),
+            timeouts::NUDGE,
+            "reconcile",
+        )
+        .map(drop)
     }
 
     /// `POST /api/roots/sync {slug}` — ask a running daemon to fetch one root and
@@ -314,11 +321,11 @@ impl ApiClient {
     ///
     /// [`timeouts::NUDGE`]: crate::timeouts::NUDGE
     pub fn sync(&self, slug: &str) -> Result<SyncData, CliError> {
-        self.post(
+        self.call(
             "/api/roots/sync",
-            &SyncRequest {
+            Some(&SyncRequest {
                 slug: slug.to_owned(),
-            },
+            }),
             timeouts::NUDGE,
             "sync",
         )
@@ -335,13 +342,13 @@ impl ApiClient {
         dry_run: bool,
         fix: bool,
     ) -> Result<DoctorData, CliError> {
-        self.post(
+        self.call(
             "/api/doctor",
-            &DoctorRequest {
+            Some(&DoctorRequest {
                 slug: slug.map(str::to_owned),
                 dry_run,
                 fix,
-            },
+            }),
             timeouts::OPS,
             "doctor",
         )
@@ -351,12 +358,12 @@ impl ApiClient {
     /// undeclare it, on the root's own lane (serialized against any in-flight
     /// reconcile/sync/fill, so the remove never races the realizer).
     pub fn remove_root(&self, slug: &str, force: bool) -> Result<(), CliError> {
-        self.post::<_, serde_json::Value>(
+        self.call::<_, serde_json::Value>(
             "/api/roots/remove",
-            &RemoveRootRequest {
+            Some(&RemoveRootRequest {
                 slug: slug.to_owned(),
                 force,
-            },
+            }),
             timeouts::OPS,
             "remove",
         )
@@ -366,12 +373,12 @@ impl ApiClient {
     /// `POST /api/worktrees/remove {slug, name}` — the worktree analogue of
     /// [`Self::remove_root`].
     pub fn remove_tree(&self, slug: &str, name: &str) -> Result<(), CliError> {
-        self.post::<_, serde_json::Value>(
+        self.call::<_, serde_json::Value>(
             "/api/worktrees/remove",
-            &RemoveWorktreeRequest {
+            Some(&RemoveWorktreeRequest {
                 slug: slug.to_owned(),
                 name: name.to_owned(),
-            },
+            }),
             timeouts::OPS,
             "remove",
         )
@@ -382,10 +389,7 @@ impl ApiClient {
     /// engine status, pool level and worktrees. What `grove tree list` renders when a
     /// daemon is up.
     pub fn snapshot(&self) -> Result<Snapshot, CliError> {
-        let response = self
-            .get("/api/roots", timeouts::SNAPSHOT)
-            .map_err(|e| self.unreachable(&e))?;
-        self.decode(response, "roots")
+        self.call("/api/roots", None::<&()>, timeouts::SNAPSHOT, "roots")
     }
 
     fn get(&self, path: &str, timeout: Duration) -> reqwest::Result<reqwest::blocking::Response> {
@@ -395,66 +399,99 @@ impl ApiClient {
             .send()
     }
 
-    /// POST a typed body and decode the envelope that comes back.
-    fn post<B: serde::Serialize, T: DeserializeOwned>(
+    /// GET `path`, or POST `body` to it, and decode the envelope that comes back.
+    ///
+    /// Resends only what provably never left — a failed connect, which is what a daemon
+    /// mid-respawn answers — plus, for a read, any transport failure short of a
+    /// timeout, since a second read costs nothing and a timeout would only spend the
+    /// budget again. A mutation that left and got no answer has an unknown outcome:
+    /// [`CliError::Unknown`], never resent.
+    fn call<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
-        body: &B,
+        body: Option<&B>,
         timeout: Duration,
         what: &str,
     ) -> Result<T, CliError> {
-        let response = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .json(body)
-            .timeout(timeout)
-            .send()
-            .map_err(|e| self.unreachable(&e))?;
-        self.decode(response, what)
-    }
-
-    /// The one decode, and the one place the failure taxonomy is decided.
-    ///
-    /// Three outcomes, deliberately distinct:
-    ///
-    /// - **The body would not arrive** — the connection died mid-response. That is the
-    ///   same class as a refused connect: `Daemon`, exit 4.
-    /// - **The body is an error envelope** — the daemon answered, and said no. The
-    ///   `ErrorCode` travels into the message so an operator can match what they see
-    ///   against the contract table; exit 1 (see [`CliError`]'s `From<ApiError>` for
-    ///   why the HTTP taxonomy is not remapped onto the exit codes).
-    /// - **The body is not an envelope at all** — something is on the port that is not
-    ///   a grove daemon, or a non-2xx with no body. `Api`, exit 1, naming the status.
-    fn decode<T: DeserializeOwned>(
-        &self,
-        response: reqwest::blocking::Response,
-        what: &str,
-    ) -> Result<T, CliError> {
-        let status = response.status();
-        let body = response.bytes().map_err(|e| {
+        let url = format!("{}{path}", self.base);
+        let mut sent = 1;
+        let e = loop {
+            let request = match body {
+                Some(body) => self.http.post(&url).json(body),
+                None => self.http.get(&url),
+            };
+            let answer = request.timeout(timeout).send().and_then(|response| {
+                let status = response.status();
+                response.bytes().map(|bytes| (status, bytes))
+            });
+            match answer {
+                Ok((status, bytes)) => return decode(status, &bytes, what),
+                Err(e) if sent < SENDS && (e.is_connect() || body.is_none() && !e.is_timeout()) => {
+                    std::thread::sleep(timeouts::RESEND * sent);
+                    sent += 1;
+                }
+                Err(e) => break e,
+            }
+        };
+        Err(if e.is_connect() {
+            self.unreachable(&e)
+        } else if body.is_none() {
             CliError::Daemon(format!(
-                "grove server at {} closed the connection mid-{what} ({e})",
+                "grove server at {} broke off mid-{what} ({e})",
                 self.base
             ))
-        })?;
-
-        match serde_json::from_slice::<Envelope<T>>(&body) {
-            Ok(Envelope::Ok(data)) if status.is_success() => Ok(data),
-            // A success envelope under a failure status: the daemon never writes one,
-            // so trust the status and report the failure rather than the payload.
-            Ok(Envelope::Ok(_)) => Err(CliError::Api(format!(
-                "grove server {what} failed (HTTP {status})"
-            ))),
-            Ok(Envelope::Err(e)) => Err(CliError::from(e)),
-            Err(_) if !status.is_success() => Err(CliError::Api(format!(
-                "grove server {what} failed (HTTP {status})"
-            ))),
-            Err(e) => Err(CliError::Api(format!("invalid {what} response: {e}"))),
-        }
+        } else {
+            CliError::Unknown(format!(
+                "outcome unknown: the {what} request reached grove server at {} and no \
+                 answer came back ({e}); check its state before retrying",
+                self.base
+            ))
+        })
     }
 
     fn unreachable(&self, e: &reqwest::Error) -> CliError {
         CliError::Daemon(format!("cannot reach grove server at {} ({e})", self.base))
+    }
+}
+
+/// The health payload of a ready 200; `None` for any other answer.
+fn ready(response: reqwest::blocking::Response) -> Option<HealthData> {
+    if !response.status().is_success() {
+        return None;
+    }
+    match response.json::<Envelope<HealthData>>().ok()? {
+        Envelope::Ok(data) => Some(data),
+        Envelope::Err(_) => None,
+    }
+}
+
+/// The one decode, and the one place the failure taxonomy of an answer is decided.
+///
+/// - **The body is an error envelope** — the daemon answered, and said no. The
+///   `ErrorCode` travels into the message so an operator can match what they see
+///   against the contract table; exit 1 (see [`CliError`]'s `From<ApiError>` for
+///   why the HTTP taxonomy is not remapped onto the exit codes).
+/// - **The body is not an envelope at all** — something is on the port that is not
+///   a grove daemon, or a non-2xx with no body. `Api`, exit 1, naming the status.
+///
+/// A body that never arrived is decided before this, in [`ApiClient::call`].
+fn decode<T: DeserializeOwned>(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    what: &str,
+) -> Result<T, CliError> {
+    match serde_json::from_slice::<Envelope<T>>(body) {
+        Ok(Envelope::Ok(data)) if status.is_success() => Ok(data),
+        // A success envelope under a failure status: the daemon never writes one,
+        // so trust the status and report the failure rather than the payload.
+        Ok(Envelope::Ok(_)) => Err(CliError::Api(format!(
+            "grove server {what} failed (HTTP {status})"
+        ))),
+        Ok(Envelope::Err(e)) => Err(CliError::from(e)),
+        Err(_) if !status.is_success() => Err(CliError::Api(format!(
+            "grove server {what} failed (HTTP {status})"
+        ))),
+        Err(e) => Err(CliError::Api(format!("invalid {what} response: {e}"))),
     }
 }
 
@@ -863,7 +900,53 @@ mod tests {
         let client = ApiClient::at(server("503 Service Unavailable", ""), BUDGET);
         let err = client.reconcile().unwrap_err();
         assert_eq!(err.exit_code(), 1);
-        assert!(err.to_string().contains("refused to reconcile"), "{err}");
+        assert!(err.to_string().contains("reconcile failed"), "{err}");
+    }
+
+    /// A refused connect never left, so it is sent again — and lands on the daemon that
+    /// a restart brings up on the same port a moment later.
+    #[test]
+    fn a_refused_request_is_sent_again() {
+        let addr = closed_port();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let listener = TcpListener::bind(addr).unwrap();
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.read(&mut [0u8; 1024]);
+            let body = r#"{"ok":true,"data":{"reconcile":"scheduled"}}"#;
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
+            let _ = s.write_all((head + body).as_bytes());
+        });
+        ApiClient::at(addr, BUDGET).reconcile().unwrap();
+    }
+
+    /// A mutation that reached the daemon and got no answer has an unknown outcome
+    /// (exit 7) and is sent once; a read in the same spot is sent again.
+    #[test]
+    fn an_unanswered_mutation_is_unknown_and_a_read_is_resent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            for mut s in listener.incoming().flatten() {
+                let _ = s.read(&mut [0u8; 1024]);
+                let _ = tx.send(());
+            }
+        });
+        let err = ApiClient::at(addr, BUDGET)
+            .remove_root("o/r", false)
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 7, "{err}");
+        assert!(err.to_string().starts_with("outcome unknown"), "{err}");
+        assert_eq!(rx.try_iter().count(), 1, "a mutation is never resent");
+        assert_eq!(
+            ApiClient::at(addr, BUDGET)
+                .snapshot()
+                .unwrap_err()
+                .exit_code(),
+            4
+        );
+        assert_eq!(rx.try_iter().count(), 3, "a read is");
     }
 
     /// The doctor payload decodes through the contract types, `error.data` and all —

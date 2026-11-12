@@ -1,7 +1,7 @@
-//! `grove setup [--remove]` and `grove upgrade` on a fabricated home: stub `launchctl`, `mise`
-//! and `curl` first on `$PATH`, mise's shim a link to the built binary, so hotswap's drain,
-//! setup and smoke steps run the real `grove` — against a closed `GROVE_BIND`, never the
-//! operator's server.
+//! `grove setup [--remove]`, `grove upgrade` and the launchd-owned `off`/`reboot` on a
+//! fabricated home: stub `launchctl`, `mise` and `curl` first on `$PATH`, mise's shim a link
+//! to the built binary, so hotswap's setup and smoke steps run the real `grove` — against a
+//! closed `GROVE_BIND`, never the operator's server.
 
 use std::fs;
 use std::net::TcpListener;
@@ -21,11 +21,11 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     };
     let gone = |rel: &str| drop(fs::remove_file(tmp.path().join(rel)));
     // stubs carry a shebang: Linux's spawn, unlike macOS's, never falls back to sh
-    // `print` answers loaded while `loaded` exists; `print-disabled` prints `disabled`; `fail`
-    // fails the bootstrap of the agent it names
+    // `print` answers loaded, serving `$HOME/.grove`, while `loaded` exists; `print-disabled`
+    // prints `disabled`; `fail` fails the bootstrap of the agent it names
     put(
         "stub/launchctl",
-        "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ]; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
+        "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ] && printf '\\tGROVE_HOME => %s\\n' \"$HOME/.grove\"; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
     );
     put(
         "stub/mise",
@@ -127,18 +127,33 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     )));
     put("disabled", "");
 
-    // the swap: drain, setup, the server's kickstart and both probes run the shim's binary
+    // the swap: setup, the server's kickstart and both probes run the shim's binary, and no
+    // drain races the kickstart — setup's is the one `print` of the server
     let swapped = run(&["upgrade"], 0);
     assert!(
         swapped.starts_with("grove 2026.10.1: green, 2 smoke probes\n")
-            && swapped.contains(&format!("kickstart -k {gui}/{server}\ncurl -fsS ")),
+            && swapped.contains(&format!("kickstart -k {gui}/{server}\ncurl -fsS "))
+            && swapped.matches(&format!("print {gui}/{server}\n")).count() == 1,
         "{swapped}"
     );
     assert!(tmp.path().join(".local/state/hotswap/grove.json").exists());
     assert!(run(&["upgrade", "--check"], 0).contains("2026.10.1"));
     assert!(run(&["upgrade", "--check", "--back"], 2).contains("cannot be used with"));
 
+    // launchd owns the server: `off` boots it out, `reboot` is one kickstart
     put("loaded", "");
+    assert_eq!(
+        run(&["off"], 0),
+        format!(
+            "grove server stopped (booted out {gui}/{server}; `grove setup` loads it again)\nprint {gui}/{server}\nbootout {gui}/{server}\n"
+        )
+    );
+    assert_eq!(
+        run(&["reboot"], 0),
+        format!(
+            "grove server restarting under launchd ({gui}/{server})\nprint {gui}/{server}\nkickstart -k {gui}/{server}\n"
+        )
+    );
     assert_eq!(
         run(&["setup", "--remove"], 0),
         format!(

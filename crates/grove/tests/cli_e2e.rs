@@ -121,7 +121,8 @@ impl Drop for Serving {
     }
 }
 
-/// Start `grove serve` on port 0 and wait until it says what port it got.
+/// Start `grove serve` on port 0, wait until it says what port it got, then until its
+/// first roots read has moved health off `booting`.
 ///
 /// stderr is drained on a thread for the child's whole life, not merely until the
 /// address is found: a daemon whose log pipe fills blocks in `write`, and a test that
@@ -157,6 +158,9 @@ fn serve(home: &Path) -> Serving {
             "the daemon never announced its bind ({e}): {:?}",
             log.lock()
         )
+    });
+    until("answered ready", || {
+        grove(home, Some(&addr), &["ok"]).code == 0
     });
     Serving { child, addr, log }
 }
@@ -469,6 +473,56 @@ fn serve_refuses_a_non_loopback_bind_at_exit_4() {
     let run = grove(&home, Some("0.0.0.0:0"), &["serve"]);
     assert_eq!(run.code, 4, "{}", run.stderr);
     assert!(run.stderr.contains("non-loopback"), "{}", run.stderr);
+}
+
+/// Every stop signal runs the shutdown route's drain and exits 0, and the daemon's own
+/// log holds both ends: the start line with its pid, the exit line naming the signal.
+#[test]
+fn every_stop_signal_drains_and_exits_0_with_an_exit_line() {
+    use nix::sys::signal::Signal::{SIGHUP, SIGINT, SIGTERM};
+    for (signal, name) in [(SIGTERM, "SIGTERM"), (SIGINT, "SIGINT"), (SIGHUP, "SIGHUP")] {
+        let tmp = TempDir::new().unwrap();
+        let (home, _) = scratch(&tmp);
+        let mut daemon = serve(&home);
+        let pid = daemon.child.id();
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.cast_signed()), signal).unwrap();
+        assert!(daemon.child.wait().unwrap().success(), "{name}");
+        let log = std::fs::read_to_string(home.join("serve.log")).unwrap();
+        assert!(log.contains(&format!("pid={pid}")), "{log}");
+        assert!(
+            log.contains(&format!("grove server stopped reason={name}")),
+            "{log}"
+        );
+    }
+}
+
+/// A daemon of another version is reported on stderr, with the fix, and the command
+/// still does its work.
+#[test]
+fn a_daemon_of_another_version_is_named_with_the_fix() {
+    use std::io::{Read, Write};
+    let tmp = TempDir::new().unwrap();
+    let (home, _) = scratch(&tmp);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        let body = r#"{"ok":true,"data":{"status":"ready","version":"0.0.0-skew","home":"/x"}}"#;
+        for mut s in listener.incoming().flatten() {
+            let _ = s.read(&mut [0u8; 1024]);
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
+            let _ = s.write_all((head + body).as_bytes());
+        }
+    });
+    let run = grove(&home, Some(&bind), &["ok"])
+        .ok()
+        .says("(v0.0.0-skew)");
+    assert!(
+        run.stderr
+            .contains("is 0.0.0-skew; restart it: launchctl kickstart -k gui/")
+            && run.stderr.ends_with("/dev.gigantic.grove\n"),
+        "{}",
+        run.stderr
+    );
 }
 
 /// A daemon that answers the probe and then hangs up mid-snapshot is a transport

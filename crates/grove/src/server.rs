@@ -5,13 +5,14 @@
 //! The CLI is not itself a daemon — this type *controls* one. Since v2 ships a
 //! single executable, the thing it launches is the grove binary itself: the launcher
 //! contract is `<this binary> serve`. Under launchd the server agent `grove setup`
-//! writes runs `<mise shims>/grove serve` instead, and this custody is not involved.
+//! writes runs `<mise shims>/grove serve` instead, and `off`/`reboot` hand that
+//! process to launchctl rather than racing `KeepAlive`'s respawn.
 //!
 //! Every external dependency is held as data (paths, bind, timeouts, the [`Clock`],
 //! the server [`Interface`]), so tests construct the struct with fakes — no env
 //! reads, no globals, parallel-safe.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
@@ -87,6 +88,9 @@ pub struct ServerControl {
     kill_timeout: Duration,
     pid_probe: PidProbe,
     clock: Arc<dyn Clock>,
+    /// The server agent's launchd target (`gui/<uid>/dev.gigantic.grove`); `None` in
+    /// tests, so none can reach the operator's own agent.
+    agent: Option<String>,
 }
 
 impl ServerControl {
@@ -108,6 +112,7 @@ impl ServerControl {
             kill_timeout: KILL_TIMEOUT,
             pid_probe: probe_pid,
             clock: Arc::new(SystemClock),
+            agent: Some(format!("{}/{}", crate::setup::gui(), crate::setup::SERVER)),
         })
     }
 
@@ -182,25 +187,14 @@ impl ServerControl {
         Ok(lock)
     }
 
-    /// Open the log, launch the detached child, and record its real pid. Returns
-    /// the child pid so [`on`](Self::on) can gate readiness on our own child
-    /// staying alive. The caller holds the start lock and clears the pid file on
-    /// error.
+    /// Launch the detached child and record its real pid. Returns the child pid so
+    /// [`on`](Self::on) can gate readiness on our own child staying alive. The caller
+    /// holds the start lock and clears the pid file on error. No stdio: the daemon
+    /// writes its own log.
     fn launch(&self, mut cmd: Command) -> Result<Pid, CliError> {
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.log_path())
-            .map_err(|e| {
-                CliError::Daemon(format!("open log at {}: {e}", self.log_path().display()))
-            })?;
-
         cmd.stdin(Stdio::null())
-            .stdout(
-                log.try_clone()
-                    .map_err(|e| CliError::Daemon(format!("clone log handle: {e}")))?,
-            )
-            .stderr(log)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .process_group(0); // detach from the CLI's process group
 
         let child = cmd
@@ -228,6 +222,11 @@ impl ServerControl {
     /// A daemon with no pid file — one managed by an external supervisor (served
     /// mode) — is drained over the API instead (see [`off_pidless`](Self::off_pidless)).
     pub fn off(&self) -> Result<(), CliError> {
+        if let Some(target) = self.launchd() {
+            launchctl(&["bootout", target])?;
+            println!("grove server stopped (booted out {target}; `grove setup` loads it again)");
+            return Ok(());
+        }
         let Some((pid, recorded_start)) = self.running_server() else {
             return self.off_pidless();
         };
@@ -370,10 +369,29 @@ impl ServerControl {
         self.interface == Interface::Http && self.api_client().request_shutdown()
     }
 
-    /// Restart the daemon: stop (awaiting full exit) then start.
+    /// Restart the daemon: stop (awaiting full exit) then start — or, for the server
+    /// agent, one `kickstart -k`, whose SIGTERM drains before launchd starts it again.
     pub fn reboot(&self) -> Result<(), CliError> {
+        if let Some(target) = self.launchd() {
+            launchctl(&["kickstart", "-k", target])?;
+            println!("grove server restarting under launchd ({target})");
+            return Ok(());
+        }
         self.off()?;
         self.on()
+    }
+
+    /// The server agent's target when launchd has it loaded for THIS home: the CLI may
+    /// be pointed at another `GROVE_HOME` than the agent serves, and must not stop it.
+    fn launchd(&self) -> Option<&str> {
+        let target = self.agent.as_deref()?;
+        let out = Command::new("launchctl")
+            .args(["print", target])
+            .output()
+            .ok()?;
+        let home = format!("GROVE_HOME => {}\n", self.home.display());
+        (out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&home))
+            .then_some(target)
     }
 
     /// The live server PID, if the PID file names a running process *with the
@@ -427,7 +445,7 @@ impl ServerControl {
     }
 
     fn log_path(&self) -> PathBuf {
-        self.home.join("grove.log")
+        self.home.join("serve.log")
     }
 
     fn url(&self) -> String {
@@ -539,6 +557,16 @@ impl ServerControl {
             Err(_) => matches!((self.pid_probe)(pid), PidState::Dead),
         }
     }
+}
+
+/// Run `launchctl <args>`, its failure a daemon error naming the command.
+fn launchctl(args: &[&str]) -> Result<(), CliError> {
+    Command::new("launchctl")
+        .args(args)
+        .status()
+        .is_ok_and(|s| s.success())
+        .then_some(())
+        .ok_or_else(|| CliError::Daemon(format!("launchctl {} failed", args.join(" "))))
 }
 
 /// Resolve `GROVE_BIND` to a socket address. A literal `host:port` parses
@@ -680,6 +708,7 @@ mod tests {
             kill_timeout: Duration::from_millis(50),
             pid_probe: probe_pid,
             clock: Arc::new(SystemClock),
+            agent: None,
         }
     }
 
@@ -833,14 +862,16 @@ mod tests {
     #[test]
     fn a_failed_launch_clears_the_pid_file() {
         let home = TempDir::new().unwrap();
-        let sc = control(&home, closed_port());
+        let sc = ServerControl {
+            server_program: || PathBuf::from("/"), // exists, and cannot be executed
+            ..control(&home, closed_port())
+        };
         fs::write(sc.pid_path(), "not a pid").unwrap();
-        fs::create_dir(sc.log_path()).unwrap(); // the log cannot be opened for append
 
         let err = sc.on().unwrap_err();
 
         assert_eq!(err.exit_code(), 4);
-        assert!(err.to_string().starts_with("open log at"), "{err}");
+        assert!(err.to_string().starts_with("spawn server"), "{err}");
         assert!(!sc.pid_path().exists());
     }
 
