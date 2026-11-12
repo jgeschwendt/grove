@@ -29,6 +29,7 @@ use grove_api::events::Event;
 use grove_ops::clock::{Clock, Deadline};
 use tokio::sync::mpsc;
 
+use crate::boot::BootState;
 use crate::events::EventBus;
 use crate::wait;
 
@@ -60,6 +61,7 @@ impl Watcher {
     #[must_use]
     pub fn start(
         home: PathBuf,
+        boot: Arc<BootState>,
         clock: Arc<dyn Clock>,
         events: EventBus,
         nudges: mpsc::Receiver<()>,
@@ -69,7 +71,7 @@ impl Watcher {
             tracing::warn!(home = %home.display(), error = %e, "could not create the grove home");
         }
         let (stop, stop_rx) = mpsc::channel(1);
-        let handle = tokio::spawn(run(home, clock, events, nudges, fs_watch, stop_rx));
+        let handle = tokio::spawn(run(home, boot, clock, events, nudges, fs_watch, stop_rx));
         Self { stop, handle }
     }
 
@@ -97,6 +99,7 @@ async fn next_nudge(nudges: &mut Option<mpsc::Receiver<()>>) -> Option<()> {
 
 async fn run(
     home: PathBuf,
+    boot: Arc<BootState>,
     clock: Arc<dyn Clock>,
     events: EventBus,
     nudges: mpsc::Receiver<()>,
@@ -138,7 +141,12 @@ async fn run(
                 pending = true;
             } else {
                 running = true;
-                spawn_adopt(home.clone(), events.clone(), done_tx.clone());
+                spawn_adopt(
+                    home.clone(),
+                    Arc::clone(&boot),
+                    events.clone(),
+                    done_tx.clone(),
+                );
             }
         }
 
@@ -183,29 +191,41 @@ async fn run(
     }
 }
 
-/// Run one adopt+list+announce off the watcher's own task.
+/// Run one adopt+list+announce off the watcher's own task, and report the read to
+/// `boot`: it is what lifts `booting`, and what degrades the daemon while the declared
+/// roots cannot be read — the state in which no change to them can converge.
 ///
 /// Off-task for the reason v1 put it off its mailbox: this touches the filesystem
 /// and the manifest lock, and the nudge that triggers it must stay answerable in
 /// microseconds. Failure-tolerant in both directions — an error logs and skips the
 /// broadcast (announcing a set we could not read would be worse than silence), and a
 /// panic still reports completion so a pending trigger is honored.
-fn spawn_adopt(home: PathBuf, events: EventBus, done: mpsc::UnboundedSender<()>) {
+fn spawn_adopt(
+    home: PathBuf,
+    boot: Arc<BootState>,
+    events: EventBus,
+    done: mpsc::UnboundedSender<()>,
+) {
     tokio::spawn(async move {
         let work = tokio::task::spawn_blocking(move || {
             grove_ops::roots::adopt(&home)?;
             grove_ops::roots::list(&home)
         })
         .await;
-        match work {
+        let read = match work {
             Ok(Ok(roots)) => {
                 let roots: Vec<String> = roots.into_iter().map(|root| root.slug).collect();
                 tracing::info!(count = roots.len(), "roots adopted");
                 events.publish(Event::RootsChanged { roots });
+                Ok(())
             }
-            Ok(Err(e)) => tracing::warn!(error = %e, "roots adopt failed"),
-            Err(e) => tracing::warn!(error = %e, "roots adopt crashed"),
+            Ok(Err(e)) => Err(format!("{e:#}")),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = &read {
+            tracing::warn!(error = %e, "roots adopt failed");
         }
+        boot.derived(read);
         let _ = done.send(());
     });
 }
@@ -241,8 +261,10 @@ fn watch_manifest(
 #[cfg(test)]
 mod tests {
     use super::{DEBOUNCE, Watcher};
+    use crate::boot::BootState;
     use crate::events::EventBus;
     use crate::logs::LogRing;
+    use grove_api::BootStatus;
     use grove_api::events::Event;
     use grove_ops::clock::{Clock, Deadline, TestClock};
     use grove_ops::testfix;
@@ -254,6 +276,7 @@ mod tests {
 
     /// The watcher's inputs and its one output.
     struct Harness {
+        boot: Arc<BootState>,
         watcher: Option<Watcher>,
         clock: Arc<TestClock>,
         nudge: mpsc::Sender<()>,
@@ -266,8 +289,17 @@ mod tests {
             let bus = EventBus::new();
             let events = bus.subscribe();
             let (nudge, nudges) = mpsc::channel(1);
-            let watcher = Watcher::start(home, clock.clone(), bus, nudges, fs_watch);
+            let boot = Arc::new(BootState::new(&*clock));
+            let watcher = Watcher::start(
+                home,
+                Arc::clone(&boot),
+                clock.clone(),
+                bus,
+                nudges,
+                fs_watch,
+            );
             Self {
+                boot,
                 watcher: Some(watcher),
                 clock,
                 nudge,
@@ -308,6 +340,41 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut harness = Harness::start(testfix::home_with_root(&tmp), false);
         assert_eq!(harness.announced().await, vec![testfix::SLUG.to_owned()]);
+        harness.stop().await;
+    }
+
+    /// Health follows the roots read: booting until the first one lands, degraded while
+    /// the manifest will not parse, and ready again once a nudged read succeeds.
+    #[tokio::test]
+    async fn the_roots_read_lifts_booting_degrades_and_recovers() {
+        let tmp = TempDir::new().unwrap();
+        let home = testfix::home_with_root(&tmp);
+        let manifest = grove_ops::roots::manifest_path(&home);
+        let good = std::fs::read_to_string(&manifest).unwrap();
+        let mut harness = Harness::start(home, false);
+        assert_eq!(harness.boot.status(), BootStatus::Booting);
+        harness.announced().await;
+        assert_eq!(harness.boot.status(), BootStatus::Ready);
+
+        std::fs::write(&manifest, "[roots\n").unwrap();
+        harness.nudge.send(()).await.unwrap();
+        let reason = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                harness.clock.advance(DEBOUNCE);
+                tokio::time::sleep(crate::wait::TICK).await;
+                if let BootStatus::Degraded { reason } = harness.boot.status() {
+                    return reason;
+                }
+            }
+        })
+        .await
+        .expect("a manifest that will not parse degrades the daemon");
+        assert!(reason.starts_with("roots unreadable: "), "{reason}");
+
+        std::fs::write(&manifest, good).unwrap();
+        harness.nudge.send(()).await.unwrap();
+        harness.announced().await;
+        assert_eq!(harness.boot.status(), BootStatus::Ready);
         harness.stop().await;
     }
 
@@ -436,7 +503,14 @@ mod tests {
             // debounce being zero, fires it — while the boot adopt is still running.
             let (nudge, nudges) = mpsc::channel(1);
             nudge.send(()).await.unwrap();
-            let watcher = Watcher::start(testfix::home_with_root(&tmp), clock, bus, nudges, false);
+            let watcher = Watcher::start(
+                testfix::home_with_root(&tmp),
+                Arc::new(BootState::new(&*clock)),
+                clock,
+                bus,
+                nudges,
+                false,
+            );
             // On a current-thread runtime the watcher's first pass runs to its next
             // await before this task resumes.
             first_read.await.unwrap();
@@ -513,6 +587,7 @@ mod tests {
                 let (nudge, nudges) = mpsc::channel(1);
                 let watcher = Watcher::start(
                     home,
+                    Arc::new(BootState::new(&TestClock::new())),
                     Arc::new(TestClock::new()),
                     EventBus::new(),
                     nudges,
@@ -547,7 +622,14 @@ mod tests {
         let bus = EventBus::new();
         let mut events = bus.subscribe();
         let (_nudge, nudges) = mpsc::channel(1);
-        let watcher = Watcher::start(home.clone(), clock.clone(), bus, nudges, true);
+        let watcher = Watcher::start(
+            home.clone(),
+            Arc::new(BootState::new(&*clock)),
+            clock.clone(),
+            bus,
+            nudges,
+            true,
+        );
 
         // Drain the boot announcement.
         tokio::time::timeout(Duration::from_secs(5), events.recv())

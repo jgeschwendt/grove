@@ -343,6 +343,11 @@ async fn the_readiness_gate_503s_a_non_whitelisted_route_while_degraded() {
         let error = err_body(response, StatusCode::SERVICE_UNAVAILABLE).await;
         assert_eq!(error.message, "server is degraded", "{path}");
     }
+    // The nudge passes: it is how the daemon learns its manifest reads again.
+    assert_eq!(
+        daemon.post_bare("/api/roots/reconcile").await.status(),
+        StatusCode::OK
+    );
     // Health is whitelisted, so the degrade stays observable behind the gate.
     assert_eq!(
         err_body(
@@ -664,7 +669,7 @@ async fn roots_sync_422s_a_body_without_a_slug() {
 }
 
 /// Sync is behind the readiness gate like every other mutation — it is not on the
-/// two-path whitelist, so a draining daemon refuses it before the handler is reached.
+/// whitelist, so a draining daemon refuses it before the handler is reached.
 #[tokio::test]
 async fn roots_sync_503s_while_draining() {
     let tmp = TempDir::new().unwrap();
