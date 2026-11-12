@@ -223,7 +223,7 @@ impl ServerControl {
     /// mode) — is drained over the API instead (see [`off_pidless`](Self::off_pidless)).
     pub fn off(&self) -> Result<(), CliError> {
         if let Some(target) = self.launchd() {
-            launchctl(&["bootout", target])?;
+            launchctl(crate::setup::bootout(target), "bootout", target)?;
             println!("grove server stopped (booted out {target}; `grove setup` loads it again)");
             return Ok(());
         }
@@ -373,7 +373,11 @@ impl ServerControl {
     /// agent, one `kickstart -k`, whose SIGTERM drains before launchd starts it again.
     pub fn reboot(&self) -> Result<(), CliError> {
         if let Some(target) = self.launchd() {
-            launchctl(&["kickstart", "-k", target])?;
+            launchctl(
+                crate::setup::launchctl(&["kickstart", "-k", target]),
+                "kickstart -k",
+                target,
+            )?;
             println!("grove server restarting under launchd ({target})");
             return Ok(());
         }
@@ -559,14 +563,10 @@ impl ServerControl {
     }
 }
 
-/// Run `launchctl <args>`, its failure a daemon error naming the command.
-fn launchctl(args: &[&str]) -> Result<(), CliError> {
-    Command::new("launchctl")
-        .args(args)
-        .status()
-        .is_ok_and(|s| s.success())
-        .then_some(())
-        .ok_or_else(|| CliError::Daemon(format!("launchctl {} failed", args.join(" "))))
+/// A launchctl step's outcome, its failure a daemon error naming the step.
+fn launchctl(ok: bool, step: &str, target: &str) -> Result<(), CliError> {
+    ok.then_some(())
+        .ok_or_else(|| CliError::Daemon(format!("launchctl {step} {target} failed")))
 }
 
 /// Resolve `GROVE_BIND` to a socket address. A literal `host:port` parses

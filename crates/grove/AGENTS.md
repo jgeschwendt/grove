@@ -37,10 +37,10 @@ edges:
 
 - ※ apply-is-ungated → src/commands.rs:554
 - ※ busy-refuses-destructive → src/commands.rs:71
-- ※ cli-health-poll → src/server.rs:488
+- ※ cli-health-poll → src/server.rs:492
 - ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
 - ※ stop-signals-drain → src/lib.rs:260
-- ※ upgrade-agent-kept → src/setup.rs:103
+- ※ upgrade-agent-kept → src/setup.rs:127
 
 <!-- @end -->
