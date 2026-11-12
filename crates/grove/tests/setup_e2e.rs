@@ -22,10 +22,11 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     let gone = |rel: &str| drop(fs::remove_file(tmp.path().join(rel)));
     // stubs carry a shebang: Linux's spawn, unlike macOS's, never falls back to sh
     // `print` answers loaded, serving `$HOME/.grove`, while `loaded` exists; `print-disabled`
-    // prints `disabled`; `fail` fails the bootstrap of the agent it names
+    // prints `disabled`; `fail` fails the bootstrap of the agent it names; a bootout leaves the
+    // agent draining for one more `print`, and its bootstrap fails until a `print` sees it gone
     put(
         "stub/launchctl",
-        "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ] && printf '\\tGROVE_HOME => %s\\n' \"$HOME/.grove\"; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
+        "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\nd=\"$HOME/draining.${2##*/}\"\n[ \"$1\" = bootout ] && { echo 1 > \"$d\"; exit 0; }\n[ \"$1\" = print ] && [ -e \"$d\" ] && { [ \"$(cat \"$d\")\" = 0 ] && { rm \"$d\"; exit 1; }; echo 0 > \"$d\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/draining.$(basename \"$3\" .plist)\" ] && exit 5\n[ \"$1\" = print ] && { [ -e \"$HOME/loaded\" ] && printf '\\tGROVE_HOME => %s\\n' \"$HOME/.grove\"; exit; }\n[ \"$1\" = print-disabled ] && { cat \"$HOME/disabled\"; exit 0; }\n[ \"$1\" = bootstrap ] && [ -e \"$HOME/fail\" ] && case $3 in *$(cat \"$HOME/fail\").plist) exit 5 ;; esac\nexit 0",
     );
     put(
         "stub/mise",
@@ -109,7 +110,7 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["setup"], 0),
         format!(
-            "{linked}reloaded {server}\ncurrent {upgrade}\nprint-disabled {gui}\nprint {gui}/{server}\nbootout {gui}/{server}\nbootstrap {gui} {agents}/{server}.plist\nprint {gui}/{upgrade}\n"
+            "{linked}reloaded {server}\ncurrent {upgrade}\nprint-disabled {gui}\nprint {gui}/{server}\nbootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {agents}/{server}.plist\nprint {gui}/{upgrade}\n"
         )
     );
     // a failed bootstrap fails the run, the other agent still loaded
@@ -145,7 +146,7 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["off"], 0),
         format!(
-            "grove server stopped (booted out {gui}/{server}; `grove setup` loads it again)\nprint {gui}/{server}\nbootout {gui}/{server}\n"
+            "grove server stopped (booted out {gui}/{server}; `grove setup` loads it again)\nprint {gui}/{server}\nbootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\n"
         )
     );
     assert_eq!(
@@ -157,7 +158,7 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["setup", "--remove"], 0),
         format!(
-            "booted out {server}\nbooted out {upgrade}\nremoved {}\nremoved {}\nremoved {h}/.local/bin/grove\nprint-disabled {gui}\nbootout {gui}/{server}\nbootout {gui}/{upgrade}\n",
+            "booted out {server}\nbooted out {upgrade}\nremoved {}\nremoved {}\nremoved {h}/.local/bin/grove\nprint-disabled {gui}\nbootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\nbootout {gui}/{upgrade}\nprint {gui}/{upgrade}\nprint {gui}/{upgrade}\n",
             plists[0], plists[1]
         )
     );

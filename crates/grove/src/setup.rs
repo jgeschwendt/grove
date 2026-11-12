@@ -6,8 +6,12 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
+use std::thread;
+
+use grove_ops::clock::{Clock as _, SystemClock};
 
 use crate::error::CliError;
+use crate::timeouts::{KILL, POLL_INTERVAL, STOP_GRACE};
 
 /// The server agent: `grove serve` through mise's shim, kept alive by launchd.
 pub(crate) const SERVER: &str = "dev.gigantic.grove";
@@ -18,6 +22,32 @@ const UPGRADE: &str = "dev.gigantic.grove.upgrade";
 /// This user's launchd domain, `gui/<uid>`.
 pub(crate) fn gui() -> String {
     format!("gui/{}", nix::unistd::getuid())
+}
+
+/// `launchctl <args>`, its output discarded: whether it succeeded.
+pub(crate) fn launchctl(args: &[&str]) -> bool {
+    Command::new("launchctl")
+        .args(args)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// `launchctl bootout <target>`, returning once launchd has let go of the service:
+/// bootout returns while the daemon still drains its SIGTERM, and a `bootstrap` in that
+/// window fails with an I/O error. Bounded by the stop grace the plist's `ExitTimeOut`
+/// gives the drain, plus the kill wait.
+pub(crate) fn bootout(target: &str) -> bool {
+    let deadline = SystemClock.deadline(STOP_GRACE + KILL);
+    launchctl(&["bootout", target])
+        && loop {
+            if !launchctl(&["print", target]) {
+                break true;
+            }
+            if deadline.expired(&SystemClock) {
+                break false;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
 }
 
 /// `setup [--remove]`: link `~/.local/bin/grove` to mise's shim, write and bootstrap the
@@ -36,12 +66,6 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
     }
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
     let gui = gui();
-    let launchctl = |args: &[&str]| {
-        Command::new("launchctl")
-            .args(args)
-            .output()
-            .is_ok_and(|o| o.status.success())
-    };
     let disabled = Command::new("launchctl")
         .args(["print-disabled", &gui])
         .output()
@@ -57,7 +81,7 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
     };
     if remove {
         for label in [SERVER, UPGRADE] {
-            if !held(label) && launchctl(&["bootout", &format!("{gui}/{label}")]) {
+            if !held(label) && bootout(&format!("{gui}/{label}")) {
                 println!("booted out {label}");
             }
         }
@@ -103,7 +127,7 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
         // ※ upgrade-agent-kept
         let reload = loaded && fresh && label != UPGRADE;
         if reload {
-            launchctl(&["bootout", &target]);
+            bootout(&target);
         }
         if (!loaded || reload) && !launchctl(&["bootstrap", &gui, &path.to_string_lossy()]) {
             failed.push(label);
