@@ -10,10 +10,15 @@ use std::process::{Command, exit};
 use crate::error::CliError;
 
 /// The server agent: `grove serve` through mise's shim, kept alive by launchd.
-const SERVER: &str = "dev.gigantic.grove";
+pub(crate) const SERVER: &str = "dev.gigantic.grove";
 
 /// The upgrade agent; hotswap renders its plist.
 const UPGRADE: &str = "dev.gigantic.grove.upgrade";
+
+/// This user's launchd domain, `gui/<uid>`.
+pub(crate) fn gui() -> String {
+    format!("gui/{}", nix::unistd::getuid())
+}
 
 /// `setup [--remove]`: link `~/.local/bin/grove` to mise's shim, write and bootstrap the
 /// server and upgrade agents; `--remove` undoes it and forgets hotswap's record, leaving
@@ -30,12 +35,7 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
         )));
     }
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let uid = Command::new("id").arg("-u").output();
-    let gui = format!(
-        "gui/{}",
-        uid.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-            .unwrap_or_default()
-    );
+    let gui = gui();
     let launchctl = |args: &[&str]| {
         Command::new("launchctl")
             .args(args)
@@ -126,13 +126,18 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
 }
 
 /// The server agent's plist: `<shims>/grove serve`, so launchd resolves mise's active
-/// version on every start, kept alive and logging to `$GROVE_HOME/serve.log`.
+/// version on every start, kept alive. The daemon writes and rotates
+/// `$GROVE_HOME/serve.log` itself; stderr goes to `serve.err`, for what fails before the
+/// log is open (mise's shim, a panic's default message). `ExitTimeOut` is `grove off`'s
+/// stop grace, which the daemon's whole drain fits inside: without it the agent printed
+/// `exit timeout = 5` (observed 2026-11-11).
 fn server_plist(home: &Path) -> String {
     let esc = |p: &Path| {
         let p = p.display().to_string().replace('&', "&amp;");
         p.replace('<', "&lt;").replace('>', "&gt;")
     };
     let (grove, home, shims) = (esc(&grove_ops::home()), esc(home), esc(&hotswap::shims()));
+    let exit = crate::timeouts::STOP_GRACE.as_secs();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -145,6 +150,7 @@ fn server_plist(home: &Path) -> String {
     <key>LANG</key><string>en_US.UTF-8</string>
     <key>PATH</key><string>{shims}:{home}/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
+  <key>ExitTimeOut</key><integer>{exit}</integer>
   <key>KeepAlive</key><true/>
   <key>Label</key><string>{SERVER}</string>
   <key>ProgramArguments</key>
@@ -153,8 +159,7 @@ fn server_plist(home: &Path) -> String {
     <string>serve</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>{grove}/serve.log</string>
-  <key>StandardOutPath</key><string>{grove}/serve.log</string>
+  <key>StandardErrorPath</key><string>{grove}/serve.err</string>
   <key>ThrottleInterval</key><integer>10</integer>
 </dict>
 </plist>
@@ -163,19 +168,16 @@ fn server_plist(home: &Path) -> String {
 }
 
 /// `upgrade [--check | --back | --retry]`: hotswap's swap under grove's manifest, its
-/// return the exit code. The drain is `grove off`, the server's own ladder: it asks the
-/// daemon to finish in-flight git work under its drain budget and exit, and launchd's
-/// `KeepAlive` restarts it through the shim on the version mise just made active — the
-/// API has no cheaper idle signal (a worktree add in flight is invisible in
-/// `GET /api/roots`), and the daemon handles no SIGTERM, so a bare `kickstart -k` would
-/// cut a clone mid-write. The smoke is the binary's version and the restarted daemon's
-/// health, retried while it boots.
+/// return the exit code. No drain step: the swap is hotswap's one `kickstart -k`, whose
+/// SIGTERM runs the daemon's own bounded drain before launchd restarts it through the
+/// shim on the version mise just made active — a separate drain would race `KeepAlive`'s
+/// respawn. The smoke is the binary's version and the restarted daemon's health,
+/// retried while it boots.
 pub(crate) fn upgrade(flags: &[(&str, bool)]) -> Result<(), CliError> {
     let owned = |words: &[&str]| words.iter().map(|&w| w.to_owned()).collect::<Vec<_>>();
     let health = format!("http://{}/api/health", grove_daemon::DEFAULT_BIND);
     let manifest = hotswap::Manifest {
         agents: owned(&[SERVER]),
-        drain: vec![owned(&["grove", "off"])],
         setup: owned(&["grove", "setup"]),
         smoke: vec![
             owned(&["grove", "--version"]),

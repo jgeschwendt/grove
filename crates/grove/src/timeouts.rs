@@ -57,6 +57,10 @@ pub const SNAPSHOT: Duration = Duration::from_secs(10);
 /// whole budget.
 pub const CUSTODY_PROBE: Duration = Duration::from_millis(500);
 
+/// The pause before a request that never left is sent again, once per send already
+/// made: 100 ms, then 200 ms.
+pub const RESEND: Duration = Duration::from_millis(100);
+
 // ─── ladder budgets ──────────────────────────────────────────────────────────
 
 /// How long `grove on` waits for a freshly launched daemon to answer ready.

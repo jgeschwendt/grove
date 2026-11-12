@@ -8,13 +8,17 @@
 //! exit verdicts, [`api`] the HTTP client, [`server`] process custody, [`setup`] the
 //! install and upgrade verbs, and [`timeouts`] every budget any of them spends.
 
+use std::fs::File;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use grove_daemon::logs::DEFAULT_LEVEL;
 use grove_daemon::{Config, Daemon, LogRing};
 use grove_ops::clock::{Clock, SystemClock};
+use tokio::signal::unix::{SignalKind, signal};
 
 mod api;
 mod commands;
@@ -238,44 +242,77 @@ fn grove_home() -> std::path::PathBuf {
 /// carried law 11 makes recoverable.
 ///
 /// Short, because `Daemon::serve` has already spent its own drain budget on exactly
-/// this work: the two together stay inside `grove off`'s 10 s grace.
+/// this work: the two together stay inside `grove off`'s 10 s grace and the server
+/// agent's `ExitTimeOut`, which `grove setup` writes from that same grace.
 const RUNTIME_DRAIN: Duration = Duration::from_secs(2);
+
+/// The size `serve.log` reaches before it is renamed to `serve.log.1`, replacing the
+/// one generation kept.
+const LOG_CAP: u64 = 10 << 20;
 
 /// Run the daemon in this process until it drains.
 ///
-/// The three steps are deliberate and in this order: bind (which is where a
-/// non-loopback address is refused, before anything is exposed), signal readiness
-/// (nothing else in the process may do it — a route that marked itself ready would
-/// make the boot state a decoration), then serve until the shutdown route drains the
-/// accept loop. No `exit` anywhere: the process ends by returning from here.
+/// Bind (which is where a non-loopback address is refused, before anything is
+/// exposed), then serve until the shutdown route or a stop signal drains the accept
+/// loop; health reads `booting` until the watcher's first roots read. Every way out —
+/// a drain, a startup error, a panic — leaves a line in `$GROVE_HOME/serve.log`. No
+/// `exit` anywhere: the process ends by returning from here.
+// ※ stop-signals-drain
 fn serve() -> Result<(), CliError> {
-    let config = Config::from_env()?;
+    let config = Config::from_env();
     // Before the subscriber, because the subscriber is what feeds it — and before the
     // daemon, because a ring created at bind time would miss everything said during
     // boot, which is exactly what an operator opening a dashboard after a bad start
     // needs to see.
-    let logs = Arc::new(LogRing::new(Arc::new(SystemClock), config.log_level));
-    init_tracing(&logs);
+    let level = config.as_ref().map_or(DEFAULT_LEVEL, |c| c.log_level);
+    let logs = Arc::new(LogRing::new(Arc::new(SystemClock), level));
+    init_logging(&grove_home(), &logs)?;
+    tracing::info!(
+        version = VERSION,
+        pid = std::process::id(),
+        "grove server starting"
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| CliError::Daemon(format!("build runtime: {e}")))?;
+    grove_ops::git::supervise();
 
     let outcome = runtime.block_on(async {
-        let daemon = Daemon::bind_with_logs(config, Arc::new(SystemClock), logs).await?;
-        let addr = daemon.local_addr()?;
-        daemon.state().boot.mark_ready();
+        // registered before the bind, so a stop sent while booting is held, not fatal
+        let on = |kind| signal(kind).map_err(|e| CliError::Daemon(format!("signal: {e}")));
+        let (mut term, mut int, mut hup) = (
+            on(SignalKind::terminate())?,
+            on(SignalKind::interrupt())?,
+            on(SignalKind::hangup())?,
+        );
+        let daemon = Daemon::bind_with_logs(config?, Arc::new(SystemClock), logs).await?;
+        let state = daemon.state().clone();
         tracing::info!(
-            bind = %addr,
-            home = %daemon.state().config.home.display(),
-            version = %daemon.state().config.version,
+            bind = %daemon.local_addr()?,
+            home = %state.config.home.display(),
             "grove server listening"
         );
+        // the shutdown route's own drain, minus its grace: nobody waits on an answer
+        let stop = tokio::spawn(async move {
+            let name = tokio::select! {
+                _ = term.recv() => "SIGTERM",
+                _ = int.recv() => "SIGINT",
+                _ = hup.recv() => "SIGHUP",
+            };
+            state.boot.mark_stopping();
+            state.shutdown.fire();
+            name
+        });
         daemon.serve().await?;
-        tracing::info!("grove server stopped");
-        Ok(())
+        Ok::<_, CliError>(if stop.is_finished() {
+            stop.await.unwrap_or("signal")
+        } else {
+            "shutdown request"
+        })
     });
 
+    grove_ops::git::kill_children();
     // Bounded and *said out loud*, rather than the silent unbounded block a bare
     // `drop(runtime)` performs — see [`RUNTIME_DRAIN`].
     let clock = SystemClock;
@@ -287,39 +324,102 @@ fn serve() -> Result<(), CliError> {
             "left blocking work running at exit"
         );
     }
-    outcome
+    match &outcome {
+        Ok(reason) => tracing::info!(%reason, "grove server stopped"),
+        Err(reason) => tracing::error!(%reason, "grove server stopped"),
+    }
+    outcome.map(drop)
 }
 
-/// Two sinks, one subscriber.
+/// Three sinks, one subscriber, and a panic hook that writes to them first.
 ///
-/// Logs go to **stderr**: the launcher redirects both streams into `grove.log`, and
-/// keeping stdout clean leaves it free for the commands' own output. `GROVE_LOG`
-/// takes an `EnvFilter` directive (`grove_daemon=debug`); the default is `info`.
+/// `$GROVE_HOME/serve.log` is the daemon's own ([`LogFile`]); **stderr** carries the
+/// same lines to a terminal or a pipe (colour only on a terminal), never to a file.
+/// `GROVE_LOG` takes an `EnvFilter` directive (`grove_daemon=debug`); the default is
+/// `info`.
 ///
-/// The ring is the second sink — what `GET /api/events` streams to a UI — and it
+/// The ring is the third sink — what `GET /api/events` streams to a UI — and it
 /// carries its **own** level (`GROVE_LOG_RING`, `info` by default), so turning the
 /// file log up to debug does not flood every attached dashboard. Each layer filters
-/// itself, which is why the writer's filter is per-layer rather than global.
-fn init_tracing(logs: &Arc<LogRing>) {
+/// itself, which is why the writers' filters are per-layer rather than global.
+fn init_logging(home: &std::path::Path, logs: &Arc<LogRing>) -> Result<(), CliError> {
     use tracing_subscriber::layer::{Layer as _, SubscriberExt as _};
     use tracing_subscriber::util::SubscriberInitExt as _;
 
-    let filter = tracing_subscriber::EnvFilter::try_from_env("GROVE_LOG")
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let path = home.join("serve.log");
+    let file = std::fs::create_dir_all(home)
+        .and_then(|()| LogFile::open(path.clone(), LOG_CAP))
+        .map_err(|e| CliError::Daemon(format!("open {}: {e}", path.display())))?;
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_env("GROVE_LOG")
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    // a stderr that is a file is the agent's `serve.err`, which must not copy the log
+    let stderr = rustix::fs::fstat(std::io::stderr())
+        .is_ok_and(|st| !rustix::fs::FileType::from_raw_mode(st.st_mode).is_file());
     let _ = tracing_subscriber::registry()
-        .with(
+        .with(stderr.then(|| {
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stderr)
-                // Colour for a human running `grove serve` in a terminal; plain text
-                // everywhere else. tracing-subscriber's ansi default does NOT consult
-                // tty-ness, and `grove on` redirects this stream straight into
-                // `grove.log` — the file the operator greps and any log shipper
-                // reads — so without this every line there carries escape codes.
                 .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
-                .with_filter(filter),
+                .with_filter(filter())
+        }))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(Arc::new(file))
+                .with_ansi(false)
+                .with_filter(filter()),
         )
         .with(logs.layer())
         .try_init();
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(panic = %info, "grove server panicked");
+        default(info);
+    }));
+    Ok(())
+}
+
+/// `serve.log`, rotated to `serve.log.1` once it reaches its cap. The check runs
+/// before each write, and the formatter writes a whole line at a time, so a rotation
+/// never splits one.
+struct LogFile {
+    cap: u64,
+    file: Mutex<(File, u64)>,
+    path: PathBuf,
+}
+
+impl LogFile {
+    fn open(path: PathBuf, cap: u64) -> std::io::Result<Self> {
+        let file = append(&path)?;
+        let size = file.metadata()?.len();
+        Ok(Self {
+            cap,
+            file: Mutex::new((file, size)),
+            path,
+        })
+    }
+}
+
+fn append(path: &std::path::Path) -> std::io::Result<File> {
+    File::options().append(true).create(true).open(path)
+}
+
+impl std::io::Write for &LogFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        if file.1 >= self.cap {
+            std::fs::rename(&self.path, self.path.with_extension("log.1"))?;
+            *file = (append(&self.path)?, 0);
+        }
+        let n = file.0.write(buf)?;
+        file.1 += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -505,5 +605,38 @@ mod tests {
         for command in [None, Some(Command::Version)] {
             assert!(dispatch(&Cli { command }).is_ok());
         }
+    }
+
+    /// The log keeps one generation: at the cap, the file moves to `serve.log.1` and the
+    /// next line starts a fresh one.
+    #[test]
+    fn the_log_rotates_one_generation_at_its_cap() {
+        use std::io::Write as _;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("serve.log");
+        std::fs::write(&path, "old\n").unwrap();
+        let log = super::LogFile::open(path.clone(), 4).unwrap();
+        (&log).write_all(b"new\n").unwrap();
+        (&log).flush().unwrap();
+        let read = |p| std::fs::read_to_string(p).unwrap();
+        assert_eq!(read(tmp.path().join("serve.log.1")), "old\n");
+        assert_eq!(read(path), "new\n");
+    }
+
+    /// A panic reaches the log before the default hook runs, so a death leaves a line.
+    #[test]
+    fn a_panic_is_logged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ring = std::sync::Arc::new(grove_daemon::LogRing::new(
+            std::sync::Arc::new(grove_ops::clock::SystemClock),
+            grove_daemon::logs::DEFAULT_LEVEL,
+        ));
+        super::init_logging(tmp.path(), &ring).unwrap();
+        assert!(std::thread::spawn(|| panic!("boom")).join().is_err());
+        let log = std::fs::read_to_string(tmp.path().join("serve.log")).unwrap();
+        assert!(
+            log.contains("grove server panicked") && log.contains("boom"),
+            "{log}"
+        );
     }
 }
