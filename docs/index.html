@@ -102,8 +102,9 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
     <code class="code">dev.gigantic.grove</code> keeps <code class="code">&lt;mise shims&gt;/grove serve</code>
     alive, so every start resolves mise's active version, and
     <code class="code">dev.gigantic.grove.upgrade</code> runs <code class="code">grove upgrade</code>
-    every 900 s. An upgrade drains with <code class="code">grove off</code> (in-flight git work
-    finishes under the drain budget), re-runs setup, kickstarts the server, and smokes
+    every 900 s. An upgrade re-runs setup, then swaps the server with one
+    <code class="code">launchctl kickstart -k</code>: its SIGTERM runs the daemon's bounded drain, so
+    in-flight git work lands before launchd restarts it on the new version. It then smokes
     <code class="code">grove --version</code> and <code class="code">GET /api/health</code>; red
     rolls back to the previous version. The last swap is recorded in
     <code class="code">~/.local/state/hotswap/grove.json</code>.</p>
@@ -122,6 +123,13 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
       holds nothing an install can delete; an install tree inside it is the doctor finding
       <code class="code">install-under-home</code>. Why: one install and swap path for every gigantic
       tool.</p>
+
+    <h3 class="h3">Every stop signal drains <small>· 2026-11-11</small></h3>
+    <p>SIGTERM, SIGINT and SIGHUP run the shutdown route's drain inside a budget that fits the
+      server agent's <code class="code">ExitTimeOut</code> (10 s), then exit 0 with an exit line in
+      <code class="code">serve.log</code>. A swap is one <code class="code">kickstart -k</code>, and a
+      launchd-owned daemon stops by <code class="code">bootout</code>. Why: a separate drain raced
+      <code class="code">KeepAlive</code>'s respawn and refused the swap on every tick.</p>
 
     <h3 class="h3">The trunk is a branch, named by that branch <small>· v0.2.0, ea9629a</small></h3>
     <p>Every checkout directory is <code class="code">worktrees::name_for(branch)</code>; the trunk is
@@ -183,6 +191,9 @@ grove setup --remove                     # boot out, unlink, forget; ~/.grove st
   <ol id="next" class="steps">
     <li><strong>Delete the self-update board</strong> on the canvas (owner).</li>
     <li><strong>Redraw the engine-lanes figure</strong> on the canvas: it still says lanes drain strictly in order.</li>
+    <li><strong>Redraw the root-layout figure</strong>: it names <code class="code">grove.log</code>, and the
+      daemon's log is <code class="code">serve.log</code>. Both figures are exported PNGs, owed a
+      redraw in the page itself.</li>
     <li><strong>Bump hk 2.5.0 → 2.8.0</strong> on a host; the shift sandbox cannot reach mise-versions.</li>
     <li><strong>Share plan/apply, stage 4</strong> (thread 0109c212): the two seeding rules, waiting
       on the owner (b7981283) — how a directory source seeds, and whether an ex-trunk's seeded source
