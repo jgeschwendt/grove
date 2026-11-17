@@ -21,7 +21,7 @@ invariants:
   - claim: "SIGTERM, SIGINT and SIGHUP run the shutdown route's drain and exit 0 with an exit line, inside the server agent's ExitTimeOut; a daemon launchd owns is stopped by bootout and swapped by one kickstart -k, never by a drain raced against KeepAlive's respawn"
     anchor: ※ stop-signals-drain
     enforced_by: crates/grove/tests/cli_e2e.rs
-  - claim: "`grove setup` reloads a loaded agent whose plist changed, never the upgrade agent's: setup runs inside the swap that agent started, and its bootout would kill that swap"
+  - claim: "`grove setup` writes, loads and reloads only the server agent, never the upgrade agent: that one is hotswap::ensure's alone, and setup runs inside the swap it started, where a bootout would kill that swap"
     anchor: ※ upgrade-agent-kept
     enforced_by: crates/grove/tests/setup_e2e.rs
 hazards:
@@ -41,6 +41,6 @@ edges:
 - ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
 - ※ stop-signals-drain → src/lib.rs:260
-- ※ upgrade-agent-kept → src/setup.rs:160
+- ※ upgrade-agent-kept → src/setup.rs:128
 
 <!-- @end -->

@@ -34,6 +34,8 @@ fn launch(bin: &Path, h: &str, bind: &str, args: &[&str]) -> (Option<i32>, Strin
         .env_remove("XPC_SERVICE_NAME")
         .env("GROVE_BIND", bind)
         .env("HOME", h)
+        // the scratch HOME stands in for the account's, so hotswap loads the upgrade agent
+        .env("HOTSWAP_TEST_HOME", h)
         .env("PATH", format!("{h}/stub:/usr/bin:/bin"))
         .output()
         .expect("grove");
@@ -88,10 +90,14 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     let gui = gui();
     let agents = format!("{h}/Library/LaunchAgents");
     let [server, upgrade] = ["dev.gigantic.grove", "dev.gigantic.grove.upgrade"];
-    let prints = format!("print-disabled {gui}\nprint {gui}/{server}\nprint {gui}/{upgrade}\n");
-    // ensure's own look at the upgrade agent, after setup's
-    let ensured = format!("print {gui}/{upgrade}\n");
     let boot = |label: &str| format!("bootstrap {gui} {agents}/{label}.plist\n");
+    // hotswap's ensure tends the upgrade agent: an unloaded one it loads, a loaded one whose
+    // plist it did not write it leaves; grove's setup looks only at the server
+    let tended = format!(
+        "print-disabled {gui}\nprint {gui}/{upgrade}\nprint-disabled {gui}\n{}",
+        boot(upgrade)
+    );
+    let kept = format!("print-disabled {gui}\nprint {gui}/{upgrade}\n");
     let linked = format!(
         "linked {h}/.local/bin/grove → {}\n",
         fs::canonicalize(grove).expect("binary").display()
@@ -112,15 +118,14 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     symlink(grove, layout.join("2026.10.1/grove")).expect("version");
     symlink("2026.10.1", layout.join("current")).expect("current");
     put(".local/share/grove/current", "");
-    put("Library/LaunchAgents", "in the way");
+    fs::create_dir_all(at(&format!("Library/LaunchAgents/{server}.plist"))).expect("in the way");
     assert!(run(&["setup"], 1).contains(&format!("grove: {agents}/{server}.plist: ")));
-    gone("Library/LaunchAgents");
+    fs::remove_dir(at(&format!("Library/LaunchAgents/{server}.plist"))).expect("out of the way");
     assert_eq!(
         run(&["setup"], 0),
         format!(
-            "{linked}{h}/.local/share/grove/current is no longer read: grove runs from hotswap's layout; remove {h}/.local/share/grove when ready\nloaded {server}\nloaded {upgrade}\n{prints}{ensured}{}{}",
-            boot(server),
-            boot(upgrade)
+            "{linked}{h}/.local/share/grove/current is no longer read: grove runs from hotswap's layout; remove {h}/.local/share/grove when ready\nloaded {server}\n{tended}print {gui}/{server}\n{}",
+            boot(server)
         )
     );
     assert_eq!(
@@ -146,7 +151,8 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     );
     gone(".local/share/grove/current");
 
-    // loaded: a changed plist reloads, the upgrade agent's never
+    // loaded: a changed server plist reloads; the upgrade agent's plist is hotswap's to rewrite,
+    // and grove never boots it out
     put("loaded", "");
     for plist in &plists {
         fs::write(plist, "old\n").expect("stale");
@@ -154,23 +160,34 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["setup"], 0),
         format!(
-            "{linked}reloaded {server}\ncurrent {upgrade}\n{prints}{ensured}bootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\n{}",
+            "{linked}reloaded {server}\n{kept}print {gui}/{server}\nbootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\n{}",
             boot(server)
         )
     );
-    // a failed bootstrap fails the run, the other agent still loaded
+    assert!(
+        fs::read_to_string(&plists[1])
+            .expect("plist")
+            .contains("<string>upgrade</string>")
+    );
+    // a failed bootstrap fails the run, the upgrade agent still loaded
     gone("loaded");
     put("fail", server);
-    assert!(run(&["setup"], 1).contains(&format!(
-        "loaded {upgrade}\ngrove: launchctl bootstrap {server} failed\n"
-    )));
+    assert_eq!(
+        run(&["setup"], 1),
+        format!(
+            "{linked}grove: launchctl bootstrap {server} failed\n{tended}print {gui}/{server}\n{}",
+            boot(server)
+        )
+    );
     gone("fail");
-    // a disabled agent is held: its plist and a hint, no bootstrap, and setup is green
+    // a disabled server is held: its plist and a hint, no bootstrap, and setup is green
     put("disabled", &format!("\t\"{server}\" => disabled\n"));
-    assert!(run(&["setup"], 0).contains(&format!(
-        "loaded {upgrade}\n{server}: disabled by launchctl; launchctl enable {gui}/{server} && grove setup loads it\n{prints}{ensured}{}",
-        boot(upgrade)
-    )));
+    assert_eq!(
+        run(&["setup"], 0),
+        format!(
+            "{linked}{server}: disabled by launchctl; launchctl enable {gui}/{server} && grove setup loads it\n{tended}"
+        )
+    );
     put("disabled", "");
 
     // the swap: latest is the active version, so setup, the server's kickstart and both probes
@@ -212,11 +229,16 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["setup", "--remove"], 0),
         format!(
-            "booted out {server}\nbooted out {upgrade}\nremoved {}\nremoved {}\nremoved {h}/.local/bin/grove\nprint-disabled {gui}\nbootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\nbootout {gui}/{upgrade}\nprint {gui}/{upgrade}\nprint {gui}/{upgrade}\n",
-            plists[0], plists[1]
+            "booted out {server}\nremoved {}\nremoved {h}/.local/bin/grove\n{kept}bootout {gui}/{server}\nprint {gui}/{server}\nprint {gui}/{server}\n",
+            plists[0]
         )
     );
-    assert!(!at(".local/state/hotswap/grove.json").exists() && !layout.exists());
+    // forget took the upgrade agent's plist, the record and the layout
+    assert!(
+        !Path::new(&plists[1]).exists()
+            && !at(".local/state/hotswap/grove.json").exists()
+            && !layout.exists()
+    );
 }
 
 /// The first release on hotswap, as every host meets it: mise installed grove, its shim
@@ -274,6 +296,11 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
         put(&at(&format!("on.{label}")), "");
     }
     fs::write(at("program"), shim.display().to_string()).expect("program");
+    // the old release's last green record, which hotswap reads as it is
+    put(
+        &at(".local/state/hotswap/grove.json"),
+        r#"{"at":0,"ok":true,"smoke":[],"version":"2026.10.0"}"#,
+    );
 
     let bind = closed();
     let gui = gui();
@@ -283,7 +310,7 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
     assert_eq!(
         moved,
         format!(
-            "linked {h}/.local/bin/grove → {}/.local/share/hotswap/grove/2026.10.1/grove\nreloaded {server}\ncurrent {upgrade}\nprint-disabled {gui}\nprint {gui}/{server}\nprint {gui}/{upgrade}\nprint {gui}/{upgrade}\nbootout {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {}\n",
+            "linked {h}/.local/bin/grove → {}/.local/share/hotswap/grove/2026.10.1/grove\nreloaded {server}\nprint-disabled {gui}\nprint {gui}/{upgrade}\nprint {gui}/{server}\nbootout {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {}\n",
             real.display(),
             plist(server).display()
         )
@@ -355,13 +382,16 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
     assert_eq!(fs::read_to_string(&shim).expect("shim"), exec);
     assert!(installs.join("2026.10.1/grove").exists());
 
-    // the next tick, from the link: latest is the active version, so it swaps onto it once,
-    // green, and nothing reloads
+    // the next tick, from the link: it swaps 2026.10.0 → 2026.10.1 green and nothing reloads;
+    // 2026.10.0, mise's copy of a release before this crate, stays as the rollback target, so
+    // mise's copy is still needed and the `mise unuse` hint waits for the swap that prunes it
     let (code, tick) = launch(&at(".local/bin/grove"), &h, &bind, &["upgrade"]);
     assert_eq!(code, Some(0), "{tick}");
     assert!(
         tick.starts_with("grove 2026.10.1: green, 2 smoke probes\n")
-            && !tick.contains(&format!("bootout {gui}/{upgrade}")),
+            && !tick.contains(&format!("bootout {gui}/{upgrade}"))
+            && !tick.contains("needs mise"),
         "{tick}"
     );
+    assert!(layout.join("2026.10.0").is_dir());
 }

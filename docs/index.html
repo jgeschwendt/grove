@@ -315,10 +315,11 @@ grove setup --remove  # ~/.grove stays</code></pre>
   <p class="docs-note"><code class="code">grove setup</code> installs the latest release into
     <code class="code">~/.local/share/hotswap/grove/&lt;V&gt;/</code> when none is active — run from a
     checkout too: the release is linked, never the checkout's binary — links
-    <code class="code">~/.local/bin/grove</code> through <code class="code">current</code>, and loads
-    two launchd agents on that link: <code class="code">dev.gigantic.grove</code> keeps
-    <code class="code">grove serve</code> alive, <code class="code">dev.gigantic.grove.upgrade</code>
-    runs <code class="code">grove upgrade</code> every 900 s. The server's PATH keeps mise's shims dir,
+    <code class="code">~/.local/bin/grove</code> through <code class="code">current</code>, and runs
+    two launchd agents on that link: grove's <code class="code">dev.gigantic.grove</code> keeps
+    <code class="code">grove serve</code> alive, and hotswap's own
+    <code class="code">dev.gigantic.grove.upgrade</code> runs <code class="code">grove upgrade</code>
+    every 900 s. The server's PATH keeps mise's shims dir,
     when one exists, after <code class="code">~/.local/bin</code>, for what git runs (hooks,
     <code class="code">git-lfs</code>). An upgrade installs the newer release,
     repoints <code class="code">current</code>, re-runs setup, then swaps the server with one
