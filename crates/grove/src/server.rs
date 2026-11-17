@@ -5,7 +5,7 @@
 //! The CLI is not itself a daemon — this type *controls* one. Since v2 ships a
 //! single executable, the thing it launches is the grove binary itself: the launcher
 //! contract is `<this binary> serve`. Under launchd the server agent `grove setup`
-//! writes runs `<mise shims>/grove serve` instead, and `off`/`reboot` hand that
+//! writes runs `~/.local/bin/grove serve` instead, and `off`/`reboot` hand that
 //! process to launchctl rather than racing `KeepAlive`'s respawn.
 //!
 //! Every external dependency is held as data (paths, bind, timeouts, the [`Clock`],

@@ -73,9 +73,9 @@ enum Command {
     Reboot,
     /// Run the server in the foreground (the launcher contract: `grove serve`).
     Serve,
-    /// Install the launchd agents and link `~/.local/bin/grove` to mise's shim.
+    /// Bring grove into hotswap's layout, link `~/.local/bin/grove` and load the launchd agents.
     Setup {
-        /// Undo it: boot the agents out, delete their plists and the link.
+        /// Undo it: boot the agents out, delete their plists, the link and hotswap's layout.
         #[arg(long)]
         remove: bool,
     },
@@ -89,7 +89,7 @@ enum Command {
         #[command(subcommand)]
         action: TreeAction,
     },
-    /// Move to mise's latest release: drain, swap, smoke, settle or roll back.
+    /// Move to the latest release: fetch, swap, smoke, settle or roll back.
     #[command(group(clap::ArgGroup::new("mode").multiple(false)))]
     Upgrade {
         /// Report what would happen; touch nothing.

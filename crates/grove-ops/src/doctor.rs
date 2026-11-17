@@ -442,15 +442,15 @@ pub fn checks(home: &Path, slug: Option<&str>) -> Vec<Check> {
 /// Doctor is report-only, so this string *is* the fix: an operator reads it and runs
 /// it. `grove doctor` closes that block and is deliberately absent here — it is the
 /// verification, and it is what printed this line.
-const INSTALL_MIGRATION: &str = "rm -rf ~/.grove/{versions,current,previous,channel,update.lock}; \
-     mise use -g packslip:jgeschwendt/grove; \
-     grove setup";
+const INSTALL_MIGRATION: &str =
+    "grove setup && rm -rf ~/.grove/{versions,current,previous,channel,update.lock}";
 
 /// Is the install still living under the workspace root?
 ///
-/// `versions/` and `current` are the retired self-updater's release tree; mise holds the
-/// versions now, so a home that still carries them carries dead weight beside every
-/// checkout, and a careless `rm -rf` of the install would take the checkouts with it.
+/// `versions/` and `current` are the retired self-updater's release tree; hotswap's layout
+/// (`~/.local/share/hotswap/grove`, which `grove setup` brings) holds the versions now, so a
+/// home that still carries them carries dead weight beside every checkout, and a careless
+/// `rm -rf` of the install would take the checkouts with it.
 /// One row either way, like the manifest check: an operator needs to know the layout
 /// was *looked at*.
 ///
@@ -842,9 +842,8 @@ symlink = ["../../etc/passwd"]
         assert_eq!(found[0].name.as_deref(), Some("current"));
         let detail = found[0].detail.as_ref().unwrap();
         for line in [
-            "rm -rf ~/.grove/{versions,current,previous,channel,update.lock}",
-            "mise use -g packslip:jgeschwendt/grove",
             "grove setup",
+            "rm -rf ~/.grove/{versions,current,previous,channel,update.lock}",
         ] {
             assert!(detail.contains(line), "{line} missing from {detail}");
         }

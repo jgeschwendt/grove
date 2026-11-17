@@ -1,5 +1,5 @@
 # A GitHub Release per merge to main, YYYY.M.N (N counts the month's releases from 0), signed by
-# packslip: what `mise use -g packslip:jgeschwendt/grove` installs and `grove upgrade` swaps in
+# packslip: what `grove setup` installs and `grove upgrade` swaps in
 # (https://gigantic.dev/hotswap/ § release). macOS arm64 only: the gigantic foundation runs on
 # one Mac.
 concurrency:
