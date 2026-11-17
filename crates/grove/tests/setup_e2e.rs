@@ -135,9 +135,14 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
         .status();
     assert!(python.expect("python3").success());
     let agent = fs::read_to_string(&plists[0]).expect("plist");
+    // no mise shims dir, so none on the server's PATH
     assert!(
         agent.contains(&format!("<string>{h}/.local/bin/grove</string>"))
-            && !agent.contains("mise")
+            && agent.contains(&format!(
+                "<key>PATH</key><string>{h}/.local/bin:/usr/local/bin:/usr/bin:/bin</string>"
+            ))
+            && !agent.contains("mise"),
+        "{agent}"
     );
     gone(".local/share/grove/current");
 
@@ -328,10 +333,21 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
         fs::read_link(at(".local/bin/grove")).expect("link"),
         layout.join("current/grove")
     );
+    // both run the link; the server's PATH keeps mise's shims dir, which exists here, after
+    // `~/.local/bin`, for what git runs; the upgrade agent's names no mise
     let link = format!("<string>{h}/.local/bin/grove</string>");
+    let path = format!(
+        "<key>PATH</key><string>{h}/.local/bin:{h}/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin</string>"
+    );
     for label in [server, upgrade] {
         let text = fs::read_to_string(plist(label)).expect("plist");
-        assert!(text.contains(&link) && !text.contains("mise"), "{text}");
+        let on_shims = text.contains(&path);
+        let mise = text.matches("mise").count();
+        assert!(
+            text.contains(&link) && on_shims == (label == server),
+            "{text}"
+        );
+        assert_eq!(mise, usize::from(label == server), "{text}");
         assert!(at(&format!("on.{label}")).exists());
     }
     // mise's dirs as mise left them
