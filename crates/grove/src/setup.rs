@@ -15,9 +15,6 @@ use crate::timeouts::{KILL, POLL_INTERVAL, STOP_GRACE};
 /// The server agent: `grove serve` through `~/.local/bin/grove`, kept alive by launchd.
 pub(crate) const SERVER: &str = "dev.gigantic.grove";
 
-/// The upgrade agent; hotswap renders its plist.
-const UPGRADE: &str = "dev.gigantic.grove.upgrade";
-
 /// This user's launchd domain, `gui/<uid>`.
 pub(crate) fn gui() -> String {
     format!("gui/{}", nix::unistd::getuid())
@@ -85,47 +82,38 @@ fn swap_error(e: &str) -> CliError {
 }
 
 /// `setup [--remove]`: `hotswap::ensure` brings grove into hotswap's layout — a mise install
-/// moved in, else the latest release fetched when none is active — and links
-/// `~/.local/bin/grove`; setup then writes and bootstraps the server agent on that link and
-/// the upgrade agent. Run from a checkout (`cargo run -- setup`) it is the same: the layout's
-/// release, or the latest fetched, is linked and run, never the checkout's binary. `--remove`
-/// undoes it and forgets hotswap's layout and record, leaving `GROVE_HOME` alone. A loaded
-/// agent whose plist changed is reloaded, the upgrade agent's never (its bootout would kill the
-/// swap running this setup; hotswap's waiter moves it off mise's shim); an agent launchctl holds
-/// disabled gets its plist and a hint, never a bootstrap or bootout; a failed bootstrap fails
-/// the run only after every other agent is loaded.
+/// moved in, else the latest release fetched when none is active — links `~/.local/bin/grove`
+/// and tends the upgrade agent, which is hotswap's alone; setup then writes and bootstraps the
+/// server agent on that link. Run from a checkout (`cargo run -- setup`) it is the same: the
+/// layout's release, or the latest fetched, is linked and run, never the checkout's binary.
+/// `--remove` boots the server out and removes its plist and the link, and `hotswap::forget`
+/// the upgrade agent, layout and record, leaving `GROVE_HOME` alone. A loaded server whose plist
+/// changed is reloaded; one launchctl holds disabled gets its plist and a hint, never a bootstrap
+/// or bootout.
 pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let gui = gui();
-    let disabled = Command::new("launchctl")
+    let (gui, link) = (gui(), home.join(".local/bin/grove"));
+    let target = format!("{gui}/{SERVER}");
+    let path = home.join(format!("Library/LaunchAgents/{SERVER}.plist"));
+    let held = Command::new("launchctl")
         .args(["print-disabled", &gui])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    let held = |label: &str| disabled.contains(&format!("\"{label}\" => disabled"));
-    let agents = home.join("Library/LaunchAgents");
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout).contains(&format!("\"{SERVER}\" => disabled"))
+        });
     if remove {
         // first: it refuses while a swap runs, before anything is booted out
         hotswap::forget("grove").map_err(|e| swap_error(&e))?;
-        for label in [SERVER, UPGRADE] {
-            if !held(label) && bootout(&format!("{gui}/{label}")) {
-                println!("booted out {label}");
-            }
+        if !held && bootout(&target) {
+            println!("booted out {SERVER}");
         }
-        for path in [SERVER, UPGRADE]
-            .map(|label| agents.join(format!("{label}.plist")))
-            .iter()
-            .chain([&home.join(".local/bin/grove")])
-        {
+        for path in [&path, &link] {
             if fs::remove_file(path).is_ok() {
                 println!("removed {}", path.display());
             }
         }
         return Ok(());
     }
-    // read before ensure, whose waiter may boot the upgrade agent out to reload it: a
-    // bootstrap here in that window would race the waiter's own
-    let loaded = [SERVER, UPGRADE].map(|label| launchctl(&["print", &format!("{gui}/{label}")]));
     let exe = hotswap::ensure("grove", &manifest()).map_err(|e| swap_error(&e))?;
     let to = fs::canonicalize(&exe).unwrap_or_default();
     println!("linked {} → {}", exe.display(), to.display());
@@ -137,49 +125,35 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
             old.parent().unwrap_or(&old).display()
         );
     }
-    let mut failed = Vec::new();
-    for ((label, text), loaded) in [
-        (SERVER, server_plist(&home, &exe)),
-        (UPGRADE, hotswap::agent_plist("grove", "grove")),
-    ]
-    .into_iter()
-    .zip(loaded)
-    {
-        let path = agents.join(format!("{label}.plist"));
-        let fresh = fs::read_to_string(&path).ok() != Some(text.clone());
-        fs::create_dir_all(&agents)
-            .and_then(|()| fs::write(&path, &text))
-            .map_err(|e| CliError::Api(format!("{}: {e}", path.display())))?;
-        let target = format!("{gui}/{label}");
-        if held(label) {
-            eprintln!(
-                "{label}: disabled by launchctl; launchctl enable {target} && grove setup loads it"
-            );
-            continue;
-        }
-        // ※ upgrade-agent-kept
-        let reload = loaded && fresh && label != UPGRADE;
-        if reload {
-            bootout(&target);
-        }
-        if (!loaded || reload) && !launchctl(&["bootstrap", &gui, &path.to_string_lossy()]) {
-            failed.push(label);
-            continue;
-        }
-        let state = match (loaded, reload) {
-            (false, _) => "loaded",
-            (true, true) => "reloaded",
-            (true, false) => "current",
-        };
-        println!("{state} {label}");
-    }
-    if failed.is_empty() {
+    // ※ upgrade-agent-kept
+    let text = server_plist(&home, &exe);
+    let fresh = fs::read_to_string(&path).ok() != Some(text.clone());
+    fs::create_dir_all(path.parent().unwrap_or(&path))
+        .and_then(|()| fs::write(&path, &text))
+        .map_err(|e| CliError::Api(format!("{}: {e}", path.display())))?;
+    if held {
+        eprintln!(
+            "{SERVER}: disabled by launchctl; launchctl enable {target} && grove setup loads it"
+        );
         return Ok(());
     }
-    Err(CliError::Api(format!(
-        "launchctl bootstrap {} failed",
-        failed.join(", ")
-    )))
+    let loaded = launchctl(&["print", &target]);
+    let reload = loaded && fresh;
+    if reload {
+        bootout(&target);
+    }
+    if (!loaded || reload) && !launchctl(&["bootstrap", &gui, &path.to_string_lossy()]) {
+        return Err(CliError::Api(format!(
+            "launchctl bootstrap {SERVER} failed"
+        )));
+    }
+    let state = match (loaded, reload) {
+        (false, _) => "loaded",
+        (true, true) => "reloaded",
+        (true, false) => "current",
+    };
+    println!("{state} {SERVER}");
+    Ok(())
 }
 
 /// The server agent's plist: `<exe> serve`, `exe` being `~/.local/bin/grove`, which resolves
