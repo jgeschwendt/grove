@@ -318,7 +318,9 @@ grove setup --remove  # ~/.grove stays</code></pre>
     <code class="code">~/.local/bin/grove</code> through <code class="code">current</code>, and loads
     two launchd agents on that link: <code class="code">dev.gigantic.grove</code> keeps
     <code class="code">grove serve</code> alive, <code class="code">dev.gigantic.grove.upgrade</code>
-    runs <code class="code">grove upgrade</code> every 900 s. An upgrade installs the newer release,
+    runs <code class="code">grove upgrade</code> every 900 s. The server's PATH keeps mise's shims dir,
+    when one exists, after <code class="code">~/.local/bin</code>, for what git runs (hooks,
+    <code class="code">git-lfs</code>). An upgrade installs the newer release,
     repoints <code class="code">current</code>, re-runs setup, then swaps the server with one
     <code class="code">launchctl kickstart -k</code>, whose SIGTERM runs the daemon's bounded drain;
     it smokes <code class="code">grove --version</code> and <code class="code">GET /api/health</code>,

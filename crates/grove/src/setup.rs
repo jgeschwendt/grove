@@ -183,8 +183,11 @@ pub(crate) fn setup(remove: bool) -> Result<(), CliError> {
 }
 
 /// The server agent's plist: `<exe> serve`, `exe` being `~/.local/bin/grove`, which resolves
-/// through hotswap's `current` on every start, kept alive, on a PATH that names no shims and
-/// no mise. The daemon writes and rotates `$GROVE_HOME/serve.log` itself; stderr goes to
+/// through hotswap's `current` on every start, kept alive. Its PATH carries mise's default
+/// shims dir when one exists, after `~/.local/bin`: not for grove, which needs no mise, but
+/// for what git runs on the user's behalf — hooks, filters (`git-lfs`), credential helpers —
+/// from the toolchain the user manages; `~/.local/bin` leads, so a tool hotswap links there
+/// beats mise's stale shim of it. The daemon writes and rotates `$GROVE_HOME/serve.log` itself; stderr goes to
 /// `serve.err`, for what fails before the log is open (a panic's default message).
 /// `ExitTimeOut` is `grove off`'s stop grace, which the daemon's whole drain fits inside:
 /// without it the agent printed `exit timeout = 5` (observed 2026-11-11).
@@ -192,6 +195,12 @@ fn server_plist(home: &Path, exe: &Path) -> String {
     let esc = |p: &Path| {
         let p = p.display().to_string().replace('&', "&amp;");
         p.replace('<', "&lt;").replace('>', "&gt;")
+    };
+    let shims = home.join(".local/share/mise/shims");
+    let shims = if shims.is_dir() {
+        format!("{}:", esc(&shims))
+    } else {
+        String::new()
     };
     let (grove, home, exe) = (esc(&grove_ops::home()), esc(home), esc(exe));
     let exit = crate::timeouts::STOP_GRACE.as_secs();
@@ -205,7 +214,7 @@ fn server_plist(home: &Path, exe: &Path) -> String {
     <key>GROVE_HOME</key><string>{grove}</string>
     <key>HOME</key><string>{home}</string>
     <key>LANG</key><string>en_US.UTF-8</string>
-    <key>PATH</key><string>{home}/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>{home}/.local/bin:{shims}/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>ExitTimeOut</key><integer>{exit}</integer>
   <key>KeepAlive</key><true/>
