@@ -41,6 +41,6 @@ edges:
 - ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
 - ※ stop-signals-drain → src/lib.rs:260
-- ※ upgrade-agent-kept → src/setup.rs:127
+- ※ upgrade-agent-kept → src/setup.rs:160
 
 <!-- @end -->
