@@ -382,13 +382,14 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
     assert_eq!(fs::read_to_string(&shim).expect("shim"), exec);
     assert!(installs.join("2026.10.1/grove").exists());
 
-    // the next tick, from the link: it swaps 2026.10.0 → 2026.10.1 green and nothing reloads;
-    // 2026.10.0, mise's copy of a release before this crate, stays as the rollback target, so
-    // mise's copy is still needed and the `mise unuse` hint waits for the swap that prunes it
+    // the next tick, from the link: ensure recorded 2026.10.1, so it is up to date and nothing
+    // reloads; 2026.10.0, mise's copy of a release before this crate, stays as the rollback
+    // target, so mise's copy is still needed and the `mise unuse` hint waits for the swap that
+    // prunes it
     let (code, tick) = launch(&at(".local/bin/grove"), &h, &bind, &["upgrade"]);
     assert_eq!(code, Some(0), "{tick}");
     assert!(
-        tick.starts_with("grove 2026.10.1: green, 2 smoke probes\n")
+        tick.starts_with("grove 2026.10.1: up to date\n")
             && !tick.contains(&format!("bootout {gui}/{upgrade}"))
             && !tick.contains("needs mise"),
         "{tick}"
