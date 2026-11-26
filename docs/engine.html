@@ -321,7 +321,7 @@ sync request", not "is fetching". <code class="code">POST /api/roots/sync</code>
 (<a class="link" href="api.html#sync"><code class="code">api.html</code> § Sync</a>).</p>
 <p class="docs-note"><code class="code">roots::sync</code> fetches the trunk branch (bounded, single-refspec), fast-forwards the trunk
 checkout onto the tracking ref, and prunes any warm-pool slot stranded at a pre-sync tip. It never
-forces. A trunk carrying local commits or dirty tracked files is <em>reported</em>:
+forces. Uncommitted edits ride across the fast-forward; a trunk carrying local commits, or an edit an incoming commit would overwrite, is <em>reported</em>:
 <code class="code">SyncNote::of</code> maps <code class="code">git::FastForward</code> to the note the snapshot publishes beside <code class="code">syncing</code>
 — <code class="code">diverged</code>, <code class="code">dirty</code>, or nothing for <code class="code">updated</code>/<code class="code">already_current</code>. <code class="code">SyncNote::Failed</code> is
 the synthetic member: a sync that errored, or whose task never returned, leaves it. The

@@ -395,8 +395,9 @@ pub enum FastForward {
     AlreadyCurrent,
     /// Local commits not on the upstream: an ff is impossible. Left untouched.
     Diverged,
-    /// Uncommitted *tracked* changes, or an untracked file an incoming commit would
-    /// overwrite. Left untouched (never risk a clobber).
+    /// An incoming commit would overwrite an uncommitted edit (tracked or staged) or
+    /// an untracked file. Left untouched (never risk a clobber); edits the incoming
+    /// commits do not touch are carried across the ff, not reported.
     Dirty,
 }
 
@@ -404,22 +405,12 @@ pub enum FastForward {
 /// dirty/diverged states as structured outcomes rather than errors — see
 /// [`FastForward`]. `Err` is reserved for real faults (a broken repo, git missing).
 pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
-    // A *tracked*-file modification is reported dirty before any merge attempt: git
-    // would happily ff over non-conflicting local edits, but a grove-managed trunk
-    // with hand-made changes is a state the operator should resolve, not race.
-    // `--untracked-files=no` is load-bearing: grove itself materializes share sources
-    // as untracked files in the trunk (see `env::source_op`), so counting
-    // untracked files as dirty would wedge every future ff on a repo that doesn't
-    // gitignore that path. An untracked file the incoming commits *would* overwrite
-    // is instead caught at the merge step below (git refuses → Dirty).
-    let mut cmd = git_in(wt);
-    cmd.args(["status", "--porcelain", "--untracked-files=no"]);
-    let status = run_git(cmd, None, "git status")?;
-    check_status(&status, "git status")?;
-    if !status.stdout.is_empty() {
-        return Ok(FastForward::Dirty);
-    }
-
+    // No dirty pre-gate: git carries edits the incoming commits do not touch across
+    // an ff and refuses, touching nothing, when one would be overwritten, so a trunk
+    // follows its remote unless local commits put it ahead (`Diverged`) or an edit
+    // is in the way (`Dirty`, below). Untracked files must likewise never wedge the
+    // ff: grove materializes share sources as untracked files in the trunk (see
+    // `env::source_op`).
     let before = rev_parse(wt, "HEAD")?;
     let mut cmd = git_in(wt);
     cmd.args(["merge", "--ff-only", "--quiet", "--", upstream]);
@@ -433,12 +424,15 @@ pub fn fast_forward(wt: &Path, upstream: &str) -> Result<FastForward> {
         if lower.contains("not possible to fast-forward") {
             return Ok(FastForward::Diverged);
         }
-        // An ff git refuses over *untracked* working-tree files aborts without
-        // touching the tree — the untracked twin of the tracked dirty gate above.
-        // unpack-trees.c emits two phrasings ("... would be overwritten by merge"
-        // and "... would be removed by merge"); match the shared stem so both
-        // report Dirty, never a clobber or a hard error.
-        if lower.contains("untracked working tree files would be") {
+        // An ff git refuses over a local edit aborts without touching the tree.
+        // unpack-trees.c says "Your local changes to the following files would be
+        // overwritten by merge" for a tracked or staged edit, and "The following
+        // untracked working tree files would be overwritten by merge" (or "removed
+        // by merge") for an untracked file; match each stem so every one reports
+        // Dirty, never a clobber or a hard error.
+        if lower.contains("your local changes to the following files would be")
+            || lower.contains("untracked working tree files would be")
+        {
             return Ok(FastForward::Dirty);
         }
         return Err(fail_with_stderr(&merge, "git merge --ff-only"));
@@ -511,7 +505,7 @@ pub fn unpushed_branches(repo: &Path) -> Result<Vec<String>> {
 /// `untracked` is reported but deliberately **not** part of the dirty signal a
 /// trunk renders: grove materializes declared shares as untracked files inside
 /// the trunk, so a healthy trunk carries a permanent nonzero untracked count. Same
-/// reasoning as [`fast_forward`]'s gate, which counts only *tracked* modifications.
+/// reasoning as [`fast_forward`], which never lets an untracked share block the ff.
 // `Clone`/`Deserialize` for the read surface the daemon publishes: a status is
 // folded into `GET /api/roots`' per-worktree view and decoded back by its tests.
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
@@ -1720,30 +1714,36 @@ mod tests {
         worktree_add(&bare, &trunk, "main", None).unwrap();
         let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
 
-        // Dirty: an uncommitted *tracked* edit blocks the ff before any merge runs.
-        // (An untracked file no longer counts — see `fast_forward_ignores_an_untracked_file`.)
+        // Dirty: the remote commit touches the file the trunk has an uncommitted edit on.
         std::fs::write(trunk.join("README.md"), "wip").unwrap();
+        std::fs::write(src.join("README.md"), "remote").unwrap();
+        git(&src, &[&id[..], &["add", "."]].concat());
+        git(&src, &[&id[..], &["commit", "-q", "-m", "remote"]].concat());
+        fetch(&bare, "origin", "main").unwrap();
+        let tip = rev_parse(&trunk, "HEAD").unwrap();
         assert_eq!(
             fast_forward(&trunk, "origin/main").unwrap(),
             FastForward::Dirty
         );
+        assert_eq!(rev_parse(&trunk, "HEAD").unwrap(), tip, "HEAD not moved");
         assert_eq!(
             std::fs::read_to_string(trunk.join("README.md")).unwrap(),
             "wip",
             "dirty tree untouched"
         );
 
-        // Diverged: a local commit in the trunk + a different remote commit.
-        git(&trunk, &[&id[..], &["add", "."]].concat());
+        // Staged is the same refusal: git names the file either way.
+        git(&trunk, &["add", "README.md"]);
+        assert_eq!(
+            fast_forward(&trunk, "origin/main").unwrap(),
+            FastForward::Dirty
+        );
+
+        // Diverged: a local commit in the trunk + the different remote commit.
         git(
             &trunk,
             &[&id[..], &["commit", "-q", "-m", "local"]].concat(),
         );
-        std::fs::write(src.join("REMOTE.md"), "remote").unwrap();
-        git(&src, &[&id[..], &["add", "."]].concat());
-        git(&src, &[&id[..], &["commit", "-q", "-m", "remote"]].concat());
-        fetch(&bare, "origin", "main").unwrap();
-
         let local_tip = rev_parse(&trunk, "HEAD").unwrap();
         assert_eq!(
             fast_forward(&trunk, "origin/main").unwrap(),
@@ -1783,6 +1783,40 @@ mod tests {
             "surfaces the real cause, not a new-branch error: {err:#}"
         );
         assert!(!b.exists(), "no worktree minted");
+    }
+
+    /// A tracked edit the incoming commits do not touch is carried across the ff:
+    /// the trunk follows its remote while the operator's work stays in place.
+    #[test]
+    fn fast_forward_carries_an_unrelated_tracked_edit() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fixture_repo(&src);
+        let bare = tmp.path().join("repo.git");
+        clone_bare(src.to_str().unwrap(), &bare).unwrap();
+        let trunk = tmp.path().join("trunk");
+        worktree_add(&bare, &trunk, "main", None).unwrap();
+        let id = ["-c", "user.email=t@grove", "-c", "user.name=grove"];
+
+        std::fs::write(trunk.join("README.md"), "wip").unwrap();
+        std::fs::write(src.join("NEW.md"), "new").unwrap();
+        git(&src, &[&id[..], &["add", "."]].concat());
+        git(&src, &[&id[..], &["commit", "-q", "-m", "new"]].concat());
+        fetch(&bare, "origin", "main").unwrap();
+
+        assert_eq!(
+            fast_forward(&trunk, "origin/main").unwrap(),
+            FastForward::Updated
+        );
+        assert_eq!(
+            std::fs::read_to_string(trunk.join("NEW.md")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(trunk.join("README.md")).unwrap(),
+            "wip",
+            "edit carried across the ff"
+        );
     }
 
     /// An untracked file in the trunk must NOT gate an ff. grove materializes share

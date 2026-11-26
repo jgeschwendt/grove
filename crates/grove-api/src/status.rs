@@ -43,8 +43,8 @@ wire_enum! {
 wire_enum! {
     /// What a root's last sync left behind, when it left anything.
     ///
-    /// Carried law 9: a trunk carrying local commits or dirty tracked files is
-    /// **reported, never forced**. This is the report — the engine records it, the
+    /// Carried law 9: a trunk carrying local commits, or uncommitted edits an incoming
+    /// commit would overwrite, is **reported, never forced**. This is the report — the engine records it, the
     /// snapshot publishes it beside `syncing`, and the next clean sync clears it.
     ///
     /// `failed` is v1's synthetic member: a sync that errored or whose task never
@@ -53,7 +53,7 @@ wire_enum! {
     pub enum SyncNote {
         /// The trunk has commits the remote does not; a fast-forward would rewrite work.
         Diverged => "diverged",
-        /// The trunk has dirty tracked files.
+        /// An incoming commit would overwrite uncommitted work in the trunk.
         Dirty => "dirty",
         /// The sync itself failed, or produced no result at all.
         Failed => "failed",
