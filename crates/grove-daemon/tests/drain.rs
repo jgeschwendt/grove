@@ -256,10 +256,19 @@ async fn read_traffic_never_sheds_a_mutation() {
     // Concurrently, as a dashboard polling a busy home actually arrives: every one
     // takes a lane job per declared root, and every one gives up on it at the
     // snapshot budget while the job stays queued.
+    // capped below macOS's listen backlog (kern.ipc.somaxconn 128), which resets a
+    // burst past it where Linux retries the SYN; each read's lane job stays queued
+    // after it gives up, so the queue still overfills
+    let connections = Arc::new(tokio::sync::Semaphore::new(100));
     let mut reads = Vec::with_capacity(READS);
     for _ in 0..READS {
         let (client, url) = (client.clone(), harness.url("/api/roots"));
-        reads.push(tokio::spawn(async move { client.get(url).send().await }));
+        let permit = Arc::clone(&connections).acquire_owned().await.unwrap();
+        reads.push(tokio::spawn(async move {
+            let response = client.get(url).send().await;
+            drop(permit);
+            response
+        }));
     }
     for read in reads {
         let response = read.await.unwrap().unwrap();
