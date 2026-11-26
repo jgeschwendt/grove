@@ -84,7 +84,9 @@ const fn trunk(outcome: FastForward) -> &'static str {
         FastForward::Updated => "updated",
         FastForward::AlreadyCurrent => "already current",
         FastForward::Diverged => "diverged — local commits kept, nothing forced",
-        FastForward::Dirty => "dirty — uncommitted tracked files kept, nothing forced",
+        FastForward::Dirty => {
+            "dirty — incoming commits would overwrite uncommitted work, nothing forced"
+        }
     }
 }
 
@@ -279,7 +281,7 @@ synced o/r: not fetched, trunk already current
 synced o/r: fetched, trunk diverged — local commits kept, nothing forced
   tip abc
   3 stale pool slots recycled
-synced o/r: fetched, trunk dirty — uncommitted tracked files kept, nothing forced
+synced o/r: fetched, trunk dirty — incoming commits would overwrite uncommitted work, nothing forced
   tip abc
 "
         );

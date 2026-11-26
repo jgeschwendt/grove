@@ -374,7 +374,7 @@ a window of milliseconds after a declare, or a daemon running no engine room. Ac
 there would leave a client waiting forever for <code class="code">root_sync_changed</code>.</p>
 <p class="docs-note">The route takes <strong>no lane</strong>. The engine owns the dispatch, under its single background slot,
 so a burst of sync requests coalesces into one fetch rather than queueing a lane job each.
-A trunk carrying local commits or dirty tracked files is <em>reported</em>, never forced (carried
+A trunk carrying local commits, or an uncommitted edit an incoming commit would overwrite, is <em>reported</em>, never forced (carried
 law 9): the sync still succeeds, and the outcome reaches the client as <code class="code">sync_note</code>.</p>
 </div>
 </section>

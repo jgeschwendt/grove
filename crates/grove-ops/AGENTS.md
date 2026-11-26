@@ -19,7 +19,7 @@ invariants:
     anchor: ※ reconcile-additive
   - claim: "a share never destroys a human's or agent's file — only a symlink climbing to the trunk checkout exactly as grove writes it (or the legacy .trunk, or the old trunk in the one pass a trunk change runs before moving HEAD) is grove's own and may be repointed or GC'd; a real file, a directory or a foreign symlink is a reported conflict, and --fix backs it up before linking"
     anchor: ※ never-clobber
-  - claim: "a trunk carrying local commits or dirty tracked files is never forced — sync reports diverged/dirty and stops"
+  - claim: "a trunk carrying local commits is never forced, and uncommitted edits are carried across the fast-forward — sync reports diverged, or dirty only when an incoming commit would overwrite an edit, and stops"
     anchor: ※ sync-never-forces
   - claim: "a root whose trunk checkout vanished out of band is REPAIRED by re-adding the worktree from the bare already on disk, never by wiping the code dir; a re-clone is the last resort, refused when any other live worktree hangs off the bare (the pool's slots excluded by path) and refused again when the code dir holds anything at all or the bare holds an unpushed branch or a stash; and a root carrying a legacy layout, or a code dir holding any entry but .DS_Store, is refused outright — reconcile never clones into an occupied directory"
     anchor: ※ trunk-recovery-guard

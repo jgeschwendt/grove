@@ -435,7 +435,7 @@ tracking ref, prune warm-pool slots stranded at a pre-sync tip, and report.</p>
 <p class="docs-note">The branch is the manifest's trunk, not the bare's <code class="code">HEAD</code>, so a sync between a
 <code class="code">trunk</code> edit and its reconcile fetches the new one
 (<code class="code">sync_fetches_and_fast_forwards_the_declared_trunk</code>).</p>
-<p class="docs-note" id="sync-it-never-forces"><strong>It never forces.</strong> A trunk carrying local commits or dirty tracked files is a
+<p class="docs-note" id="sync-it-never-forces"><strong>It never forces.</strong> A trunk follows its remote unless it carries local commits; uncommitted edits ride across the fast-forward, and only one an incoming commit would overwrite stops it. Either is a
 <em>reported</em> outcome, not a reset: <code class="code">SyncReport::trunk</code> is <code class="code">updated</code>, <code class="code">already_current</code>,
 <code class="code">diverged</code>, or <code class="code">dirty</code>, and the daemon turns the latter two into the snapshot's <code class="code">sync_note</code>.
 Syncing a root with nothing on disk is <code class="code">not_ready</code> — a transient code, so the engine retries
