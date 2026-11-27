@@ -215,7 +215,7 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert_eq!(
         run(&["reboot"], 0),
         format!(
-            "grove server restarting under launchd ({gui}/{server})\nprint {gui}/{server}\nkickstart -k {gui}/{server}\n"
+            "grove server restarting under launchd ({gui}/{server})\nprint {gui}/{server}\nprint {gui}/{server}\nkickstart -k {gui}/{server}\n"
         )
     );
     // a swap holding hotswap's lock refuses the remove before anything is booted out

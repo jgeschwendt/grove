@@ -349,8 +349,9 @@ grove setup --remove  # ~/.grove stays</code></pre>
     <h3 class="h3">Every stop signal drains <small>· 2026-11-11</small></h3>
     <p>SIGTERM, SIGINT and SIGHUP run the shutdown route's drain inside a budget that fits the
       server agent's <code class="code">ExitTimeOut</code> (10 s), then exit 0 with an exit line in
-      <code class="code">serve.log</code>. A swap is one <code class="code">kickstart -k</code>, and a
-      launchd-owned daemon stops by <code class="code">bootout</code>. Why: a separate drain raced
+      <code class="code">serve.log</code>. A swap is one <code class="code">kickstart -k</code>, or a
+      <code class="code">bootout</code> and <code class="code">bootstrap</code> from the plist for an agent under a managed launch
+      constraint, and a launchd-owned daemon stops by <code class="code">bootout</code>. Why: a separate drain raced
       <code class="code">KeepAlive</code>'s respawn and refused the swap on every tick.</p>
 
     <h3 class="h3">The trunk is a branch, named by that branch <small>· v0.2.0, ea9629a</small></h3>

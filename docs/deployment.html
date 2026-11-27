@@ -172,7 +172,7 @@ default, which is how a client scoped to one home reaches another's daemon.</p>
 <pre class="snippet"><code>grove serve    # the launcher contract: run the daemon in this process, in the foreground
 grove on       # start it detached; it logs to $GROVE_HOME/serve.log
 grove off      # drain over the API, then SIGTERM → SIGKILL if it will not go; launchd's agent: bootout
-grove reboot   # off, then on; launchd's agent: kickstart -k
+grove reboot   # off, then on; launchd's agent: kickstart -k, or a plist reload under a managed launch constraint
 grove ok       # is it healthy?
 </code></pre>
 <p class="docs-note"><code class="code">grove serve</code> is the published launcher string: <code class="code">grove on</code> spawns <code class="code">&lt;binary&gt; serve</code>, and any

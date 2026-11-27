@@ -293,11 +293,11 @@ signal — liveness plus a start-time identity token — so a recycled pid reads
 rather than as grove still running. A bind held with no pid file refuses the start rather
 than adopting a stranger. <code class="code">grove reboot</code> is off then on. When launchd has the
 <code class="code">dev.gigantic.grove</code> agent loaded for this home, launchd owns the process: <code class="code">grove off</code> is
-<code class="code">launchctl bootout</code> and <code class="code">grove reboot</code> one <code class="code">launchctl kickstart -k</code>, never a drain
+<code class="code">launchctl bootout</code> and <code class="code">grove reboot</code> one <code class="code">launchctl kickstart -k</code> (a reload from the plist when a managed launch constraint would trip it), never a drain
 raced against <code class="code">KeepAlive</code>'s respawn.</p>
 <p class="docs-note">The client shakes hands on version: when the daemon's health names another
 version than the CLI's, one stderr line names both and the fix
-(<code class="code">launchctl kickstart -k gui/&lt;uid&gt;/dev.gigantic.grove</code>), and the command carries on. A
+(<code class="code">grove reboot</code>), and the command carries on. A
 request that failed to connect is sent again, up to three sends 100 then 200 ms apart, so a
 daemon mid-respawn answers it; a read is resent the same way on any failure short of a
 timeout; a mutation that reached the daemon and got no answer is exit 7, outcome unknown,

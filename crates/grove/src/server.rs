@@ -370,12 +370,22 @@ impl ServerControl {
     }
 
     /// Restart the daemon: stop (awaiting full exit) then start — or, for the server
-    /// agent, one `kickstart -k`, whose SIGTERM drains before launchd starts it again.
+    /// agent, hotswap's kick (one `kickstart -k`, or a reload from its plist under a managed
+    /// launch constraint, which a kickstart after a binary change trips), whose SIGTERM
+    /// drains before launchd starts it again.
     pub fn reboot(&self) -> Result<(), CliError> {
         if let Some(target) = self.launchd() {
             launchctl(
-                crate::setup::launchctl(&["kickstart", "-k", target]),
-                "kickstart -k",
+                Command::new("sh")
+                    .args([
+                        "-c",
+                        hotswap::KICK,
+                        crate::setup::SERVER,
+                        &crate::setup::gui(),
+                    ])
+                    .output()
+                    .is_ok_and(|o| o.status.success()),
+                "kick",
                 target,
             )?;
             println!("grove server restarting under launchd ({target})");

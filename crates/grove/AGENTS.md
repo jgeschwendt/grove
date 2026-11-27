@@ -18,7 +18,7 @@ invariants:
     anchor: ※ cli-health-poll
   - claim: "exit codes 1/3/4/5/6/7 are a published contract, and the grove_ops::Error to CliError map is what makes the offline codes reachable; an error envelope from the server is exit 1 carrying its code, its message AND error.data's detail, since two of the codes say nothing else"
     anchor: crates/grove/src/error.rs#exit_code
-  - claim: "SIGTERM, SIGINT and SIGHUP run the shutdown route's drain and exit 0 with an exit line, inside the server agent's ExitTimeOut; a daemon launchd owns is stopped by bootout and swapped by one kickstart -k, never by a drain raced against KeepAlive's respawn"
+  - claim: "SIGTERM, SIGINT and SIGHUP run the shutdown route's drain and exit 0 with an exit line, inside the server agent's ExitTimeOut; a daemon launchd owns is stopped by bootout and swapped by one kickstart -k, or by a reload from its plist when a managed launch constraint would trip the kickstart, never by a drain raced against KeepAlive's respawn"
     anchor: ※ stop-signals-drain
     enforced_by: crates/grove/tests/cli_e2e.rs
   - claim: "`grove setup` writes, loads and reloads only the server agent, never the upgrade agent: that one is hotswap::ensure's alone, and setup runs inside the swap it started, where a bootout would kill that swap"
@@ -37,7 +37,7 @@ edges:
 
 - ※ apply-is-ungated → src/commands.rs:554
 - ※ busy-refuses-destructive → src/commands.rs:71
-- ※ cli-health-poll → src/server.rs:492
+- ※ cli-health-poll → src/server.rs:502
 - ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
 - ※ stop-signals-drain → src/lib.rs:260

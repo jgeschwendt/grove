@@ -173,11 +173,9 @@ impl ApiClient {
         if theirs != crate::VERSION {
             eprintln!(
                 "grove: this CLI is {} but the server at {} is {theirs}; restart it: \
-                 launchctl kickstart -k {}/{}",
+                 `grove reboot`",
                 crate::VERSION,
-                self.base,
-                crate::setup::gui(),
-                crate::setup::SERVER
+                self.base
             );
         }
     }
