@@ -191,13 +191,13 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     put("disabled", "");
 
     // the swap: latest is the active version, so setup, the server's kickstart and both probes
-    // run once onto it, and no drain races the kickstart — setup's is the one `print` of the
-    // server
+    // run once onto it, and no drain races the kickstart — a `print` of the server by setup, a
+    // second by the kick deciding between reload and kickstart; this stub names no plist path
     let swapped = run(&["upgrade"], 0);
     assert!(
         swapped.starts_with("grove 2026.10.1: green, 2 smoke probes\ncurl -q -fsSIL ")
             && swapped.contains(&format!("kickstart -k {gui}/{server}\ncurl -fsS "))
-            && swapped.matches(&format!("print {gui}/{server}\n")).count() == 1,
+            && swapped.matches(&format!("print {gui}/{server}\n")).count() == 2,
         "{swapped}"
     );
     assert!(at(".local/state/hotswap/grove.json").exists());
@@ -395,4 +395,40 @@ fn setup_through_mise_moves_the_host_into_the_layout() {
         "{tick}"
     );
     assert!(layout.join("2026.10.0").is_dir());
+}
+
+/// A server agent loaded at login carries a managed launch constraint, which a `kickstart -k`
+/// after a swap trips: the swap reloads it instead, bootout then bootstrap from its own plist,
+/// and never kickstarts it.
+#[test]
+fn upgrade_reloads_a_server_under_a_managed_launch_constraint() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let h = tmp.path().display().to_string();
+    let server = "dev.gigantic.grove";
+    // the server's `print` names its plist and the constraint; a bootout makes the next
+    // `print` fail once, as a job leaving launchd does
+    put(
+        &tmp.path().join("stub/launchctl"),
+        &format!(
+            "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\nl=${{2##*/}}\ncase $1 in\nbootout) touch \"$HOME/gone\" ;;\nprint) [ \"$l\" = {server} ] || exit 0; [ -e \"$HOME/gone\" ] && {{ rm \"$HOME/gone\"; exit 1; }}; printf 'path = %s/Library/LaunchAgents/%s.plist\\nproperties = managed LWCR | has LWCR\\n' \"$HOME\" \"$l\" ;;\nesac\nexit 0"
+        ),
+    );
+    put(&tmp.path().join("stub/curl"), CURL);
+    let grove = Path::new(env!("CARGO_BIN_EXE_grove"));
+    let layout = tmp.path().join(".local/share/hotswap/grove");
+    fs::create_dir_all(layout.join("2026.10.1")).expect("layout");
+    symlink(grove, layout.join("2026.10.1/grove")).expect("version");
+    symlink("2026.10.1", layout.join("current")).expect("current");
+    let bind = closed();
+    // setup writes the plists, so the swap's own setup step leaves the server alone
+    assert_eq!(launch(grove, &h, &bind, &["setup"]).0, Some(0));
+    let (code, swapped) = launch(grove, &h, &bind, &["upgrade"]);
+    let (gui, label) = (gui(), format!("{server}.plist"));
+    assert_eq!(code, Some(0), "{swapped}");
+    assert!(
+        swapped.contains(&format!(
+            "bootout {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {h}/Library/LaunchAgents/{label}\n"
+        )) && !swapped.contains("kickstart"),
+        "{swapped}"
+    );
 }
