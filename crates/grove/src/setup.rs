@@ -49,7 +49,9 @@ pub(crate) fn bootout(target: &str) -> bool {
 /// grove's hotswap manifest: where its releases come from and what runs around a swap. No
 /// drain step: the swap is hotswap's one `kickstart -k`, whose SIGTERM runs the daemon's own
 /// bounded drain before launchd restarts it through `~/.local/bin/grove`, by then the new
-/// version — a separate drain would race `KeepAlive`'s respawn. The smoke is the binary's
+/// version — a separate drain would race `KeepAlive`'s respawn. An agent loaded at login under
+/// a managed launch constraint is reloaded from its plist instead (bootout drains it the same
+/// way); hotswap decides at swap time, grove does nothing for it. The smoke is the binary's
 /// version and the restarted daemon's health, retried while it boots.
 fn manifest() -> hotswap::Manifest {
     let owned = |words: &[&str]| words.iter().map(|&w| w.to_owned()).collect::<Vec<_>>();

@@ -323,8 +323,11 @@ grove setup --remove  # ~/.grove stays</code></pre>
     when one exists, after <code class="code">~/.local/bin</code>, for what git runs (hooks,
     <code class="code">git-lfs</code>). An upgrade installs the newer release,
     repoints <code class="code">current</code>, re-runs setup, then swaps the server with one
-    <code class="code">launchctl kickstart -k</code>, whose SIGTERM runs the daemon's bounded drain;
-    it smokes <code class="code">grove --version</code> and <code class="code">GET /api/health</code>,
+    <code class="code">launchctl kickstart -k</code>, whose SIGTERM runs the daemon's bounded drain.
+    An agent launchd loaded at login carries a managed launch constraint, which the first spawn
+    after a swap violates; hotswap detects it (<code class="code">managed LWCR</code> in
+    <code class="code">launchctl print</code>) and boots the agent out and back in from its plist
+    instead of kicking it, which drains the same way. The upgrade smokes <code class="code">grove --version</code> and <code class="code">GET /api/health</code>,
     and red rolls back. The record is <code class="code">~/.local/state/hotswap/grove.json</code>;
     <code class="code">setup --remove</code> drops it, the agents, the link and the layout.</p>
 </section>
