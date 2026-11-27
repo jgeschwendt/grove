@@ -375,19 +375,23 @@ impl ServerControl {
     /// drains before launchd starts it again.
     pub fn reboot(&self) -> Result<(), CliError> {
         if let Some(target) = self.launchd() {
-            launchctl(
-                Command::new("sh")
-                    .args([
-                        "-c",
-                        hotswap::KICK,
-                        crate::setup::SERVER,
-                        &crate::setup::gui(),
-                    ])
-                    .output()
-                    .is_ok_and(|o| o.status.success()),
-                "kick",
-                target,
-            )?;
+            let out = Command::new("sh")
+                .args([
+                    "-c",
+                    hotswap::KICK,
+                    crate::setup::SERVER,
+                    &crate::setup::gui(),
+                ])
+                .output()
+                .map_err(|e| CliError::Daemon(format!("kick {target}: {e}")))?;
+            if !out.status.success() {
+                // a failed reload leaves the agent booted out: say why, and how to load it
+                let said = String::from_utf8_lossy(&out.stdout);
+                return Err(CliError::Daemon(format!(
+                    "kick {target} failed: {}; `grove setup` loads it again",
+                    said.trim()
+                )));
+            }
             println!("grove server restarting under launchd ({target})");
             return Ok(());
         }
