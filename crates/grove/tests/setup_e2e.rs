@@ -204,7 +204,8 @@ fn setup_installs_both_agents_upgrade_swaps_and_remove_undoes_it() {
     assert!(run(&["upgrade", "--check"], 0).starts_with("grove 2026.10.1: up to date\n"));
     assert!(run(&["upgrade", "--check", "--back"], 2).contains("cannot be used with"));
 
-    // launchd owns the server: `off` boots it out, `reboot` is one kickstart
+    // launchd owns the server: `off` boots it out, `reboot` is one kickstart (this stub's
+    // `print` names no plist path, so hotswap's kick never reloads)
     put("loaded", "");
     assert_eq!(
         run(&["off"], 0),
@@ -430,5 +431,49 @@ fn upgrade_reloads_a_server_under_a_managed_launch_constraint() {
             "bootout {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {h}/Library/LaunchAgents/{label}\n"
         )) && !swapped.contains("kickstart"),
         "{swapped}"
+    );
+}
+
+/// `reboot` under a managed launch constraint reloads the server from its plist, as the swap
+/// does, and never kickstarts it; a bootstrap that fails every try leaves the agent booted
+/// out, so the error carries the reload's own line and names `grove setup` as the way back.
+#[test]
+fn reboot_reloads_a_server_under_a_managed_launch_constraint() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let h = tmp.path().display().to_string();
+    let server = "dev.gigantic.grove";
+    // `print` of the server names its plist, the constraint and the home it serves; a bootout
+    // makes the next `print` fail once, as a job leaving launchd does; `fail` fails bootstrap
+    put(
+        &tmp.path().join("stub/launchctl"),
+        &format!(
+            "#!/bin/sh\necho \"$*\" >> \"$HOME/log\"\nl=${{2##*/}}\ncase $1 in\nbootout) touch \"$HOME/gone\" ;;\nbootstrap) [ -e \"$HOME/fail\" ] && exit 5 ;;\nprint) [ \"$l\" = {server} ] || exit 0; [ -e \"$HOME/gone\" ] && {{ rm \"$HOME/gone\"; exit 1; }}; printf 'path = %s/Library/LaunchAgents/%s.plist\\nproperties = managed LWCR | has LWCR\\n\\tGROVE_HOME => %s\\n' \"$HOME\" \"$l\" \"$HOME/.grove\" ;;\nesac\nexit 0"
+        ),
+    );
+    put(&tmp.path().join("stub/curl"), CURL);
+    let grove = Path::new(env!("CARGO_BIN_EXE_grove"));
+    let layout = tmp.path().join(".local/share/hotswap/grove");
+    fs::create_dir_all(layout.join("2026.10.1")).expect("layout");
+    symlink(grove, layout.join("2026.10.1/grove")).expect("version");
+    symlink("2026.10.1", layout.join("current")).expect("current");
+    let bind = closed();
+    assert_eq!(launch(grove, &h, &bind, &["setup"]).0, Some(0));
+    let (gui, label) = (gui(), format!("{server}.plist"));
+    let (code, said) = launch(grove, &h, &bind, &["reboot"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains(&format!(
+            "bootout {gui}/{server}\nprint {gui}/{server}\nbootstrap {gui} {h}/Library/LaunchAgents/{label}\n"
+        )) && !said.contains("kickstart"),
+        "{said}"
+    );
+    put(&tmp.path().join("fail"), "");
+    let (code, said) = launch(grove, &h, &bind, &["reboot"]);
+    assert_eq!(code, Some(4), "{said}");
+    assert!(
+        said.contains(&format!(
+            "grove: kick {gui}/{server} failed: hotswap: {gui}/{server} not reloaded from {h}/Library/LaunchAgents/{label} after 5 tries"
+        )) && said.contains("`grove setup` loads it again"),
+        "{said}"
     );
 }

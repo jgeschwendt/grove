@@ -37,7 +37,7 @@ edges:
 
 - ※ apply-is-ungated → src/commands.rs:554
 - ※ busy-refuses-destructive → src/commands.rs:71
-- ※ cli-health-poll → src/server.rs:502
+- ※ cli-health-poll → src/server.rs:506
 - ※ reachability-tri-state → src/api.rs:140
 - ※ single-realizer → src/commands.rs:35
 - ※ stop-signals-drain → src/lib.rs:260
