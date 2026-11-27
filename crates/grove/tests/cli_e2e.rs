@@ -518,8 +518,7 @@ fn a_daemon_of_another_version_is_named_with_the_fix() {
         .says("(v0.0.0-skew)");
     assert!(
         run.stderr
-            .contains("is 0.0.0-skew; restart it: launchctl kickstart -k gui/")
-            && run.stderr.ends_with("/dev.gigantic.grove\n"),
+            .contains("is 0.0.0-skew; restart it: `grove reboot`\n"),
         "{}",
         run.stderr
     );
