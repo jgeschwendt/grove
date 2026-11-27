@@ -18,7 +18,7 @@ grove-daemon = { path = "../grove-daemon" }
 grove-ops = { path = "../grove-ops" }
 # `grove setup` and `grove upgrade`: the gigantic tools' install and swap contract
 # (https://gigantic.dev/hotswap/).
-hotswap = { git = "https://github.com/jgeschwendt/hotswap", rev = "9a6b0d0a02e061106f7ed2ebc1a79b82da7aa13c" }
+hotswap = { git = "https://github.com/jgeschwendt/hotswap", rev = "56fa1127290df9aba20ca5a18eec061c26d2fa29" }
 # Signals + `waitpid` for the drain ladder, which needs to distinguish "exited" from
 # "still alive" without racing a reaped child; `getuid` for the launchd domain.
 nix = { version = "0.31", features = ["process", "signal", "user"] }
